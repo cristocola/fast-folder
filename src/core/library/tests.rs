@@ -928,6 +928,165 @@ fn cache_staleness_gate_compares_the_right_way_round() {
     assert!(cache_is_stale(base));
 }
 
+/// **Defect 21.** A scan that missed a project wrote its index after the
+/// project arrived, so the index was newer than its base and read as fresh:
+/// the project stayed hidden until a rescan. The index now remembers the
+/// names its scan saw, and a base holding another name is rescanned —
+/// whatever the times say.
+#[test]
+fn a_project_the_scan_missed_is_found_whatever_the_times_say() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let scanned = discovery::scan_listing(base);
+    // The project lands while that scan's index is being written.
+    write_project(base, "second", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    write_index(base, &scanned.projects, scanned.names).unwrap();
+    let future = std::time::SystemTime::now() + Duration::from_secs(3600);
+    fs::File::options()
+        .write(true)
+        .open(cache_path(base))
+        .unwrap()
+        .set_modified(future)
+        .unwrap();
+    assert!(!cache_is_stale(base), "the time gate alone would trust it");
+
+    let found = discover(&cfg_for(base, &[]));
+    let ids: Vec<&str> = found.iter().map(|project| project.id.as_str()).collect();
+    assert_eq!(ids, ["ID0002", "ID0001"]);
+}
+
+/// On an rclone base a folder's time reads 2000-01-01 once the mount's
+/// directory cache expires, whatever was added: the time gate never fired
+/// there, and a project copied in from elsewhere stayed invisible.
+#[cfg(unix)]
+#[test]
+fn a_base_whose_folder_time_never_moves_still_shows_a_new_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    assert_eq!(discover(&cfg).len(), 1);
+
+    write_project(base, "copied_in", "ID0007", "gen", "2026-01-02T00:00:00Z");
+    let y2k = std::time::UNIX_EPOCH + Duration::from_secs(946_684_800);
+    fs::File::open(base).unwrap().set_modified(y2k).unwrap();
+    assert!(!cache_is_stale(base));
+
+    let ids: Vec<String> = discover(&cfg)
+        .into_iter()
+        .map(|project| project.id)
+        .collect();
+    assert_eq!(ids, ["ID0007", "ID0001"]);
+}
+
+/// fastf's own changes keep the index current, so the next discovery reads
+/// it instead of the base; a change made beside them still does not.
+#[test]
+fn fastfs_own_writes_keep_the_index_current_and_nobody_elses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    discover(&cfg);
+    let current = |base: &Path| {
+        let cache = load_cache(base).unwrap();
+        matches!(
+            discovery::freshness(base, cache.seen.as_ref()),
+            discovery::Freshness::Current(_)
+        )
+    };
+    assert!(current(base));
+
+    // A create: the folder, then its entry.
+    write_project(base, "second", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    assert!(!current(base), "a folder the index has not heard of");
+    let second = scan_base(base)
+        .into_iter()
+        .find(|project| project.id == "ID0002")
+        .unwrap();
+    cache_upsert(base, &second);
+    assert!(current(base), "an upsert names its folder");
+
+    // Unregistered: the entry goes, the folder and its name stay.
+    fs::remove_file(base.join("first").join(project_info::RESERVED_FILENAME)).unwrap();
+    cache_remove(base, "first");
+    assert!(current(base), "the folder is still there");
+    // Moved away: the name goes with the folder.
+    fs::remove_dir_all(base.join("second")).unwrap();
+    cache_remove(base, "second");
+    assert!(current(base));
+
+    // Someone else's folder, made beside fastf's own write.
+    fs::create_dir(base.join("theirs")).unwrap();
+    write_project(base, "third", "ID0003", "gen", "2026-01-03T00:00:00Z");
+    let third = scan_base(base)
+        .into_iter()
+        .find(|project| project.id == "ID0003")
+        .unwrap();
+    cache_upsert(base, &third);
+    assert!(!current(base), "a name only a listing knows about");
+}
+
+/// An index an older fastf wrote has no names: it is rescanned once, and the
+/// rescan records them.
+#[test]
+fn an_index_without_names_is_rescanned_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "first", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    write_index(base, &scan_base(base), None).unwrap();
+    assert!(matches!(
+        discovery::freshness(base, None),
+        discovery::Freshness::Stale
+    ));
+    assert_eq!(discover(&cfg_for(base, &[])).len(), 1);
+    assert_eq!(
+        load_cache(base).unwrap().seen,
+        Some(vec!["first".to_string()])
+    );
+    let written = fs::read_to_string(cache_path(base)).unwrap();
+    let older: serde_json::Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(older["version"], 1, "no version bump: older fastf reads it");
+}
+
+/// A cloud mount can put an old copy's `PROJECT_INFO.md` back after a move
+/// removed it — an edit still uploading when the move ran. While the move's
+/// pointer names the folder, the same project there is that old copy, not a
+/// second listing of the project; another project there is someone's.
+#[test]
+fn an_old_copy_a_cloud_mount_put_back_is_not_listed_twice() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    write_project(base, "other", "ID0002", "gen", "2026-01-02T00:00:00Z");
+    let pointer = |folder: &str, id: &str| {
+        serde_json::json!({
+            "version": 1,
+            "operation": "18d8e2f16082c791-e6a94-0",
+            "project_id": id,
+            "folder": folder,
+            "target_base": "/mnt/elsewhere",
+            "target_folder": folder,
+        })
+        .to_string()
+    };
+    let pointer_path = base.join(".fastf-moved-18d8e2f16082c791-e6a94-0.json");
+    fs::write(&pointer_path, pointer("proj", "ID0001")).unwrap();
+    let ids: Vec<String> = scan_base(base).into_iter().map(|p| p.id).collect();
+    assert_eq!(
+        ids,
+        ["ID0002"],
+        "the old copy is hidden, the neighbour is not"
+    );
+
+    // A pointer naming a folder that holds another project hides nothing.
+    fs::write(&pointer_path, pointer("other", "ID0001")).unwrap();
+    let mut ids: Vec<String> = scan_base(base).into_iter().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids, ["ID0001", "ID0002"]);
+}
+
 /// Metadata with an empty `created` falls back to the folder's own mtime, so
 /// projects still sort sensibly instead of collapsing to one timestamp.
 #[test]
@@ -1044,7 +1203,7 @@ fn a_staged_move_carries_a_link_and_never_deletes_through_it() {
     );
     // Still nothing named for it: an absolute link to outside the project
     // points where it always did.
-    assert!(outcome.link_notes.is_empty(), "{:?}", outcome.link_notes);
+    assert!(outcome.notes.is_empty(), "{:?}", outcome.notes);
 }
 
 /// The stranded-rename message must name the path the folder is actually at.
@@ -1091,14 +1250,18 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
         "move:after-staging",
         "move:after-verify",
         "move:before-commit-rename",
+        "move:after-publish-write",
         "move:after-commit-before-source-removal",
         "move:before-retire",
         "move:source-cleanup",
         "move:after-retire",
         "move:mid-gc",
     ];
-    // Published, the original still whole at its path.
+    // Published, the original still whole at its path. A publish whose write
+    // reported an error after its file landed is a publish too: rolling it
+    // back would remove the project, clearing its record would leave both.
     const KEPT: &[&str] = &[
+        "move:after-publish-write",
         "move:after-commit-before-source-removal",
         "move:before-retire",
         "move:source-cleanup",
@@ -1403,8 +1566,10 @@ fn move_project_rejects_same_base_and_collision() {
     let err = move_project(&project, tmp1.path()).unwrap_err().to_string();
     assert!(err.contains("already in base"), "err: {err}");
 
-    // Target name collision → bail, source untouched.
+    // Target name collision → bail, source untouched. (An empty folder
+    // there gives way: it holds nothing to lose.)
     fs::create_dir_all(tmp2.path().join("proj_a")).unwrap();
+    fs::write(tmp2.path().join("proj_a/theirs.txt"), "not ours").unwrap();
     let err = move_project(&project, tmp2.path()).unwrap_err().to_string();
     assert!(err.contains("already exists"), "err: {err}");
     assert!(project.path.is_dir(), "source must be untouched on bail");
@@ -1749,4 +1914,611 @@ fn a_delete_never_removes_what_a_link_points_at() {
         fs::read_to_string(library_folder.join("stock.mov")).unwrap(),
         "irreplaceable"
     );
+}
+
+/// **On a cloud mount the original is emptied where it stands**, its
+/// `PROJECT_INFO.md` first: nothing is renamed, no `.fastf-moved-*` folder is
+/// made, and a pointer beside the original names the record while it waits
+/// out the settle. Once a later pass finds it still gone, the record and the
+/// pointer go, the pointer last.
+#[cfg(debug_assertions)]
+#[test]
+fn on_a_cloud_mount_the_original_is_emptied_in_place() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(old_base.join("proj_a/src/deep")).unwrap();
+    fs::write(old_base.join("proj_a/src/deep/a.rs"), "fn main() {}").unwrap();
+    fs::write(old_base.join("proj_a/b.bin"), [1_u8, 2, 3]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let outcome = staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(outcome.source, SourceOutcome::Removed);
+        assert!(!old_base.join("proj_a").exists(), "emptied where it stood");
+        let hidden: Vec<String> = fs::read_dir(old_base)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(transactions::RETIRED_PREFIX))
+            .collect();
+        assert_eq!(hidden.len(), 1, "only the pointer: {hidden:?}");
+        let operation = transactions::pointer_operation(&hidden[0])
+            .expect("a pointer, not a renamed folder")
+            .to_string();
+        let record = new_base
+            .join(transactions::TRANSACTIONS_DIR)
+            .join(&operation);
+        let journal = transactions::read_journal(&record).unwrap();
+        assert_eq!(journal.retire, transactions::RetireStrategy::InPlace);
+        assert_eq!(
+            fs::read_to_string(new_path.join("src/deep/a.rs")).unwrap(),
+            "fn main() {}"
+        );
+
+        // Ten minutes on, still gone: the record goes, then the pointer.
+        let mut entry = crate::core::records::get(&operation).unwrap();
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS);
+        crate::core::records::add(&entry);
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!record.exists(), "{report:?}");
+        assert!(!old_base.join(&hidden[0]).exists(), "and the pointer, last");
+    });
+}
+
+/// **A cloud mount can put the original's `PROJECT_INFO.md` back** after the
+/// move removed it — an upload still queued; the lab's edit-then-move on R2
+/// got the pre-edit file back. An older version holds nothing the moved copy
+/// lacks and goes; one edited after the copy is a choice between two
+/// versions, and needs a person. Neither is ever listed as the project twice.
+#[cfg(debug_assertions)]
+#[test]
+fn a_project_info_put_back_goes_when_older_and_is_asked_about_when_newer() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/b.bin"), [1_u8, 2, 3]).unwrap();
+    let before = fs::read_to_string(old_base.join("proj_a/PROJECT_INFO.md")).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let old_copy = old_base.join("proj_a");
+    let put_back = |text: &str, modified: std::time::SystemTime| {
+        fs::create_dir_all(&old_copy).unwrap();
+        fs::write(old_copy.join("PROJECT_INFO.md"), text).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(old_copy.join("PROJECT_INFO.md"))
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+    };
+    let listed = |cfg: &Config| {
+        discover(cfg)
+            .iter()
+            .filter(|found| found.id == "ID0001")
+            .count()
+    };
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let progress = Mutex::new(Progress::new(&[]));
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(!old_copy.exists());
+
+        // The version from before the move comes back, older than the copy.
+        let long_ago = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        put_back(&before, long_ago);
+        assert_eq!(listed(&cfg), 1, "the old copy is not listed as the project");
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!old_copy.exists(), "the stale version goes: {report:?}");
+        assert!(report.verdicts.is_empty(), "nobody is asked: {report:?}");
+
+        // An edit made after the copy comes back instead: a newer version.
+        let edited = format!("{before}\n- 2026-01-02T00:00:00Z — written after the copy\n");
+        put_back(
+            &edited,
+            std::time::SystemTime::now() + Duration::from_secs(60),
+        );
+        assert_eq!(listed(&cfg), 1, "still listed once");
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(
+            old_copy.join("PROJECT_INFO.md").is_file(),
+            "kept: {report:?}"
+        );
+        let attention = crate::core::attention::attention(&cfg);
+        let item = attention
+            .items
+            .iter()
+            .find(|item| item.path == old_copy || item.path.ends_with("proj_a"))
+            .unwrap_or_else(|| panic!("{attention:?}"));
+        assert_eq!(item.state, crate::core::attention::State::NeedsYou);
+        assert_eq!(listed(&cfg), 1, "and still listed once");
+
+        // Keeping the moved copy's version finishes it.
+        crate::core::attention::resolve(
+            &cfg,
+            &item.path,
+            crate::core::attention::Action::KeepMoved,
+        )
+        .unwrap();
+        assert!(!old_copy.exists());
+        assert_eq!(listed(&cfg), 1);
+    });
+}
+
+/// A file changed in the original between the move's last look and the
+/// retire — a dev server's log line — is carried into the moved copy by the
+/// merge, and the old copy still goes whole.
+#[cfg(debug_assertions)]
+#[test]
+fn a_log_written_into_the_old_copy_after_the_retire_reaches_the_moved_copy() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(old_base.join("proj_a/.astro")).unwrap();
+    fs::write(old_base.join("proj_a/.astro/dev.log"), "started\n").unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+
+    let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
+        &project, new_base, &new_path, &progress, &cancel,
+    )
+    .unwrap();
+    let housekeeping = housekeeping.expect("the old copy is left to remove");
+    // The dev server's open handle followed the rename into the old copy.
+    let old_copy = housekeeping.path();
+    fs::write(old_copy.join(".astro/dev.log"), "started\nreloaded\n").unwrap();
+    let outcome = crate::core::move_engine::finish_housekeeping(
+        outcome,
+        Some(housekeeping),
+        crate::core::progress::Ticker::none(),
+    );
+
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert!(!old_copy.exists());
+    assert_eq!(
+        fs::read_to_string(new_path.join(".astro/dev.log")).unwrap(),
+        "started\nreloaded\n",
+        "fast-forwarded into the moved copy"
+    );
+}
+
+/// Changed in both copies since the move: only that entry stays behind,
+/// with the record, and the moved copy's version is left as it is.
+#[cfg(debug_assertions)]
+#[test]
+fn a_file_changed_in_both_copies_keeps_only_that_entry_and_the_record() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/notes.txt"), "v1").unwrap();
+    fs::write(old_base.join("proj_a/other.txt"), "untouched").unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+
+    let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
+        &project, new_base, &new_path, &progress, &cancel,
+    )
+    .unwrap();
+    let housekeeping = housekeeping.unwrap();
+    let old_copy = housekeeping.path();
+    fs::write(old_copy.join("notes.txt"), "v2 in the old copy").unwrap();
+    fs::write(new_path.join("notes.txt"), "v2 in the moved copy").unwrap();
+    let outcome = crate::core::move_engine::finish_housekeeping(
+        outcome,
+        Some(housekeeping),
+        crate::core::progress::Ticker::none(),
+    );
+
+    let SourceOutcome::Leftover {
+        redundant: false,
+        reason,
+        ..
+    } = &outcome.source
+    else {
+        panic!("a conflict is kept: {:?}", outcome.source);
+    };
+    assert!(reason.contains("notes.txt"), "{reason}");
+    assert_eq!(
+        fs::read_to_string(old_copy.join("notes.txt")).unwrap(),
+        "v2 in the old copy"
+    );
+    assert_eq!(
+        fs::read_to_string(new_path.join("notes.txt")).unwrap(),
+        "v2 in the moved copy"
+    );
+    assert!(!old_copy.join("other.txt").exists(), "the rest went");
+    assert_eq!(
+        fs::read_dir(new_base.join(transactions::TRANSACTIONS_DIR))
+            .unwrap()
+            .count(),
+        1,
+        "the record stays"
+    );
+}
+
+/// **On a cloud mount a delete empties the folder where it stands**: its
+/// record first — every entry the project holds — then its
+/// `PROJECT_INFO.md`, so it leaves the library at once; then only what the
+/// record lists. Something written there by path after the delete began is
+/// kept, with the record, and named. Nothing is renamed.
+#[cfg(debug_assertions)]
+#[test]
+fn on_a_cloud_mount_a_delete_empties_the_folder_in_place() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir_all(base.join("proj/src")).unwrap();
+    fs::write(base.join("proj/src/a.rs"), "fn a() {}").unwrap();
+    let cfg = cfg_for(base, &[]);
+    let project = scan_base(base).remove(0);
+
+    crate::util::faults::with_thread_fault("fs:as-rclone", || {
+        let housekeeping = delete_project_inner(&project).unwrap();
+        assert!(
+            !base.join("proj/PROJECT_INFO.md").exists(),
+            "out of the library first"
+        );
+        assert!(scan_base(base).is_empty(), "nothing listed");
+        assert!(
+            retired_folders(base)
+                .iter()
+                .all(|name| !base.join(name).is_dir()),
+            "nothing renamed"
+        );
+        // A program writes into it by path meanwhile.
+        fs::write(base.join("proj/src/late.log"), "written after").unwrap();
+        let fate = housekeeping.run(crate::core::progress::Ticker::none());
+        let crate::core::move_cleanup::SourceFate::Leftover { reason, .. } = fate else {
+            panic!("what came after is kept: {fate:?}");
+        };
+        assert!(reason.contains("late.log"), "{reason}");
+        assert!(!base.join("proj/src/a.rs").exists(), "what it held went");
+        assert_eq!(
+            fs::read_to_string(base.join("proj/src/late.log")).unwrap(),
+            "written after"
+        );
+        let records: Vec<String> = fs::read_dir(base)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| crate::core::move_cleanup::deleted_record_operation(name).is_some())
+            .collect();
+        assert_eq!(records.len(), 1, "the record stays with it");
+
+        // Once it is gone, reconcile clears the record (past the settle).
+        fs::remove_file(base.join("proj/src/late.log")).unwrap();
+        let operation = crate::core::move_cleanup::deleted_record_operation(&records[0])
+            .unwrap()
+            .to_string();
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!base.join("proj").exists(), "{report:?}");
+        let mut entry = crate::core::records::get(&operation).unwrap();
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS);
+        crate::core::records::add(&entry);
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(!base.join(&records[0]).exists(), "{report:?}");
+    });
+}
+
+/// An in-place delete killed before its housekeeping ran — its record
+/// written, its `PROJECT_INFO.md` gone, nothing else removed — is finished by
+/// the next reconcile, and so is one killed before even the
+/// `PROJECT_INFO.md` went.
+#[cfg(debug_assertions)]
+#[test]
+fn an_in_place_delete_killed_part_of_the_way_is_finished_by_reconcile() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    for before_the_identity_went in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        write_project(base, "proj", "ID0001", "gen", "2026-01-01T00:00:00Z");
+        fs::write(base.join("proj/payload.bin"), [1_u8, 2, 3]).unwrap();
+        let cfg = cfg_for(base, &[]);
+        let project = scan_base(base).remove(0);
+        let identity = fs::read(base.join("proj/PROJECT_INFO.md")).unwrap();
+
+        crate::util::faults::with_thread_fault("fs:as-rclone", || {
+            let housekeeping = delete_project_inner(&project).unwrap();
+            drop(housekeeping);
+            if before_the_identity_went {
+                fs::write(base.join("proj/PROJECT_INFO.md"), &identity).unwrap();
+            }
+            let report = provisioning::reconcile_unlocked(&cfg);
+            assert!(!base.join("proj").exists(), "{report:?}");
+        });
+        assert!(scan_base(base).is_empty());
+    }
+}
+
+/// **A mount that drops mid-removal is waited for, not given up on**: three
+/// unlinks answered "not connected", then the mount is back, and the old copy
+/// goes whole — no leftover, no reconcile.
+#[cfg(debug_assertions)]
+#[test]
+fn a_mount_that_drops_mid_removal_is_ridden_out() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    for n in 0..10 {
+        fs::write(old_base.join(format!("proj_a/f{n}.bin")), [n as u8; 16]).unwrap();
+    }
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    let outcome = crate::util::faults::with_thread_fault("remove:unlink:enotconn-3", || {
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert!(retired_folders(old_base).is_empty());
+    assert!(!old_base.join("proj_a").exists());
+}
+
+/// A write the mount fails once is copied again, whole: the move finishes
+/// and the file arrives as it was.
+#[cfg(debug_assertions)]
+#[test]
+fn a_write_the_mount_fails_once_is_copied_again() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/big.bin"), vec![7_u8; 3 * 1024 * 1024]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    let outcome = crate::util::faults::with_thread_fault("copy:write:eio-1", || {
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert_eq!(
+        fs::read(new_path.join("big.bin")).unwrap(),
+        vec![7_u8; 3 * 1024 * 1024]
+    );
+}
+
+/// A removal the filesystem refuses — no permission — is not retried for
+/// ever and not waved through: the path is named, and the record stays.
+#[cfg(debug_assertions)]
+#[test]
+fn a_refused_removal_names_the_path_and_keeps_the_record() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/locked.bin"), [1_u8]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+
+    let outcome = crate::util::faults::with_thread_fault("remove:unlink:eacces", || {
+        staged_copy_verify_commit(
+            &project,
+            new_base,
+            &new_path,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    })
+    .unwrap();
+    let SourceOutcome::Leftover { reason, .. } = &outcome.source else {
+        panic!("a refused removal is a leftover: {:?}", outcome.source);
+    };
+    assert!(
+        reason.contains("locked.bin") || reason.contains("PROJECT_INFO.md"),
+        "{reason}"
+    );
+    assert_eq!(
+        fs::read_dir(new_base.join(transactions::TRANSACTIONS_DIR))
+            .unwrap()
+            .count(),
+        1,
+        "the record stays"
+    );
+}
+
+/// **A program writing a file in the project stops the move, by name,
+/// before anything is copied**: after the move its writes would land in the
+/// old copy, which is then removed. One merely working in the folder does
+/// not stop it; the result says to restart it from the new place.
+#[cfg(all(target_os = "linux", debug_assertions))]
+#[test]
+fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/session.txt"), "take 1\n").unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let wait_for = |check: &dyn Fn() -> bool| {
+        for _ in 0..100 {
+            if check() {
+                return;
+            }
+            sleep(Duration::from_millis(20));
+        }
+    };
+
+    let mut writer = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("exec 3>>proj_a/session.txt; exec sleep 30")
+        .current_dir(old_base)
+        .spawn()
+        .unwrap();
+    wait_for(&|| {
+        !crate::core::holders::in_tree(&project.path)
+            .blocking
+            .is_empty()
+    });
+    let refused = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &progress,
+        &AtomicBool::new(false),
+    );
+    let _ = writer.kill();
+    let _ = writer.wait();
+    let error = format!("{:#}", refused.unwrap_err());
+    assert!(
+        error.contains("session.txt") && error.contains("open for writing"),
+        "{error}"
+    );
+    assert!(error.contains("sleep"), "names the program: {error}");
+    assert!(
+        project.path.join("session.txt").is_file(),
+        "nothing was touched"
+    );
+    assert!(!new_path.exists());
+
+    let mut sitter = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&project.path)
+        .spawn()
+        .unwrap();
+    wait_for(&|| {
+        !crate::core::holders::in_tree(&project.path)
+            .working_in
+            .is_empty()
+    });
+    let moved = staged_copy_verify_commit(
+        &project,
+        new_base,
+        &new_path,
+        &progress,
+        &AtomicBool::new(false),
+    );
+    let _ = sitter.kill();
+    let _ = sitter.wait();
+    let moved = moved.unwrap();
+    assert!(
+        moved
+            .notes
+            .iter()
+            .any(|note| note.contains("restart it from the new one")),
+        "{:?}",
+        moved.notes
+    );
+}
+
+/// **A move whose mount stops answering for good pauses, and goes on from its
+/// copy.** Nothing copied is thrown away: the record says it paused, and
+/// moving the project again takes over the copy — what arrived whole stays,
+/// only the rest is copied — then finishes like any move.
+#[cfg(debug_assertions)]
+#[test]
+fn a_move_that_loses_its_mount_pauses_and_resumes_from_its_copy() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/aa-empty.txt"), "").unwrap();
+    fs::write(old_base.join("proj_a/data.bin"), [9_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    // `move_project_in_parts` reads the configuration under the lock.
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+
+    let paused = crate::util::faults::with_thread_fault(
+        "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
+        || crate::core::move_engine::move_project_in_parts(&project, new_base, &progress, &cancel),
+    );
+    let error = paused.unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<crate::core::move_engine::Paused>()
+            .is_some(),
+        "{error:#}"
+    );
+    assert!(
+        project.path.join("data.bin").is_file(),
+        "the original is untouched"
+    );
+    assert!(
+        new_path.join("aa-empty.txt").is_file(),
+        "what arrived whole is kept"
+    );
+    #[cfg(unix)]
+    let inode = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(new_path.join("aa-empty.txt")).unwrap().ino()
+    };
+
+    let (outcome, housekeeping) =
+        crate::core::move_engine::move_project_in_parts(&project, new_base, &progress, &cancel)
+            .unwrap();
+    let outcome = crate::core::move_engine::finish_housekeeping(
+        outcome,
+        housekeeping,
+        crate::core::progress::Ticker::none(),
+    );
+    assert_eq!(outcome.source, SourceOutcome::Removed);
+    assert_eq!(fs::read(new_path.join("data.bin")).unwrap(), [9_u8; 4096]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            fs::metadata(new_path.join("aa-empty.txt")).unwrap().ino(),
+            inode,
+            "adopted, not copied again"
+        );
+    }
+    assert!(!project.path.exists());
 }

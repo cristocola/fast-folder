@@ -40,6 +40,10 @@ pub struct Background {
     /// Ctrl-C came while the job was still starting: it is asked to stop the
     /// moment its worker answers.
     pub cancel_when_started: bool,
+    /// The app's own reconcile, while it runs (`tui::app::attention`).
+    pub auto: Option<String>,
+    /// When the app last started one (`App::elapsed_ms`).
+    pub auto_at: Option<u64>,
 }
 
 impl Background {
@@ -170,6 +174,54 @@ impl App {
         }
     }
 
+    /// The app's own reconcile started, or could not: either way quietly.
+    pub(super) fn on_auto_reconcile_started(
+        &mut self,
+        started: Result<String, String>,
+    ) -> Vec<Effect> {
+        match started {
+            Ok(id) => {
+                self.background.auto = Some(id);
+                vec![Effect::WatchJobs]
+            }
+            Err(error) => {
+                crate::util::log::warn(format!("the app's reconcile did not start: {error}"));
+                Vec::new()
+            }
+        }
+    }
+
+    /// The app's own reconcile ended: a word only when it found something that
+    /// needs you, or finished something; the header says the rest.
+    fn report_auto_reconcile(&mut self, job: &JobView) -> Vec<Effect> {
+        self.background.auto = None;
+        let mut effects = vec![Effect::MarkSeen(job.id.clone())];
+        if let Some(report) = job
+            .state
+            .as_ref()
+            .and_then(|state| state.reconcile.as_ref())
+        {
+            let finished = report.completed + report.cleared + report.rolled_back + report.restored;
+            let key = crate::tui::command::key_of(crate::tui::command::CommandId::Attention);
+            if !report.verdicts.is_empty() {
+                let n = report.verdicts.len();
+                self.warn(format!(
+                    "{n} unfinished thing{} need{} you — {key} shows {}",
+                    if n == 1 { "" } else { "s" },
+                    if n == 1 { "s" } else { "" },
+                    if n == 1 { "it" } else { "them" }
+                ));
+            } else if finished > 0 {
+                self.info(format!(
+                    "finished {finished} leftover{} of earlier moves and deletes",
+                    if finished == 1 { "" } else { "s" }
+                ));
+            }
+        }
+        effects.extend(self.apply_change(ListChange::Reload));
+        effects
+    }
+
     /// A read of `jobs/` landed: keep it, and report every job that has ended
     /// and not been reported — this session's, and any nobody has seen.
     pub(super) fn on_jobs(&mut self, jobs: Vec<JobView>) -> Vec<Effect> {
@@ -197,6 +249,10 @@ impl App {
         let mut reload = false;
         for job in ended {
             self.background.reported.insert(job.id.clone());
+            if self.background.auto.as_deref() == Some(job.id.as_str()) {
+                effects.extend(self.report_auto_reconcile(&job));
+                continue;
+            }
             let ours = self.background.started_here.contains(&job.id);
             // This session's jobs are reported, and — once, on the first
             // look — any that ended while no app was open and nobody has
@@ -295,7 +351,7 @@ impl App {
         let body = for_the_app(&body.join("\n\n"));
         match state.status {
             JobStatus::Done if body.is_empty() => self.good(summary),
-            JobStatus::Done | JobStatus::Cancelled => {
+            JobStatus::Done | JobStatus::Cancelled | JobStatus::Paused | JobStatus::Unknown => {
                 if body.is_empty() {
                     self.warn(summary);
                 } else {
@@ -391,9 +447,10 @@ impl App {
     }
 }
 
-/// The command line names `fastf reconcile`; the app has a key for it.
+/// The command line names `fastf reconcile`; in the app a reconcile starts by
+/// itself, and `!` lists what is unfinished and can run one now.
 pub(crate) fn for_the_app(text: &str) -> String {
-    text.replace("`fastf reconcile`", "Reconcile (`!`)")
+    text.replace("`fastf reconcile`", "a reconcile (`!`)")
 }
 
 /// What a reconcile's report says beyond its summary, one paragraph each.
@@ -419,6 +476,13 @@ pub(crate) fn reconcile_notes(report: &crate::core::provisioning::ReconcileRepor
             "{} need a look:\n{}",
             report.unrecoverable.len(),
             report.unrecoverable.join("\n")
+        ));
+    }
+    if !report.waiting.is_empty() {
+        notes.push(format!(
+            "{} waiting for a base to answer — fastf finishes them once it does:\n{}",
+            report.waiting.len(),
+            report.waiting.join("\n")
         ));
     }
     if !report.obsolete.is_empty() {

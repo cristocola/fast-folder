@@ -1,9 +1,10 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates      "
-" → projects 12   a… ⚠ 1 needs attention "
+" → projects 12   arch… ⚠ 1 needs you  ! "
 " ⌕ / to search           12/12 · newest "
 "┌ projects ────────────────────────────┐"
 "│  ID     PROJECT                      │"

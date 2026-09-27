@@ -109,6 +109,56 @@ fn one_project_two_bases(install: &Path) -> (library::Project, std::path::PathBu
     (library::discover(&cfg).remove(0), base_b)
 }
 
+/// **A move keeps what `mv` keeps**: each file's permission bits and times,
+/// and each folder's, a read-only (mode 555) folder included. 3.13 kept
+/// neither, and every moved script lost its `+x`.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_staged_move_keeps_modes_and_times() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    sandboxed(|install| {
+        let (project, base_b) = one_project_two_bases(install);
+        let then = UNIX_EPOCH + Duration::from_secs(1_500_000_000);
+        let bin = project.path.join("bin");
+        fs::create_dir(&bin).unwrap();
+        fs::write(bin.join("run.sh"), "#!/bin/sh\n").unwrap();
+        fs::set_permissions(bin.join("run.sh"), fs::Permissions::from_mode(0o750)).unwrap();
+        let times = fs::FileTimes::new().set_modified(then).set_accessed(then);
+        fs::File::options()
+            .write(true)
+            .open(bin.join("run.sh"))
+            .unwrap()
+            .set_times(times)
+            .unwrap();
+        // A folder's time moves with every name written into it: set last.
+        fs::File::open(&bin).unwrap().set_times(times).unwrap();
+        let cache = project.path.join("cache");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("mod.go"), "package x").unwrap();
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let outcome = library::move_project_staged_for_test(&project, &base_b).unwrap();
+        let moved = outcome.project.path;
+        let script = fs::metadata(moved.join("bin/run.sh")).unwrap();
+        let folder = fs::metadata(moved.join("bin")).unwrap();
+        let read_only = fs::metadata(moved.join("cache")).unwrap();
+        fs::set_permissions(moved.join("cache"), fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(script.permissions().mode() & 0o777, 0o750, "+x kept");
+        assert_eq!(script.modified().unwrap(), then, "the file's time kept");
+        assert_eq!(folder.modified().unwrap(), then, "the folder's time kept");
+        assert_eq!(read_only.permissions().mode() & 0o777, 0o555);
+        assert_eq!(
+            fs::read_to_string(moved.join("cache/mod.go")).unwrap(),
+            "package x",
+            "a read-only folder's files arrived before it was made read-only"
+        );
+        assert!(!project.path.exists(), "the original is gone");
+    });
+}
+
 /// **A job that stops says how.** A failed move used to keep `Running` for
 /// ever, so anything watching it — the app polls until it is not — watched a
 /// dead job.
@@ -118,6 +168,7 @@ fn a_move_that_fails_ends_failed_and_says_why() {
         let (project, base_b) = one_project_two_bases(install);
         let blocker = base_b.join(project.path.file_name().unwrap());
         fs::create_dir_all(&blocker).unwrap();
+        fs::write(blocker.join("somebody's.txt"), "not ours").unwrap();
 
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
@@ -129,6 +180,27 @@ fn a_move_that_fails_ends_failed_and_says_why() {
         let why = state.error.clone().unwrap_or_default();
         assert!(why.contains("already exists"), "{why}");
         assert!(project.path.is_dir(), "a failed move leaves the original");
+    });
+}
+
+/// **An empty folder at the target name gives way.** A cloud mount leaves
+/// one behind for a while after a folder is removed — rclone re-creates
+/// directory markers — and moving a project back where it came from then
+/// failed with "move target already exists" over a folder holding nothing.
+#[test]
+fn an_empty_folder_at_the_target_name_gives_way() {
+    sandboxed(|install| {
+        let (project, base_b) = one_project_two_bases(install);
+        let marker = base_b.join(project.path.file_name().unwrap());
+        fs::create_dir_all(&marker).unwrap();
+
+        let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let outcome =
+            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        assert_eq!(outcome.project.path.file_name(), marker.file_name());
+        assert!(marker.join("PROJECT_INFO.md").is_file());
+        assert!(!project.path.exists());
     });
 }
 
@@ -156,7 +228,7 @@ fn a_cancel_undoes_a_move_before_its_publish_and_changes_nothing_after() {
 
         guard.set(
             "FASTF_FAULT",
-            Path::new("move:force-staged,remove:each-entry:delay-5"),
+            Path::new("pool:serial,move:force-staged,remove:each-entry:delay-5"),
         );
         let progress = Mutex::new(Progress::new(&[]));
         let cancel = AtomicBool::new(false);

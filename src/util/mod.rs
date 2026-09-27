@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod diag;
 pub(crate) mod disk_space;
 pub mod faults;
+pub mod fs_kind;
 pub mod fs_retry;
 pub mod human_bytes;
 pub mod interrupt;
@@ -13,6 +14,8 @@ pub mod messages;
 #[cfg(unix)]
 pub mod notify;
 pub mod paths;
+pub mod pool;
+pub(crate) mod process;
 #[cfg(unix)]
 pub mod relaunch;
 #[cfg(windows)]

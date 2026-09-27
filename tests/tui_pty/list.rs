@@ -1063,7 +1063,7 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
     let alt = sb.with_bases(&["alt"])[0].clone();
     plant_dated_project(&sb, "Slow", "ID0001", "2026-01-01T00:00:00Z", 64);
     // One file, three seconds to copy: long enough to quit in the middle.
-    let fault = std::path::Path::new("move:force-staged,move:each-file:delay-3000");
+    let fault = std::path::Path::new("pool:serial,move:force-staged,move:each-file:delay-3000");
     let env = [
         ("FASTF_INSTALL_DIR", sb.install.as_path()),
         ("HOME", sb.tmp.path()),
@@ -1103,4 +1103,86 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+}
+
+/// **A base on a mount that stopped answering holds up nothing but itself.**
+/// The other base's rows are on screen within a second, the silent base is
+/// named, and `q` leaves at once. Before, the rows waited on every base in
+/// series — each canonicalized, with no timeout, before its probe — and the
+/// quit joined a size worker blocked on the dead mount.
+///
+/// `paths:stall-base` makes every look into a folder holding
+/// `.fastf-test-stall` block while the file is there, the way every call
+/// into a dead mount blocks.
+#[cfg(debug_assertions)]
+#[test]
+fn a_stalled_base_holds_up_neither_the_rows_nor_the_quit() {
+    use fastf::util::paths::STALL_MARKER;
+    use std::path::Path;
+    use std::time::Duration;
+
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Healthy_Project", "ID0001", "2026-01-01T00:00:00Z", 64);
+    let stalled = sb.with_bases(&["stalled"]).remove(0);
+    sb.plant_project(&stalled, "Stuck_Project", "ID0002");
+    fs::write(stalled.join(STALL_MARKER), "").unwrap();
+
+    let script = pty::Script::new().pause(1700);
+    let quit_at = script.elapsed();
+    let script = script.key(KEY_QUIT).build();
+    let (chunks, code) = pty::run_chunked(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_FAULT", Path::new("paths:stall-base")),
+        ],
+        &script,
+        DEADLINE,
+    );
+    // Let whatever still waits on the base go.
+    let _ = fs::remove_file(stalled.join(STALL_MARKER));
+
+    // The first moment the replayed screen showed `needle`.
+    let shown = |needle: &str| {
+        let mut parser = vt100::Parser::new(pty::PTY_ROWS, pty::PTY_COLS, 0);
+        chunks.iter().find_map(|(at, bytes)| {
+            parser.process(bytes);
+            parser.screen().contents().contains(needle).then_some(*at)
+        })
+    };
+    let first_frame = shown("fast-folder").expect("the app drew a frame");
+    let rows = shown("Healthy_Project").expect("the healthy base's row is shown");
+    assert!(
+        rows - first_frame < Duration::from_secs(1),
+        "the healthy base's rows took {:?} after the first frame",
+        rows - first_frame
+    );
+    assert!(
+        shown("stalled unresponsive").is_some(),
+        "the silent base is named in the header"
+    );
+    assert!(
+        shown("Stuck_Project").is_none(),
+        "nothing of the stalled base is shown while it is silent"
+    );
+
+    const LEAVE: &[u8] = b"\x1b[?1049l";
+    let mut seen = Vec::new();
+    let left = chunks
+        .iter()
+        .find_map(|(at, bytes)| {
+            seen.extend_from_slice(bytes);
+            seen.windows(LEAVE.len())
+                .any(|window| window == LEAVE)
+                .then_some(*at)
+        })
+        .expect("the app gave the screen back");
+    assert!(
+        left.saturating_sub(quit_at) < Duration::from_secs(1),
+        "q took {:?} to leave",
+        left.saturating_sub(quit_at)
+    );
+    assert_eq!(code, 0);
 }

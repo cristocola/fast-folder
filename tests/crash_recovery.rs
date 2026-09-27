@@ -281,7 +281,12 @@ fn transaction_count(target: &Path) -> usize {
 #[cfg(debug_assertions)]
 #[test]
 fn hard_killed_staged_moves_reconcile_without_data_loss() {
-    for point in MOVE_ABORT_POINTS {
+    // Every point under both ways an original leaves: renamed aside, and —
+    // as on a cloud mount (`fs:as-rclone`) — emptied in place.
+    for (point, in_place) in MOVE_ABORT_POINTS
+        .iter()
+        .flat_map(|point| [(point, false), (point, true)])
+    {
         sandbox(|sb, _guard| {
             write_crash_template(&sb.install, "crash");
             let target = sb.install.parent().unwrap().join("target");
@@ -307,7 +312,14 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 .env(if cfg!(windows) { "USERPROFILE" } else { "HOME" }, home)
                 .env(MOVE_CHILD_ENV, "1")
                 .env(MOVE_TARGET_ENV, &target)
-                .env(FAULT_ENV, format!("{point}:abort"))
+                .env(
+                    FAULT_ENV,
+                    if in_place {
+                        format!("fs:as-rclone,{point}:abort")
+                    } else {
+                        format!("{point}:abort")
+                    },
+                )
                 .output()
                 .expect("running move child");
             assert!(
@@ -342,13 +354,16 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                     source_after && !final_after,
                     "[{point}] source is authoritative"
                 );
+                // Killed before its journal was written, the record holds
+                // nothing a move gets past its first write to: it is removed,
+                // not reported as invalid on every pass for ever (3.13 did).
                 assert_eq!(
-                    state_after.2, 1,
-                    "[{point}] malformed transaction is retained"
+                    state_after.2, 0,
+                    "[{point}] the empty record is removed: {first:?}"
                 );
                 assert!(
-                    !first.unrecoverable.is_empty(),
-                    "[{point}] must be reported"
+                    first.unrecoverable.is_empty(),
+                    "[{point}] and nobody is asked to look: {first:?}"
                 );
             } else if matches!(
                 *point,
@@ -383,7 +398,8 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 .collect();
             assert!(
                 hidden.is_empty() || *point == "move:after-transaction-create",
-                "[{point}] a retired original or a probe survived reconcile: {hidden:?} {first:?}"
+                "[{point}, in place {in_place}] a retired original, its pointer or a probe \
+                 survived reconcile: {hidden:?} {first:?}"
             );
 
             let authoritative = if final_after { &final_path } else { &source };
@@ -691,6 +707,7 @@ fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
             // `move:force-staged` — asked about as a decision with `is_armed`.
             for (_, rest) in text
                 .match_indices("faults::check(\"")
+                .chain(text.match_indices("faults::check_io(\""))
                 .chain(text.match_indices("faults::is_armed(\""))
                 .map(|(i, m)| (i, &text[i + m.len()..]))
             {

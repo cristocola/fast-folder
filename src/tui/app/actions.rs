@@ -71,6 +71,9 @@ pub enum TextThen {
     /// The folder to copy into. Refused by the engine rather than here, so the
     /// command line and the app say the same words about the same rule.
     CopyTo,
+    /// Type the word `discard` to settle an unfinished item by removing it
+    /// (`core::attention::Action::Discard`); carries the item's path.
+    DiscardAttention(std::path::PathBuf),
 }
 
 /// The quick note: a few lines typed where you are. Enter saves, Alt-Enter
@@ -373,6 +376,19 @@ impl App {
                         Vec::new()
                     }
                 }
+            }
+            TextThen::DiscardAttention(path) => {
+                if !text
+                    .trim()
+                    .eq_ignore_ascii_case(super::attention::DISCARD_WORD)
+                {
+                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                        prompt.error = Some(super::attention::DISCARD_MISMATCH.to_string());
+                    }
+                    return Vec::new();
+                }
+                self.modals.pop();
+                self.resolve_attention(path, crate::core::attention::Action::Discard)
             }
             TextThen::Delete(path) => {
                 if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {

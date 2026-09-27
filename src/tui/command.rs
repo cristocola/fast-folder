@@ -398,6 +398,7 @@ pub enum CommandId {
     Templates,
     Settings,
     Reconcile,
+    Attention,
     // The action menu
     ActionsRun,
     // The templates tab
@@ -428,7 +429,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 106] = [
+    pub const ALL: [CommandId; 107] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -515,6 +516,7 @@ impl CommandId {
         CommandId::Templates,
         CommandId::Settings,
         CommandId::Reconcile,
+        CommandId::Attention,
         CommandId::StripFilter,
         CommandId::ActionsRun,
         CommandId::StudioNew,
@@ -792,8 +794,12 @@ fn has_row_filter(app: &App) -> Availability {
 /// A base filter is worth offering only where there is more than one base to
 /// choose between — with one, every row answers it already.
 fn many_bases(app: &App) -> Availability {
-    match app.summary.as_ref() {
-        Some(summary) if summary.bases.len() > 1 => Availability::Enabled,
+    match app
+        .summary
+        .as_ref()
+        .and_then(crate::tui::app::data::Summary::bases_known)
+    {
+        Some(bases) if bases.len() > 1 => Availability::Enabled,
         Some(_) => Availability::Hidden,
         // The summary is still being read; the key is bound, and pressing it
         // before the bases are known says so rather than doing nothing.
@@ -951,16 +957,19 @@ fn can_move(app: &App) -> Availability {
     let Some(project) = app.library.selected() else {
         return Availability::Hidden;
     };
-    let Some(summary) = &app.summary else {
+    let Some(bases) = app
+        .summary
+        .as_ref()
+        .and_then(crate::tui::app::data::Summary::bases_known)
+    else {
         return Availability::Disabled("still probing the bases");
     };
-    if summary
-        .bases
+    if bases
         .iter()
         .any(|base| base.probe.usable() && base.path != project.base)
     {
         not_busy(app)
-    } else if summary.bases.len() > 1 {
+    } else if bases.len() > 1 {
         Availability::Disabled("no other base is mounted right now")
     } else {
         Availability::Disabled("only one base is configured — add another under Settings")
@@ -2007,11 +2016,22 @@ pub static COMMANDS: &[Command] = &[
         not_busy
     ),
     cmd!(
-        Reconcile,
-        "Reconcile",
-        "check and recover: finish or roll back work a crash or a failed move left half-done — what the header's needs-attention warning means",
+        Attention,
+        "Unfinished work",
+        "what fastf left unfinished — what it is finishing by itself, what waits for a base, and what needs you, each with what settles it",
         TABS,
         [Key::ch('!')],
+        Library,
+        palette = true,
+        hint = false,
+        always
+    ),
+    cmd!(
+        Reconcile,
+        "Reconcile now",
+        "finish now what fastf can: interrupted moves and copies, old copies, deleted projects' folders — rather than wait for the app to start it",
+        TABS,
+        [],
         Library,
         palette = true,
         hint = false,

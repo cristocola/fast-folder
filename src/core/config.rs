@@ -295,18 +295,36 @@ impl Config {
         resolved
     }
 
-    fn resolve_effective_bases(&self) -> Vec<std::path::PathBuf> {
+    /// The bases as configured — `base_dir` (or its fallback) first, then
+    /// `bases` as listed, each once — before anything is asked of them: no
+    /// filesystem call, so a base that does not answer cannot hold this up.
+    /// What a surface that reads each base on its own worker starts from.
+    pub fn base_candidates(&self) -> Vec<std::path::PathBuf> {
         let mut candidates = vec![self.resolve_base_dir()];
         for b in &self.bases {
             if !b.trim().is_empty() {
                 candidates.push(std::path::PathBuf::from(b));
             }
         }
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|candidate| seen.insert(candidate.clone()));
+        candidates
+    }
+
+    fn resolve_effective_bases(&self) -> Vec<std::path::PathBuf> {
+        // All at once, under one deadline: `canonicalize` on a mount that
+        // stopped answering blocks for the kernel's own timeout, and one such
+        // base held every command — and the app's first rows — behind it. A
+        // base that has not answered keeps the path as configured.
+        let candidates = self.base_candidates();
+        let canonical = paths::answer_within(&candidates, paths::PROBE_TIMEOUT, |path| {
+            paths::canonical(path).ok()
+        });
 
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for c in candidates {
-            let norm = paths::canonical(&c).unwrap_or(c);
+        for (candidate, canonical) in candidates.into_iter().zip(canonical) {
+            let norm = canonical.flatten().unwrap_or(candidate);
             if seen.insert(norm.clone()) {
                 out.push(norm);
             }
@@ -488,6 +506,39 @@ mod tests {
 
         let absent: Config = toml::from_str("").unwrap();
         assert_eq!(absent.on_name_collision, NameCollision::Suffix);
+    }
+
+    /// A base on a mount that stopped answering keeps its configured path,
+    /// within the deadline, and holds up none of the others.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_base_that_does_not_answer_keeps_its_path_and_holds_nothing_up() {
+        use crate::util::paths;
+        let dir = tempfile::tempdir().unwrap();
+        let healthy = dir.path().join("healthy");
+        let stalled = dir.path().join("stalled");
+        std::fs::create_dir_all(&healthy).unwrap();
+        std::fs::create_dir_all(&stalled).unwrap();
+        std::fs::write(stalled.join(paths::STALL_MARKER), "").unwrap();
+        let config = Config {
+            base_dir: stalled.display().to_string(),
+            bases: vec![healthy.display().to_string()],
+            ..Config::default()
+        };
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let started = std::time::Instant::now();
+            let bases = config.effective_bases();
+            assert!(
+                started.elapsed() < paths::PROBE_TIMEOUT + std::time::Duration::from_secs(1),
+                "one deadline, not the mount's: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                bases,
+                vec![stalled.clone(), paths::canonical(&healthy).unwrap()]
+            );
+        });
+        std::fs::remove_file(stalled.join(paths::STALL_MARKER)).unwrap();
     }
 
     /// `expand_base_path` is one half of "the only way in" for a base path, and

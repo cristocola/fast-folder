@@ -6,6 +6,7 @@ use std::time::SystemTime;
 
 use crate::core::config::Config;
 use crate::core::project_info::{self, Metadata};
+use crate::util::paths;
 
 use super::cache::*;
 use super::model::*;
@@ -16,19 +17,40 @@ use super::model::*;
 
 /// Discover every project across all effective bases, newest first.
 ///
-/// Per base: cache-first with a staleness gate (see module docs). Absent /
-/// unmounted bases are skipped honestly rather than surfacing stale entries.
+/// Per base: cache-first with a staleness gate (see module docs). Every base
+/// is probed first, all at once under one deadline, so a mount that stopped
+/// answering costs `PROBE_TIMEOUT` once and is named, instead of holding the
+/// command for the kernel's own timeout. Absent (unmounted) bases are skipped
+/// honestly rather than surfacing stale entries.
 pub fn discover(cfg: &Config) -> Vec<Project> {
     crate::util::trace::hit("discover");
+    let bases = cfg.effective_bases();
     let mut all = Vec::new();
-    for base in cfg.effective_bases() {
-        if !base.is_dir() {
-            continue;
+    for (base, probe) in paths::probe_dirs(&bases, paths::PROBE_TIMEOUT) {
+        match probe {
+            paths::Probe::Mounted => all.extend(discover_base(&base)),
+            paths::Probe::Unresponsive => say_once_it_does_not_answer(&base),
+            paths::Probe::Absent | paths::Probe::NotAFolder => {}
         }
-        all.extend(discover_base(&base));
     }
     all.sort_by(newest_first);
     all
+}
+
+/// Once per process and base: a command resolves its project several times.
+fn say_once_it_does_not_answer(base: &Path) {
+    static SAID: std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    if SAID
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .insert(base.to_path_buf())
+    {
+        crate::util::diag::warn(format!(
+            "{} does not answer, so its projects are not listed",
+            paths::display_path(base)
+        ));
+    }
 }
 
 /// Newest first: `created` descending (ISO-8601 sorts as text). `created` has
@@ -44,52 +66,111 @@ pub fn newest_first(a: &Project, b: &Project) -> std::cmp::Ordering {
 
 /// Cache-first discovery for a single base with the staleness gate applied.
 pub(crate) fn discover_base(base: &Path) -> Vec<Project> {
-    match load_cache(base) {
-        None => {
-            let projects = scan_base(base);
-            let _ = write_cache(base, &projects);
-            projects
+    discover_base_staged(base, |_| {})
+}
+
+/// `discover_base`, handing the rows the base's index holds to `cached`
+/// before anything else is asked of the base — for a surface that shows them
+/// while the base is checked, since the check is a listing and a listing of a
+/// cloud bucket can take seconds. `cached` is not called when there is no
+/// index fastf can trust even that far.
+pub fn discover_base_staged(base: &Path, cached: impl FnOnce(Vec<Project>)) -> Vec<Project> {
+    paths::stall_if_marked(base);
+    let Some(cache) = load_cache(base) else {
+        return rescan(base);
+    };
+    let Cache { entries, seen, .. } = cache;
+    // A *rejected* entry is not the same as a vanished folder. A folder that
+    // has gone is an ordinary, transient state: drop the row and rewrite. An
+    // entry that names a path outside its own base means the file is not
+    // fastf's own bookkeeping any more, and the only honest response is to
+    // stop reading it and go back to the folders — which are the truth.
+    let Some(rows) = entries
+        .into_iter()
+        .map(|entry| entry.into_project(base))
+        .collect::<Option<Vec<Project>>>()
+    else {
+        return rescan(base);
+    };
+    cached(rows.clone());
+    match freshness(base, seen.as_ref()) {
+        Freshness::Current(names) => {
+            // The listing names every folder there is: a row whose folder is
+            // not among them has gone (or was planted), and the drop is
+            // written, so "missing" stays transient.
+            let listed = rows.len();
+            let rows: Vec<Project> = rows
+                .into_iter()
+                .filter(|project| {
+                    project.path.file_name().is_some_and(|name| {
+                        names
+                            .binary_search(&name.to_string_lossy().into_owned())
+                            .is_ok()
+                    })
+                })
+                .collect();
+            if rows.len() != listed {
+                let _ = write_index(base, &rows, Some(names));
+            }
+            rows
         }
-        Some(cache) => {
-            if cache_is_stale(base) {
-                let projects = scan_base(base);
-                let _ = write_cache(base, &projects);
-                return projects;
-            }
-            // Fast path: trust cached metadata, but drop entries whose folder
-            // has since disappeared. A drop rewrites the cache so the "missing"
-            // state is transient.
-            let mut projects = Vec::new();
-            let mut dropped = false;
-            for entry in cache.entries {
-                // A *rejected* entry is not the same as a vanished folder. A
-                // folder that has gone is an ordinary, transient state: drop the
-                // row and rewrite. An entry that names a path outside its own
-                // base means the file is not fastf's own bookkeeping any more,
-                // and the only honest response is to stop reading it and go
-                // back to the folders — which are the truth.
-                let Some(project) = entry.into_project(base) else {
-                    let projects = scan_base(base);
-                    let _ = write_cache(base, &projects);
-                    return projects;
-                };
-                if project.path.is_dir() {
-                    projects.push(project);
-                } else {
-                    dropped = true;
-                }
-            }
-            if dropped {
-                let _ = write_cache(base, &projects);
-            }
-            projects
-        }
+        Freshness::Stale => rescan(base),
     }
 }
 
-/// The cache is stale when the base directory's mtime is newer than the cache
-/// file's (a project was added/removed since the cache was written), or when
-/// either mtime can't be read (be conservative and rescan).
+/// Scan a base and write its index from what the scan's own listing saw.
+fn rescan(base: &Path) -> Vec<Project> {
+    let scanned = scan_listing(base);
+    if let Some(names) = scanned.names {
+        let _ = write_index(base, &scanned.projects, Some(names));
+    }
+    scanned.projects
+}
+
+/// Whether a base's index can be read instead of the base.
+pub(crate) enum Freshness {
+    /// The base holds exactly the names the index was built from — here, from
+    /// the listing that said so — and its time says nothing changed either.
+    Current(Vec<String>),
+    /// Rescan: another name, no names recorded, a newer base, or a base that
+    /// could not be listed.
+    Stale,
+}
+
+/// **Is the index still the base?** One names-only listing of the base
+/// against the names the index was built from ([`Cache::seen`]). The time
+/// gate stays beside it as a second signal, for the one change a listing
+/// cannot see — a folder replaced by another of the same name — wherever
+/// folder times mean something.
+pub(crate) fn freshness(base: &Path, seen: Option<&Vec<String>>) -> Freshness {
+    let Some(seen) = seen else {
+        return Freshness::Stale;
+    };
+    match base_names(base) {
+        Ok(names) if names == *seen && !cache_is_stale(base) => Freshness::Current(names),
+        _ => Freshness::Stale,
+    }
+}
+
+/// Every name in `base` but the dot-names, sorted: what [`Cache::seen`]
+/// records and [`freshness`] compares. An error part of the way is an error:
+/// half a listing cannot say what it did not list.
+pub(crate) fn base_names(base: &Path) -> std::io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(base)? {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if !name.starts_with('.') {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// The time gate: the cache is stale when the base directory's mtime is newer
+/// than the cache file's (a project was added/removed since the cache was
+/// written), or when either mtime can't be read (be conservative and rescan).
+/// Only a second signal now — see [`freshness`].
 pub(crate) fn cache_is_stale(base: &Path) -> bool {
     let base_m = dir_mtime(base);
     let cache_m = dir_mtime(&cache_path(base));
@@ -129,9 +210,22 @@ pub fn touch_cache(base: &Path) {
 /// Subdirectories without one are skipped — sitting in a base is necessary but
 /// not sufficient to be a project.
 pub fn scan_base(base: &Path) -> Vec<Project> {
+    scan_listing(base).projects
+}
+
+/// What a scan found, and the names its listing held ([`Cache::seen`]) —
+/// `None` when the listing failed, part of the way or at the start, and no
+/// index may be written from it.
+pub(crate) struct Scanned {
+    pub(crate) projects: Vec<Project>,
+    pub(crate) names: Option<Vec<String>>,
+}
+
+/// [`scan_base`], keeping the names its listing saw.
+pub(crate) fn scan_listing(base: &Path) -> Scanned {
     crate::util::trace::hit("scan_base");
     debug_assert_eq!(SCAN_DEPTH, 1, "only depth-1 scanning is implemented");
-    let mut out = Vec::new();
+    let mut projects = Vec::new();
     let read_dir = match fs::read_dir(base) {
         Ok(read_dir) => read_dir,
         Err(err) => {
@@ -139,32 +233,76 @@ pub fn scan_base(base: &Path) -> Vec<Project> {
             // rather than showing it as mounted with nothing in it.
             crate::util::diag::warn(format!(
                 "{} could not be listed: {err}",
-                crate::util::paths::display_path(base)
+                paths::display_path(base)
             ));
-            return out;
+            return Scanned {
+                projects,
+                names: None,
+            };
         }
     };
 
-    for entry in read_dir.flatten() {
+    let mut names = Some(Vec::new());
+    let mut emptying = std::collections::HashMap::new();
+    for entry in read_dir {
+        let Ok(entry) = entry else {
+            names = None;
+            continue;
+        };
+        // Skip dot-prefixed dirs, including `.fastf-transactions`, whose private
+        // staging may carry PROJECT_INFO.md. An in-flight move must never
+        // surface as a phantom duplicate project.
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            if let Some((folder, project_id)) = emptied_by(&entry.path(), &name) {
+                emptying.insert(folder, project_id);
+            }
+            continue;
+        }
+        if let Some(names) = names.as_mut() {
+            names.push(name);
+        }
         let path = entry.path();
         if !path.is_dir() {
             continue;
         }
-        // Skip dot-prefixed dirs, including `.fastf-transactions`, whose private
-        // staging may carry PROJECT_INFO.md. An in-flight move must never
-        // surface as a phantom duplicate project.
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|n| n.starts_with('.'))
-        {
-            continue;
-        }
         if let Some(project) = project_at(base, &path) {
-            out.push(project);
+            projects.push(project);
         }
     }
-    out
+    if let Some(names) = names.as_mut() {
+        names.sort();
+    }
+    // **An old copy being emptied where it stands is not a project**, even
+    // when a cloud mount puts its `PROJECT_INFO.md` back: an edit saved a
+    // moment before a move from R2 was still uploading when the move removed
+    // the file, and landed after — the lab found the old copy listed beside
+    // the moved project, one id twice. Its pointer or delete record names
+    // the folder until the settle has looked again; the same id there is
+    // that old copy, another is someone's project.
+    projects.retain(|project| {
+        project
+            .path
+            .file_name()
+            .and_then(|folder| emptying.get(&folder.to_string_lossy().into_owned()))
+            .is_none_or(|project_id| *project_id != project.id)
+    });
+    Scanned { projects, names }
+}
+
+/// The folder a move's or a delete's in-place record names, and the project
+/// it was, when `name` is one of those records.
+fn emptied_by(path: &Path, name: &str) -> Option<(String, String)> {
+    let (folder, project_id) = if crate::core::transactions::pointer_operation(name).is_some() {
+        let pointer = crate::core::transactions::read_pointer(path).ok()?;
+        (pointer.folder, pointer.project_id)
+    } else if crate::core::move_cleanup::deleted_record_operation(name).is_some() {
+        let record = crate::core::move_cleanup::read_delete_record(path).ok()?;
+        (record.folder, record.project_id)
+    } else {
+        return None;
+    };
+    Some((folder.to_string_lossy().into_owned(), project_id))
 }
 
 /// Build a [`Project`] from a folder iff it contains a readable

@@ -11,7 +11,7 @@ use crate::core::library::{self, Project};
 use crate::core::project_info::{self, Metadata};
 use crate::core::{provisioning, template};
 use crate::tui::app::data::{
-    BaseInfo, Entry, Prefs, ProjectDetail, Stamp, Summary, TemplateCard, TemplateInfo, VarInfo,
+    BaseInfo, Entry, Prefs, ProjectDetail, Stamp, SummaryPart, TemplateCard, TemplateInfo, VarInfo,
 };
 use crate::tui::app::wizard::{
     ApplyPreview, FromFolderPreview, Preview, RecursivePreview, RegisterPreview,
@@ -30,57 +30,91 @@ pub fn activity() -> (Vec<crate::util::messages::Message>, Vec<String>) {
     (messages, log)
 }
 
-/// The header, from the indexes: no base is scanned to draw it. Each base is
-/// probed with a timeout rather than `is_dir`-ed, so a dead network mount costs
-/// `PROBE_TIMEOUT` once instead of a frozen screen.
-pub fn summary() -> Result<Summary> {
-    let cfg = Config::load()?;
-    let bases = cfg.effective_bases();
-    let default_base = cfg.resolve_base_dir();
-    let probed = paths::probe_dirs(&bases, paths::PROBE_TIMEOUT);
-
-    let mut summary = Summary::default();
-    for (base, probe) in probed {
-        let index = probe
-            .usable()
-            .then(|| library::index_summary(&base))
-            .flatten();
-        if let Some(index) = &index {
-            summary.projects += index.projects;
-            if let Some(id) = &index.max_id
-                && summary.max_id.as_ref().is_none_or(|held| {
-                    crate::core::naming::id_value(held) < crate::core::naming::id_value(id)
-                })
-            {
-                summary.max_id = Some(id.clone());
-            }
-            if summary.newest.is_none() {
-                summary.newest = index.newest.clone();
-            }
-        }
-        summary.bases.push(BaseInfo {
-            label: library::base_label(&base),
-            is_default: base == default_base,
-            indexed: index.map(|i| i.projects),
-            path: base,
-            probe,
-        });
-    }
-
-    summary.templates = match template::load_all() {
+/// The summary's first part: the templates and the configuration the screens
+/// ask about, from the data directory alone — no base is touched, so they
+/// are there at once whatever the bases are doing.
+pub fn summary_local(cfg: &Config) -> SummaryPart {
+    let templates = match template::load_all() {
         Ok(templates) => templates.iter().map(template_card).collect(),
         Err(err) => {
             crate::util::diag::warn(format!("templates could not be listed: {err:#}"));
             Vec::new()
         }
     };
-    summary.attention = provisioning::list_incomplete(&cfg).len();
-    summary.prefs = Prefs {
-        default_template: cfg.default_template.clone(),
-        confirm_create: cfg.confirm_create,
-        register_naming_pattern: cfg.register_naming_pattern.clone(),
-    };
-    Ok(summary)
+    SummaryPart::Local {
+        templates,
+        prefs: Prefs {
+            default_template: cfg.default_template.clone(),
+            confirm_create: cfg.confirm_create,
+            register_naming_pattern: cfg.register_naming_pattern.clone(),
+        },
+    }
+}
+
+/// The header's bases, from the indexes: no base is scanned to draw it.
+/// **Every base is asked at once, under one deadline** — its canonical form,
+/// whether it is a folder, what its index says — so a base on a mount that
+/// stopped answering costs `PROBE_TIMEOUT` once and is called unresponsive,
+/// where asking one base after another, each canonicalized before its probe,
+/// cost a timeout per base and the kernel's own for the first. Also answers
+/// each base's probe, which the attention part reads.
+pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>) {
+    let candidates = cfg.base_candidates();
+    let answers = paths::answer_within(&candidates, paths::PROBE_TIMEOUT, |configured| {
+        let base = paths::canonical(configured).unwrap_or_else(|_| configured.to_path_buf());
+        let probe = paths::probe_blocking(&base);
+        let index = probe
+            .usable()
+            .then(|| library::index_summary(&base))
+            .flatten();
+        (base, probe, index)
+    });
+
+    let mut bases: Vec<BaseInfo> = Vec::new();
+    let mut probed = Vec::new();
+    let (mut projects, mut max_id, mut newest) = (0, None::<String>, None);
+    for (at, (configured, answer)) in candidates.into_iter().zip(answers).enumerate() {
+        let (base, probe, index) = answer.unwrap_or((configured, paths::Probe::Unresponsive, None));
+        if bases.iter().any(|known| known.path == base) {
+            continue;
+        }
+        if let Some(index) = &index {
+            projects += index.projects;
+            if let Some(id) = &index.max_id
+                && max_id.as_ref().is_none_or(|held| {
+                    crate::core::naming::id_value(held) < crate::core::naming::id_value(id)
+                })
+            {
+                max_id = Some(id.clone());
+            }
+            if newest.is_none() {
+                newest = index.newest.clone();
+            }
+        }
+        probed.push((base.clone(), probe));
+        bases.push(BaseInfo {
+            label: library::base_label(&base),
+            // `base_dir` is the first candidate, however it is spelled.
+            is_default: at == 0,
+            indexed: index.map(|i| i.projects),
+            path: base,
+            probe,
+        });
+    }
+    (
+        SummaryPart::Bases {
+            bases,
+            projects,
+            max_id,
+            newest,
+        },
+        probed,
+    )
+}
+
+/// What is unfinished, over the bases [`summary_bases`] found answering.
+pub fn summary_attention(cfg: &Config, probed: Vec<(PathBuf, paths::Probe)>) -> SummaryPart {
+    SummaryPart::Attention(crate::core::attention::attention_probed(cfg, probed))
 }
 
 /// Everything the settings screen shows. Read on a worker: the counter floor
@@ -424,9 +458,16 @@ fn template_card(t: &template::Template) -> TemplateCard {
 }
 
 /// Every project, newest first, through the caches.
-pub fn discover() -> Result<Vec<Project>> {
-    let cfg = Config::load()?;
-    Ok(library::discover(&cfg))
+/// One base's rows for a discovery: `cached` gets what its index holds as
+/// soon as that is read, and the answer is what the base holds. A base that
+/// is not there is empty — the header says why. `configured` is the base as
+/// the configuration spells it.
+pub fn discover_base(configured: &Path, cached: impl FnOnce(Vec<Project>)) -> Vec<Project> {
+    let base = paths::canonical(configured).unwrap_or_else(|_| configured.to_path_buf());
+    if !paths::probe_blocking(&base).usable() {
+        return Vec::new();
+    }
+    library::discover_base_staged(&base, cached)
 }
 
 /// Read one project's `PROJECT_INFO.md` for a query that needs its variables.
@@ -588,6 +629,7 @@ pub fn stamp_of(path: &Path) -> Option<Stamp> {
 
 /// The detail pane's reads for one project.
 pub fn detail(path: &Path) -> ProjectDetail {
+    paths::stall_if_marked(path);
     // The stamp before the reads: a write that lands between the two is
     // caught by the next check rather than hidden behind a newer stamp.
     let mut detail = ProjectDetail {

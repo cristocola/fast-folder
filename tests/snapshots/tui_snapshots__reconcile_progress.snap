@@ -1,10 +1,10 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 26
+assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
-"◜ reconciling · 1 of 2 · removing the old copy 312 of 1473 entries    → projec… ⚠ 1 needs attention "
+"◜ reconciling · 1 of 2 · removing the old copy 312 of 1473 entries    → projects … ⚠ 1 needs you  ! "
 "                                                                                                    "
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"

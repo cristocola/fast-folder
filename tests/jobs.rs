@@ -103,7 +103,7 @@ fn a_killed_command_line_leaves_its_move_to_finish() {
     let mut cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40,remove:each-entry:delay-10",
+        "pool:serial,move:force-staged,move:each-file:delay-40,remove:each-entry:delay-10",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     cli.kill().unwrap();
@@ -123,6 +123,82 @@ fn a_killed_command_line_leaves_its_move_to_finish() {
     assert!(hidden_folders(&sb.base).is_empty(), "no old copy is left");
 }
 
+/// **A second data dir's reconcile leaves a live move alone.** Two fastf data
+/// dirs on one machine — portable mode beside the installed one, a test lab —
+/// share their bases, and 3.13's reconcile asked only its own data dir which
+/// jobs were alive: it took a live move's record for an abandoned one and
+/// discarded the copy while it was being written ("657 of the 1639 recorded
+/// entries missing", found by the mount lab).
+#[cfg(unix)]
+#[test]
+fn a_reconcile_from_another_data_dir_leaves_a_live_move_alone() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 30);
+    let second = Sandbox::new();
+    second.ok(&["config", "set", "base-dir", &sb.base.display().to_string()]);
+    second.ok(&["config", "set", "bases", &other.display().to_string()]);
+    let cli = start(
+        &sb,
+        &["move", "ID0001", &other.display().to_string(), "--yes"],
+        "pool:serial,move:force-staged,move:each-file:delay-60",
+    );
+    wait_until("the copy", 20, || in_phase(&sb, "copying"));
+
+    let report = second.ok(&["reconcile"]);
+    assert!(!report.contains("rolled back"), "{report}");
+    let out = cli.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "the move finishes: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!original.exists(), "the original is gone");
+    assert_eq!(
+        fs::read_dir(other.join("2026-01-01_Shoot_ID0001/takes"))
+            .unwrap()
+            .count(),
+        30,
+        "every file arrived"
+    );
+}
+
+/// **A delete killed part of the way is finished by reconcile.** The project
+/// left the library in one rename, so what is left is a hidden folder nothing
+/// lists; the next reconcile removes it — the word was typed once, for the
+/// whole delete. A design guard: 3.13 did this too, but this suite, which says
+/// it covers deletes, had no case for one.
+#[cfg(unix)]
+#[test]
+fn a_delete_killed_mid_removal_is_finished_by_reconcile() {
+    let sb = Sandbox::new();
+    let original = project(&sb, &sb.base, 40);
+    let mut cli = start(
+        &sb,
+        &["delete", "ID0001", "--yes"],
+        "pool:serial,remove:each-entry:delay-50",
+    );
+    wait_until("the removal", 20, || {
+        hidden_folders(&sb.base).len() == 1 && !original.exists()
+    });
+    std::thread::sleep(Duration::from_millis(400));
+    let (_, state) = newest(&sb).unwrap();
+    // SAFETY: a signal to a process this test started, through its child.
+    unsafe {
+        libc::kill(state["pid"].as_u64().unwrap() as i32, libc::SIGKILL);
+    }
+    let _ = cli.wait();
+    assert_eq!(
+        hidden_folders(&sb.base).len(),
+        1,
+        "part of it is left, hidden"
+    );
+    assert!(!original.exists(), "and nothing is listed");
+
+    let report = sb.ok(&["reconcile"]);
+    assert!(hidden_folders(&sb.base).is_empty(), "{report}");
+}
+
 /// A worker killed mid-copy is a job that stopped without saying how: its
 /// state still says running and its lock is free. Reconcile rolls the move
 /// back — the original was never touched.
@@ -135,7 +211,7 @@ fn a_killed_worker_is_read_as_interrupted_and_reconcile_rolls_it_back() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let (_, state) = newest(&sb).unwrap();
@@ -172,7 +248,7 @@ fn a_worker_killed_mid_removal_leaves_the_rest_to_reconcile() {
     let mut cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
     let (_, state) = newest(&sb).unwrap();
@@ -210,7 +286,7 @@ fn another_process_cancels_before_the_publish_and_is_told_too_late_after() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let asked = sb.ok(&["jobs", "cancel"]);
@@ -225,7 +301,7 @@ fn another_process_cancels_before_the_publish_and_is_told_too_late_after() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
     let late = sb.ok(&["jobs", "cancel"]);
@@ -247,7 +323,7 @@ fn a_live_jobs_records_are_its_own_and_the_lock_is_free_while_it_removes() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,remove:each-entry:delay-60",
+        "pool:serial,move:force-staged,remove:each-entry:delay-60",
     );
     wait_until("the removal", 20, || in_phase(&sb, "removing"));
 
@@ -276,7 +352,7 @@ fn a_change_made_during_a_copy_waits_and_names_the_job() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-60",
+        "pool:serial,move:force-staged,move:each-file:delay-60",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let out = sb.run(&["tag", "add", "ID0002", "client"]);
@@ -303,7 +379,7 @@ fn two_moves_at_once_take_turns() {
     let first = start(
         &sb,
         &["move", "ID0001", &target, "--yes"],
-        "move:force-staged,move:each-file:delay-400",
+        "pool:serial,move:force-staged,move:each-file:delay-400",
     );
     wait_until("the first copy", 20, || in_phase(&sb, "copying"));
     let out = sb
@@ -336,7 +412,10 @@ fn a_detached_move_is_followed_by_watch() {
             "--yes",
             "--detach",
         ])
-        .env("FASTF_FAULT", "move:force-staged,move:each-file:delay-30")
+        .env(
+            "FASTF_FAULT",
+            "pool:serial,move:force-staged,move:each-file:delay-30",
+        )
         .output()
         .unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
@@ -366,7 +445,7 @@ fn a_worker_is_in_a_session_of_its_own() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     let (_, state) = newest(&sb).unwrap();
@@ -390,7 +469,7 @@ fn a_hang_up_leaves_the_move_running() {
     let cli = start(
         &sb,
         &["move", "ID0001", &other.display().to_string(), "--yes"],
-        "move:force-staged,move:each-file:delay-40",
+        "pool:serial,move:force-staged,move:each-file:delay-40",
     );
     wait_until("the copy", 20, || in_phase(&sb, "copying"));
     // SAFETY: a signal to a process this test started.
@@ -446,7 +525,11 @@ fn a_second_reconcile_leaves_the_first_ones_removals_alone() {
         "the retired original is left"
     );
 
-    let first = start(&sb, &["reconcile"], "remove:each-entry:delay-60");
+    let first = start(
+        &sb,
+        &["reconcile"],
+        "pool:serial,remove:each-entry:delay-60",
+    );
     wait_until("the first reconcile's removal", 20, || {
         in_phase(&sb, "removing")
     });
@@ -495,7 +578,7 @@ fn a_move_outlives_the_systemd_unit_that_started_it() {
         .arg(set("FASTF_INSTALL_DIR", &sb.install))
         .arg(set("HOME", sb.tmp.path()))
         .arg("--setenv=FASTF_NO_RELAUNCH=1")
-        .arg("--setenv=FASTF_FAULT=move:force-staged,move:each-file:delay-100")
+        .arg("--setenv=FASTF_FAULT=pool:serial,move:force-staged,move:each-file:delay-100")
         .arg(format!(
             "--setenv=XDG_RUNTIME_DIR={}",
             std::env::var("XDG_RUNTIME_DIR").unwrap()
@@ -516,4 +599,81 @@ fn a_move_outlives_the_systemd_unit_that_started_it() {
     let (_, state) = newest(&sb).unwrap();
     assert_eq!(status(&state), "done", "{state}");
     assert!(!original.exists());
+}
+
+/// **A job that waits on its filesystem says so**: when nothing has moved
+/// for five seconds, its state carries how long and where — what every
+/// surface following it shows as "no answer from … for N s" — and the job
+/// goes on once the filesystem answers.
+#[test]
+fn a_job_waiting_on_its_filesystem_says_how_long_and_where() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    // One slow write: the publish's.
+    project(&sb, &sb.base, 0);
+    let cli = start(
+        &sb,
+        &["move", "ID0001", &other.display().to_string(), "--yes"],
+        "pool:serial,move:force-staged,move:each-file:delay-6500",
+    );
+    let mut seen = None;
+    wait_until("a stall in the state", 20, || {
+        seen = newest(&sb)
+            .filter(|(_, state)| state["progress"]["stalled_ms"].as_u64().unwrap_or(0) >= 5_000);
+        seen.is_some()
+    });
+    let (_, state) = seen.unwrap();
+    let working_in = state["progress"]["working_in"].as_str().unwrap_or("");
+    assert!(!working_in.is_empty(), "{state}");
+    let out = cli.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (_, state) = newest(&sb).unwrap();
+    assert_eq!(status(&state), "done");
+    assert!(state["progress"]["stalled_ms"].as_u64().unwrap_or(0) == 0);
+}
+
+/// **A staged move looks at each tree as few times as it can** (defect 15):
+/// the original twice — the scan, and the look that settles the copy — the
+/// moved copy twice — verified, then the merge's one walk of it — and the
+/// old copy once, removed by the merge as it is walked. 3.13 walked each of
+/// them three times or more, at two `lstat`s an entry, which on a cloud
+/// mount is minutes. Read from the worker's own trace.
+#[test]
+fn a_staged_move_walks_each_tree_as_few_times_as_it_can() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 40);
+    let trace = sb.tmp.path().join("walks");
+    let out = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env("FASTF_FAULT", "move:force-staged")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists());
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let count = |name: &str| lines.lines().filter(|line| *line == name).count();
+    assert_eq!(count("walk move source"), 2, "the original: {lines}");
+    assert_eq!(count("walk move destination"), 1, "the moved copy: {lines}");
+    assert_eq!(count("walk moved copy"), 1, "the merge's look: {lines}");
+    assert_eq!(count("remove_tree"), 1, "the old copy: {lines}");
+    assert_eq!(
+        count("walk folder"),
+        0,
+        "nothing was left to count: {lines}"
+    );
+    // Asked once for the move, not once for every file it looks at, copies
+    // or removes: on a local disk that read cost more than the unlink it
+    // guarded, and a 20 000-file move took 4.5 times as long.
+    let reads = count("mount table");
+    assert!(
+        reads < 20,
+        "the mount table was read {reads} times for a move of 40 files: {lines}"
+    );
 }

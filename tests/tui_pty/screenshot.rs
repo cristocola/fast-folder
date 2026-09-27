@@ -40,6 +40,15 @@
 //! about ninety characters, the shape a library of client handles and song
 //! titles has, where the table's names claim most of the window.
 //!
+//! `FASTF_SHOT_LEFTOVERS=1` also leaves what `!` lists: an old copy of a
+//! project fastf cannot find (it needs you, once the app's own reconcile has
+//! looked) and a deleted project's folder (which that reconcile finishes).
+//! Give the app a moment first: `wait:2500 !`.
+//!
+//! `FASTF_SHOT_STALLED=1` makes the showcase's archive base a mount that
+//! stopped answering (`paths:stall-base`, debug builds): its projects stay
+//! away and the header names it.
+//!
 //! `FASTF_SHOT_REAL=1` runs against **your own** library instead — read-only
 //! keys only, please. It reads your configuration from a private copy of the
 //! data directory, because the app remembers the cursor's row, the sort and
@@ -134,6 +143,19 @@ fn screenshot() {
         copy_real_data_dir(&real_data);
     } else {
         plant_showcase(&sb, projects, long);
+        if std::env::var("FASTF_SHOT_LEFTOVERS").is_ok_and(|v| v == "1") {
+            plant_leftovers(&sb);
+        }
+    }
+    let stalled =
+        (!real && std::env::var("FASTF_SHOT_STALLED").is_ok_and(|v| v == "1")).then(|| {
+            sb.tmp
+                .path()
+                .join("archive")
+                .join(fastf::util::paths::STALL_MARKER)
+        });
+    if let Some(marker) = &stalled {
+        fs::write(marker, "").unwrap();
     }
     // A real run keeps the real `HOME`, so a `~` in the configuration still
     // names your folders; only the data directory is the copy.
@@ -174,8 +196,14 @@ fn screenshot() {
         env.push(("COLORTERM", std::path::Path::new("truecolor")));
         env.push(("FASTF_THEME", std::path::Path::new(theme.kind.name())));
     }
+    if stalled.is_some() {
+        env.push(("FASTF_FAULT", std::path::Path::new("paths:stall-base")));
+    }
     let (chunks, code) =
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
+    if let Some(marker) = &stalled {
+        let _ = fs::remove_file(marker);
+    }
     let screen = screen_at_sized(&chunks, taken, cols, rows);
     if let Some(path) = svg_path {
         let parser = parser_at_sized(&chunks, taken, cols, rows);
@@ -496,4 +524,23 @@ fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
     }
     // The index the header reads before discovery answers.
     sb.ok(&["reindex"]);
+}
+
+/// What `FASTF_SHOT_LEFTOVERS` plants beside the showcase.
+fn plant_leftovers(sb: &Sandbox) {
+    // The showcase's working base, where its projects are.
+    let base = sb.tmp.path().join("projects");
+    let old = base.join(".fastf-moved-18d8e2f16082c791-e6a94-0");
+    fs::create_dir_all(old.join("renders")).unwrap();
+    fs::write(old.join("renders/final_v3.mov"), "frames").unwrap();
+    fs::write(
+        old.join("PROJECT_INFO.md"),
+        "---\nid: ID0907\ntemplate: general\ntemplate_name: General\n\
+         created: 2026-01-01T00:00:00Z\nfolder: 2026-01-01_Lost_Shoot_ID0907\npath: x\n\
+         variables: {}\ntags: []\n---\n",
+    )
+    .unwrap();
+    let deleted = base.join(".fastf-deleted-18d8e4375a9294cf-10a6c5-0");
+    fs::create_dir_all(&deleted).unwrap();
+    fs::write(deleted.join("notes.md"), "gone").unwrap();
 }

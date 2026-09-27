@@ -73,6 +73,15 @@ tell you.
   `resolve`), `move_engine.rs` (the staged move the facade delegates to — it
   needs transactions, staged copies and progress, which nothing else in the
   library does), `copy_engine.rs` (a move that keeps its source),
+  `move_cleanup.rs` (how an original leaves: set aside, then removed),
+  `removal.rs` (removing a tree on the pool, entry by entry, each asked of a
+  `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
+  table, what may be written into the moved copy, the recordless proof),
+  `records.rs` (the data dir's index of every move record, and the settle),
+  `holders.rs` (which programs have something in a folder open: `/proc` on
+  Linux, the Restart Manager on Windows),
+  `attention.rs` (what is unfinished, by who finishes it, and the choices that
+  settle what needs you),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
@@ -86,13 +95,17 @@ tell you.
   violations, and the read-only attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
+  `pool` (a few threads asking a filesystem several things at once; its width
+  comes from `fs_kind`, what kind of filesystem a path is on), `process` (is
+  the pid an operation id names a live fastf),
   `log` (the log on disk: one line per event, appended by every process at
   once, rotated; its level is *set* by `main`, since `util` may not read
   `Config`), `messages` (the sentences a person was shown, kept across
   sessions),
   `yaml` (the one place the YAML crate is named), `time` (one clock), `paths`
   (data-dir resolution, `display_path`, the boundary checks including
-  `contained_destination` and `is_link_like`, base probing), `shell_open`
+  `contained_destination` and `is_link_like`, base probing under one deadline),
+  `shell_open`
   (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the headless-GUI
   terminal relaunch and `notify-send`), `term_open` (an emulator whose shell
   starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
@@ -206,10 +219,29 @@ other WinFsp mounts, RAM disks — so each mutation's base check refused there.
 The helper walks such a path itself and refuses a link it cannot follow;
 `FASTF_FAULT=paths:unnamed-volume` sends every call down that walk on any OS.
 
+**`util::fs_kind` asks a Windows volume by its drive root when the mount
+manager does not know it.** A WinFsp drive — how rclone mounts on Windows —
+gets the path itself back from `GetVolumePathNameW` (1005, the gap `canonical`
+walks around), and a path that is no root has no volume information: rclone's
+`S:` read as a local disk and was renamed aside object by object. Its root
+answers `FUSE-rclone`.
+
 **A path that will be stored goes through `util::paths::storable`**, which refuses
 non-UTF-8 rather than recording the `?`-substituted path `display()` produces.
 `effective_bases()` memoizes against the configuration it was computed from, so a
 mutated `Config` recomputes instead of answering the wrong question.
+
+**Nothing asks one base after another, or without a deadline.** On a mount that
+stopped answering every call blocks for the kernel's own timeout, canonicalize
+included. `util::paths::answer_within` asks every path at once, each on a thread
+of its own, and takes what answered by one deadline (`PROBE_TIMEOUT`); a path
+whose look was given up on answers `None` at once, with no new thread, until
+that look comes back. `effective_bases()` canonicalizes through it and keeps the
+configured path for a base that does not answer; `paths::probe_dirs` is it over
+`probe_blocking`; `Config::base_candidates()` is the list before anything is
+asked of it, for a caller that reads each base on a worker of its own.
+`paths::stall_if_marked` is the suites' dead mount (`paths:stall-base`, a folder
+holding `.fastf-test-stall`), asked where fastf first touches a base.
 
 **The key `config set` takes is the key `config.toml` holds is the key `config
 show` prints.** `Config` has no `deny_unknown_fields`, so a mismatched spelling is
@@ -227,17 +259,28 @@ reservation and discovery both assume the fixed name.
 There is no project database. **A folder is a project iff it holds a
 `PROJECT_INFO.md`**, whose frontmatter `id` is authoritative; the folder name is
 cosmetic. `discover(cfg)` unions `cfg.effective_bases()`, newest first, at
-**depth 1** (`SCAN_DEPTH` in `library/model.rs`). `scan_base` skips dot-prefixed
+**depth 1** (`SCAN_DEPTH` in `library/model.rs`), each base probed first — all
+at once, under one deadline — so a base that does not answer is named once and
+skipped, never waited on. `scan_base` skips dot-prefixed
 directories, so `.fastf-transactions` staging never appears as a duplicate.
 
 Each base carries a **disposable** `.fastf-index.json` with base-relative `dir`
 entries, so it travels with the projects across `/mnt/…` and `D:\…`. It is never
-authority: `discover_base` rescans when the base mtime is newer and
-existence-checks entries otherwise, writes are best-effort and atomic, and a
-rejected cache costs one rescan. `write_cache` re-stamps the index after the
-rename that publishes it, or that rename's mtime bump would make the base look
-newer than its own index. **No manual prune, ever** — "missing" is transient;
-`fastf reindex` rescans for edits fastf cannot observe.
+authority. **It records the names the base held when its scan listed it**
+(`Cache.seen`), and `discover_base` trusts it only while one names-only listing
+of the base returns exactly those (`discovery::freshness`); that listing is
+also the existence check, and the time gate (base newer than its index) stays
+as a second signal. Comparing times alone hid a project added while a scan that
+missed it was being written, and never fired on rclone, whose folder times read
+2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
+name, `cache_remove` drops it only once the folder is `Absent` (an unregistered
+project's folder stays) — so a name anybody else added still reads as stale; an
+index without `seen` (an older fastf's) is rescanned once, with no version bump.
+Writes are best-effort and atomic, and a rejected cache costs one rescan.
+`write_index` re-stamps the index after the rename that publishes it, or that
+rename's mtime bump would make the base look newer than its own index. **No
+manual prune, ever** — "missing" is transient; `fastf reindex` rescans for
+edits fastf cannot observe.
 
 `library::max_id(cfg)` **must stay read-only** — previews reach it through the
 counter self-heal — so it uses `read_base_readonly`, never `discover`. **It

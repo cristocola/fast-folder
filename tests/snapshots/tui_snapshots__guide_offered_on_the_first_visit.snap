@@ -1,9 +1,10 @@
 ---
 source: tests/tui_snapshots.rs
+assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                                             highest ID0248 "
-" → projects 12   archive not mounted                                                                ⚠ 1 needs attention "
+" → projects 12   archive not mounted                                                                   ⚠ 1 needs you  ! "
 "                                                                                                                        "
 " ⌕ / to se┌ template guide · What a template is ─────────────────────────────────────────────────────────────┐      3/3 "
 "┌ template│ A template is a folder that describes a project. Making a project from one asks you a few        │─────────┐"

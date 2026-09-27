@@ -1,6 +1,6 @@
 //! Unregister, delete and rename: the three mutations that are not a move.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::core::config::Config;
@@ -123,11 +123,10 @@ pub fn finish_delete(
     let next = if redundant {
         "`fastf reconcile` finishes it"
     } else {
-        "fastf keeps it until you have looked"
+        "fastf keeps what was not part of the project when it was deleted"
     };
     let warning = format!(
-        "deleted '{name}', but its folder, hidden at {}, is not fully removed yet ({reason}); \
-         {next}",
+        "deleted '{name}', but its folder at {} is not fully removed yet ({reason}); {next}",
         crate::util::paths::display_path(&retired)
     );
     crate::util::diag::warn(&warning);
@@ -164,18 +163,11 @@ pub(crate) fn delete_project_inner(
             crate::util::paths::display_path(&path)
         );
     }
-    let walk = crate::core::transactions::Walk::of(&path, "project")?;
-    if let Some(mounted) = walk
-        .problems
-        .iter()
-        .find(|problem| problem.problem == crate::core::transactions::Problem::OtherFilesystem)
+    refuse_mounts_inside(&path)?;
+    if crate::core::transactions::RetireStrategy::for_base(&base)
+        == crate::core::transactions::RetireStrategy::InPlace
     {
-        anyhow::bail!(
-            "cannot delete {}: {} is {}. Unmount it first. Nothing was removed.",
-            crate::util::paths::display_path(&path),
-            mounted.path.display(),
-            mounted.problem
-        );
+        return delete_in_place(project, &path, &base);
     }
     // **Out of the library in one rename, then removed** — the same reason as
     // a move's source (`core::move_cleanup`): a removal that stops part of the
@@ -188,7 +180,8 @@ pub(crate) fn delete_project_inner(
     ));
     match crate::core::move_cleanup::retire(&path, &retired) {
         crate::core::move_cleanup::Retire::Done => {}
-        crate::core::move_cleanup::Retire::KeptWhole(reason) => {
+        crate::core::move_cleanup::Retire::KeptWhole(reason)
+        | crate::core::move_cleanup::Retire::Diverged(reason) => {
             anyhow::bail!(
                 "could not delete {}: {reason}. Nothing was removed.",
                 crate::util::paths::display_path(&path)
@@ -203,6 +196,101 @@ pub(crate) fn delete_project_inner(
     }
     remove_from_base_cache(project);
     Ok(crate::core::move_cleanup::Housekeeping::Deleted(retired))
+}
+
+/// Refuse a project with another filesystem mounted inside it: the removal
+/// keeps what is on another filesystem, so its folder would stay for good.
+/// On Linux the mount table answers without a walk — 3.13 walked the whole
+/// project under the data lock for this, minutes on a cloud mount — and only
+/// a local disk, where a btrfs subvolume is a filesystem that mounts
+/// nothing, is still walked, which is quick there.
+fn refuse_mounts_inside(path: &Path) -> Result<()> {
+    let shown = crate::util::paths::display_path(path);
+    let walk_for_devices = match crate::util::fs_kind::mounts_inside(path) {
+        Some(mounts) => {
+            if let Some(mount) = mounts.first() {
+                anyhow::bail!(
+                    "cannot delete {shown}: {} is a different filesystem mounted inside the \
+                     project. Unmount it first. Nothing was removed.",
+                    mount.strip_prefix(path).unwrap_or(mount).display()
+                );
+            }
+            crate::util::fs_kind::of(path) == crate::util::fs_kind::FsKind::Local
+        }
+        None => true,
+    };
+    if !walk_for_devices {
+        return Ok(());
+    }
+    let walk = crate::core::transactions::Walk::of(path, "project")?;
+    if let Some(mounted) = walk
+        .problems
+        .iter()
+        .find(|problem| problem.problem == crate::core::transactions::Problem::OtherFilesystem)
+    {
+        anyhow::bail!(
+            "cannot delete {shown}: {} is {}. Unmount it first. Nothing was removed.",
+            mounted.path.display(),
+            mounted.problem
+        );
+    }
+    Ok(())
+}
+
+/// A delete on a cloud mount, where renaming the folder aside is a copy and a
+/// delete for every object in it: its record first, listing every entry the
+/// project holds now; then its `PROJECT_INFO.md`, which takes it out of the
+/// library; then — as housekeeping — only what the record lists.
+fn delete_in_place(
+    project: &Project,
+    path: &Path,
+    base: &Path,
+) -> Result<crate::core::move_cleanup::Housekeeping> {
+    use crate::core::move_cleanup::{DeleteRecord, DeletedInPlace, Housekeeping};
+    let shown = crate::util::paths::display_path(path);
+    let walk = crate::core::transactions::Walk::of(path, "project")?;
+    let folder = path
+        .file_name()
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("{shown} has no folder name"))?;
+    let operation = crate::core::transactions::next_operation_id();
+    let record = DeleteRecord {
+        version: 1,
+        operation: operation.clone(),
+        project_id: project.id.clone(),
+        folder: folder.clone(),
+        entries: walk.entries,
+    };
+    let record_path = crate::core::move_cleanup::deleted_record_path(base, &operation);
+    crate::core::transactions::write_record_file(&record_path, &record).with_context(|| {
+        format!("could not delete {shown}: writing its record. Nothing was removed")
+    })?;
+    crate::core::records::add(&crate::core::records::Entry {
+        operation: operation.clone(),
+        kind: "delete".to_string(),
+        project_id: project.id.clone(),
+        record: record_path.clone(),
+        source_base: base.to_path_buf(),
+        source_folder: folder.clone(),
+        target_base: base.to_path_buf(),
+        target_folder: folder,
+        source_mount: crate::util::fs_kind::mount_identity(base),
+        ..Default::default()
+    });
+    let pinfo = project_info::pinfo_path(path);
+    if let Err(error) = crate::util::fs_retry::remove_file(&pinfo)
+        && !crate::util::paths::presence(&pinfo).is_absent()
+    {
+        let _ = std::fs::remove_file(&record_path);
+        crate::core::records::remove(&operation);
+        anyhow::bail!("could not delete {shown}: {error}. Nothing was removed.");
+    }
+    remove_from_base_cache(project);
+    Ok(Housekeeping::DeletedInPlace(Box::new(DeletedInPlace {
+        folder: path.to_path_buf(),
+        record_path,
+        record,
+    })))
 }
 
 /// Rename a project's folder in place (same base). Same-parent `fs::rename`
@@ -262,6 +350,19 @@ pub(crate) fn case_staging_target(name: &str) -> Option<&str> {
     (!target.is_empty()).then_some(target)
 }
 
+/// A refused rename, or who holds the folder where that can be told:
+/// Windows refuses a folder with anything in it open and says only "access
+/// is denied", which is no permission problem to explain.
+fn held_or(error: std::io::Error, folder: &Path) -> anyhow::Error {
+    let held = cfg!(windows)
+        .then(|| crate::core::holders::in_tree(folder).refusal())
+        .flatten();
+    match held {
+        Some(held) => anyhow::anyhow!("{held}"),
+        None => anyhow::Error::new(error),
+    }
+}
+
 /// What to say when a case-only rename could neither commit nor be undone.
 ///
 /// The folder is parked under a dot-prefixed staging name at this point, and
@@ -313,7 +414,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
             attempt += 1;
             staging = base.join(case_staging_name(&sanitized, attempt));
         }
-        crate::util::fs_retry::rename(&project.path, &staging)?;
+        crate::util::fs_retry::rename(&project.path, &staging)
+            .map_err(|error| held_or(error, &project.path))?;
         if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
             let context = format!("renaming '{}' to '{}'", project.name, sanitized);
             // Put it back rather than leaving the project under a dot-prefixed
@@ -333,7 +435,8 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         if assets::entry_exists(&new_path)? {
             anyhow::bail!("rename target already exists: {}", new_path.display());
         }
-        crate::util::fs_retry::rename(&project.path, &new_path)?;
+        crate::util::fs_retry::rename(&project.path, &new_path)
+            .map_err(|error| held_or(error, &project.path))?;
     }
 
     let mut renamed = project.clone();

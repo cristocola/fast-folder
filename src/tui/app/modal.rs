@@ -54,6 +54,12 @@ pub enum Then {
     /// selected project — a `select` variable edited from the detail pane,
     /// which offers its options and nothing else.
     PaneVariable(String),
+    /// `!`: the picked value is an unfinished item's path, or
+    /// `ATTENTION_FINISH` to finish now what fastf can.
+    Attention,
+    /// The picked value is what to do about the item at this path
+    /// (`core::attention::Action::word`).
+    AttentionAction(std::path::PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,6 +81,10 @@ pub struct PickState {
     pub selected: Option<usize>,
     pub offset: usize,
     pub then: Then,
+    /// Most of the window wide, each row its label alone, and the selected
+    /// row's detail wrapped below the list: for rows whose detail is a
+    /// sentence a person has to read (`!`), not a hint.
+    pub wide: bool,
 }
 
 impl PickState {
@@ -88,7 +98,30 @@ impl PickState {
             ranked,
             offset: 0,
             then,
+            wide: false,
         }
+    }
+
+    /// The same picker, wide ([`Self::wide`]).
+    pub fn wide(mut self) -> Self {
+        self.wide = true;
+        self
+    }
+
+    /// The detail of the row under the cursor.
+    pub fn selected_detail(&self) -> Option<&str> {
+        let (index, _) = self.ranked.get(self.selected?)?;
+        self.items.get(*index).map(|item| item.detail.as_str())
+    }
+
+    /// How many lines the longest detail wraps to at `width`: what a wide
+    /// picker keeps room for, so moving the cursor never resizes the box.
+    pub fn detail_lines(&self, width: usize) -> u16 {
+        self.items
+            .iter()
+            .map(|item| crate::tui::command::wrap_words(&item.detail, width).len())
+            .max()
+            .unwrap_or(1) as u16
     }
 
     pub fn rank(&mut self, fuzzy: &mut Fuzzy) {
@@ -296,6 +329,14 @@ pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String
                     "cancelled",
                     state.map(|s| s.summary.clone()).unwrap_or_default(),
                 ),
+                Some(JobStatus::Unknown) => (
+                    "ended",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
+                Some(JobStatus::Paused) => (
+                    "paused",
+                    state.map(|s| s.summary.clone()).unwrap_or_default(),
+                ),
             }
         };
         let started = state
@@ -447,10 +488,9 @@ impl App {
         match self.modals.top_mut() {
             Some(Modal::Pick(pick)) => {
                 pick.step(delta);
-                pick.clamp_viewport(layout::list_rows(
-                    layout::pick_box(area, pick.ranked.len()),
-                    2,
-                ));
+                let lines = pick.detail_lines(layout::wide_pick_text_width(area));
+                let rows = layout::pick_list_rows(area, pick.ranked.len(), pick.wide, lines);
+                pick.clamp_viewport(rows);
             }
             // A multi-pick has no viewport of its own to keep — the box is
             // sized to its rows — so it is `step_top_modal`'s arm verbatim.
@@ -514,6 +554,10 @@ impl App {
                 } else {
                     self.run_move(target)
                 }
+            }
+            Then::Attention => self.on_attention_pick(item.value.clone()),
+            Then::AttentionAction(path) => {
+                self.on_attention_action(path.clone(), item.value.clone())
             }
             Then::PaneVariable(slug) => {
                 let Some(project) = self.library.selected().cloned() else {

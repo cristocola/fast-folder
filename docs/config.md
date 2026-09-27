@@ -39,8 +39,8 @@ The data folder holds:
   `log-level` decides how much it keeps.
 
 Each base directory carries two files of its own next to the projects:
-`.fastf-index.json`, a disposable cache discovery rebuilds whenever it
-disagrees with the folders, and `.fastf-counter.toml`, the counter.
+`.fastf-index.json`, a disposable cache discovery rebuilds whenever the
+base holds a name it does not know, and `.fastf-counter.toml`, the counter.
 
 ## Settings
 
@@ -69,9 +69,11 @@ fastf config set theme doom-one                  # auto | doom-one | rich | ansi
 fastf config set motion off                      # on | off
 
 # How much the log keeps. info (the default) is every step of every move and
-# reconcile with its count, and every warning; debug adds a line for every
-# entry a move touches; off keeps nothing. Messages are kept whatever it says.
-fastf config set log-level debug                 # debug | info | warn | error | off
+# reconcile with its count, and every warning; trace adds a line for every
+# entry a move touches — large, so only while you are looking at something;
+# off keeps nothing. Messages are kept whatever it says. A job's own log keeps
+# debug and up either way, and is rotated past 16 MiB.
+fastf config set log-level trace                 # trace | debug | info | warn | error | off
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"

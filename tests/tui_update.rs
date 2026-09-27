@@ -12,6 +12,8 @@ mod harness;
 
 #[path = "tui_update/actions.rs"]
 mod actions;
+#[path = "tui_update/bases.rs"]
+mod bases;
 #[path = "tui_update/batches.rs"]
 mod batches;
 #[path = "tui_update/edges.rs"]

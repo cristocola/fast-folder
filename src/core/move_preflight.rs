@@ -133,7 +133,13 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
             crate::util::paths::display_path(base)
         )
     };
-    fs::create_dir(probe).map_err(cannot_write)?;
+    // A mount that restarts or stalls is waited for here too: a probe that
+    // gave up on the first EIO would refuse a move nothing stops.
+    crate::util::fs_retry::with_retry(base, || match fs::create_dir(probe) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        other => other,
+    })
+    .map_err(cannot_write)?;
     let seen = read_back_a_link(probe).map_err(cannot_write)?;
     if resolves_links(seen) {
         return Err(format!(
@@ -141,7 +147,7 @@ fn run_probe(probe: &Path, renamed: &Path) -> std::result::Result<(), String> {
             hidden_links_refusal(base)
         ));
     }
-    fs::rename(probe, renamed).map_err(cannot_write)?;
+    crate::util::fs_retry::with_retry(base, || fs::rename(probe, renamed)).map_err(cannot_write)?;
     Ok(())
 }
 
@@ -170,7 +176,32 @@ fn hidden_links_refusal(base: &Path) -> String {
 /// reconcile's removals walk a tree the same way. `None` when links show as
 /// links, and when the base cannot be asked (a read-only one will refuse the
 /// removal on its own).
+///
+/// Asked once per base per process, and only where the answer can be yes: a
+/// local disk and NFS show a link as a link. On a cloud mount the probe is
+/// seven requests, and 3.13 made it before every removal.
 pub(crate) fn links_hidden_in(base: &Path) -> Option<String> {
+    use crate::util::fs_kind::FsKind;
+    if matches!(crate::util::fs_kind::of(base), FsKind::Local | FsKind::Nfs) {
+        return None;
+    }
+    static ASKED: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, Option<String>>>> =
+        std::sync::Mutex::new(None);
+    if let Ok(asked) = ASKED.lock()
+        && let Some(answer) = asked.as_ref().and_then(|asked| asked.get(base))
+    {
+        return answer.clone();
+    }
+    let answer = ask_whether_links_are_hidden(base);
+    if let Ok(mut asked) = ASKED.lock() {
+        asked
+            .get_or_insert_with(Default::default)
+            .insert(base.to_path_buf(), answer.clone());
+    }
+    answer
+}
+
+fn ask_whether_links_are_hidden(base: &Path) -> Option<String> {
     let probe = probe_path(base, &crate::core::transactions::next_operation_id());
     fs::create_dir(&probe).ok()?;
     let seen = read_back_a_link(&probe);
@@ -200,8 +231,12 @@ fn make_link(_target: &Path, _link: &Path) -> std::io::Result<()> {
 /// else in it stays, and so does the folder — it is not only fastf's then.
 /// The error says which of the two kept it.
 pub(crate) fn clear_probe(probe: &Path) -> std::result::Result<(), String> {
-    if fs::symlink_metadata(probe).is_err() {
-        return Ok(());
+    match crate::util::paths::presence(probe) {
+        crate::util::paths::Presence::Absent => return Ok(()),
+        crate::util::paths::Presence::Unknown(error) => {
+            return Err(format!("does not answer ({error})"));
+        }
+        crate::util::paths::Presence::Present(_) => {}
     }
     for name in [PROBE_LINK, PROBE_FILE] {
         match crate::util::fs_retry::remove_file(&probe.join(name)) {

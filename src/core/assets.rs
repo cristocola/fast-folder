@@ -89,10 +89,27 @@ pub struct Progress {
     pub holds_lock: bool,
     /// Why a job that ended [`JobStatus::Failed`] failed.
     pub error: Option<String>,
-    /// Unix-epoch milliseconds of the last observed movement: written on every
-    /// `touch`, read by nothing yet — it is what a "no progress for N minutes" note would read.
+    /// Unix-epoch milliseconds of the last observed movement, written on
+    /// every `touch`; what [`Self::stalled_ms`] is measured from.
     pub last_progress_at: u64,
+    /// The folder the current step works in, as a person would recognise
+    /// it: what a stall is "no answer from".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub working_in: String,
+    /// How long the job has waited on its filesystem without an answer, in
+    /// milliseconds; 0 while it moves. A job's worker sets it as it writes
+    /// its state ([`Self::note_stall`]), so every surface following the job
+    /// can say "no answer from … for N s" instead of looking frozen.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stalled_ms: u64,
 }
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// How long without movement a running job's step is a stall worth saying.
+pub const STALL_AFTER_MS: u64 = 5_000;
 
 /// A step a job has finished, and what it counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +130,14 @@ pub enum JobStatus {
     Done,
     Failed,
     Cancelled,
+    /// Stopped before its publish because a mount stopped answering, its
+    /// copy kept (`move_engine::Paused`): it goes on when it is run again, or
+    /// with `fastf reconcile` once the mount is back.
+    Paused,
+    /// A state a later fastf wrote, sharing this data dir. Read as ended:
+    /// nothing here can follow it further.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The step a job is at. A staged move passes through every one of these but
@@ -145,6 +170,9 @@ pub enum JobPhase {
     /// Removing the move's record.
     Clearing,
     Done,
+    /// A step a later fastf wrote, sharing this data dir.
+    #[serde(other)]
+    Unknown,
 }
 
 impl JobPhase {
@@ -163,6 +191,7 @@ impl JobPhase {
             JobPhase::Removing => "removing the old copy",
             JobPhase::Clearing => "clearing the record",
             JobPhase::Done => "done",
+            JobPhase::Unknown => "working",
         }
     }
 
@@ -181,6 +210,7 @@ impl JobPhase {
             JobPhase::Removing => "removed the old copy",
             JobPhase::Clearing => "cleared the record",
             JobPhase::Done => "done",
+            JobPhase::Unknown => "worked",
         }
     }
 
@@ -223,6 +253,40 @@ impl Progress {
     /// that represents real movement.
     pub fn touch(&mut self) {
         self.last_progress_at = now_millis();
+    }
+
+    /// Set [`Self::stalled_ms`] from the time since the last movement: a
+    /// running step that has not moved for [`STALL_AFTER_MS`]. Waiting for
+    /// the data lock is not a stall — another fastf holds it, and says so.
+    pub fn note_stall(&mut self) {
+        let quiet = now_millis().saturating_sub(self.last_progress_at);
+        self.stalled_ms = if self.status == JobStatus::Running
+            && !matches!(
+                self.phase,
+                JobPhase::Waiting | JobPhase::Starting | JobPhase::Done
+            )
+            && quiet >= STALL_AFTER_MS
+        {
+            quiet
+        } else {
+            0
+        };
+    }
+
+    /// "no answer from /mnt/cloud for 42 s", while the job is stalled.
+    pub fn stall_text(&self) -> Option<String> {
+        if self.stalled_ms == 0 {
+            return None;
+        }
+        let place = if self.working_in.is_empty() {
+            "the filesystem".to_string()
+        } else {
+            self.working_in.clone()
+        };
+        Some(format!(
+            "no answer from {place} for {} s; fastf waits for it",
+            self.stalled_ms / 1000
+        ))
     }
 
     /// The current step's count in words: `312 of 1473 entries`, `312

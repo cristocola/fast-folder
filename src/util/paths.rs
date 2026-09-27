@@ -223,6 +223,60 @@ pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// What is at a path, asked without following a link.
+///
+/// **Only a filesystem that says "nothing there" is absence.** Any other
+/// failure — a mount that dropped (`ENOTCONN`), one that failed (`EIO`), a
+/// folder that may not be read — says nothing about the path, and code that
+/// removes something, or forgets a record of it, must not read it as gone:
+/// 3.13 did, through `symlink_metadata(p).is_ok()`, and cleared a move's record
+/// while its old copy was still on an rclone mount that had restarted, leaving
+/// a folder no reconcile would touch again.
+#[derive(Debug)]
+pub enum Presence {
+    Present(std::fs::Metadata),
+    Absent,
+    /// The filesystem did not answer the question.
+    Unknown(std::io::Error),
+}
+
+impl Presence {
+    pub fn is_present(&self) -> bool {
+        matches!(self, Presence::Present(_))
+    }
+
+    pub fn is_absent(&self) -> bool {
+        matches!(self, Presence::Absent)
+    }
+
+    /// Why the filesystem did not answer, when it did not.
+    pub fn unknown(&self) -> Option<&std::io::Error> {
+        match self {
+            Presence::Unknown(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// See [`Presence`].
+pub fn presence(path: &Path) -> Presence {
+    let looked = crate::util::faults::check_io("presence:lstat")
+        .and_then(|()| std::fs::symlink_metadata(path));
+    match looked {
+        Ok(metadata) => Presence::Present(metadata),
+        Err(error) if is_absence(&error) => Presence::Absent,
+        Err(error) => Presence::Unknown(error),
+    }
+}
+
+/// ENOENT, or ENOTDIR (a folder on the way is a file): nothing is there.
+pub fn is_absence(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
 /// **The one way to canonicalize a path.** `Path::canonicalize`, except where
 /// Windows cannot give the volume a DOS name.
 ///
@@ -242,6 +296,7 @@ pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
 /// keep their meaning. Anywhere else the answer is `canonicalize`'s own, so
 /// the two forms never meet on one volume.
 pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    stall_if_marked(path);
     // A decision, not a crash: the suites take the walking path on any
     // platform with this armed, so every caller is exercised through it.
     if crate::util::faults::is_armed("paths:unnamed-volume") {
@@ -613,29 +668,195 @@ impl Probe {
 /// How long a base gets to answer before it is called unresponsive.
 pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// Classify each path, in order, without letting one dead mount stop the rest.
-///
-/// The `metadata` call runs on a helper thread and is collected with a timeout —
-/// the same shape as `util::live_select`'s key read, and for the same reason: the
-/// *wait* has to be interruptible even though the *call* is not. The thread is
-/// left behind when it times out, which is deliberate. It is blocked in the
-/// kernel and cannot be cancelled; abandoning it costs one parked thread, while
-/// waiting for it costs the user their session.
+/// Classify each path, in order, without letting one dead mount stop the rest:
+/// every path is asked at once, and one that has not answered by the one
+/// deadline is `Unresponsive` ([`answer_within`]).
 pub fn probe_dirs(paths: &[PathBuf], timeout: std::time::Duration) -> Vec<(PathBuf, Probe)> {
-    paths
-        .iter()
-        .map(|path| (path.clone(), probe_with(path, timeout, look)))
+    answer_within(paths, timeout, probe_blocking)
+        .into_iter()
+        .zip(paths)
+        .map(|(answer, path)| (path.clone(), answer.unwrap_or(Probe::Unresponsive)))
         .collect()
 }
 
 /// The blocking look itself: a directory, a file where a folder was
-/// expected, or nothing.
-fn look(path: &Path) -> Probe {
+/// expected, or nothing. For a caller already on a thread of its own under a
+/// deadline; everyone else asks [`probe_dirs`].
+pub fn probe_blocking(path: &Path) -> Probe {
+    stall_if_marked(path);
     match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => Probe::Mounted,
         Ok(_) => Probe::NotAFolder,
         Err(_) => Probe::Absent,
     }
+}
+
+/// **Ask about every path at once, and take what has answered by one
+/// deadline.** `None` is a path that did not answer in time.
+///
+/// Each `look` runs on a thread of its own and is collected with a timeout —
+/// the *wait* has to be interruptible even though the *call* is not: a stat
+/// on a dead SMB, NFS or FUSE mount blocks in the kernel for the operating
+/// system's own timeout, and nothing cancels it. The thread is left behind,
+/// which costs one parked thread; waiting for it cost the session. One
+/// deadline for all, so three dead mounts cost one timeout, not three.
+///
+/// **A path whose look was given up on is not asked again until that look
+/// comes back**: it answers `None` at once, with no thread. Every question to
+/// a dead mount — a summary every few minutes, a probe per command — would
+/// otherwise park one more thread on it. A look merely in flight is not
+/// given up on, so two workers asking about one healthy base each get their
+/// answer. Each thread runs under the fault arming of the thread that asked.
+pub fn answer_within<T, F>(
+    paths: &[PathBuf],
+    timeout: std::time::Duration,
+    look: F,
+) -> Vec<Option<T>>
+where
+    T: Clone + Send + 'static,
+    F: Fn(&Path) -> T + Send + Sync + 'static,
+{
+    use std::sync::{Arc, Mutex, mpsc};
+
+    let look = Arc::new(look);
+    let arming = crate::util::faults::current();
+    let (tx, rx) = mpsc::channel::<(usize, T)>();
+    let mut answers: Vec<Option<T>> = vec![None; paths.len()];
+    let mut asked: Vec<(usize, PathBuf, Arc<Mutex<Look>>)> = Vec::new();
+    let mut first_ask = std::collections::HashMap::new();
+    for (index, path) in paths.iter().enumerate() {
+        if first_ask.contains_key(path) || given_up_on(path) {
+            continue;
+        }
+        let state = Arc::new(Mutex::new(Look::Out));
+        let (tx, look, arming, owned, thread_state) = (
+            tx.clone(),
+            Arc::clone(&look),
+            arming.clone(),
+            path.clone(),
+            Arc::clone(&state),
+        );
+        let spawned = std::thread::Builder::new()
+            .name("fastf-look".to_string())
+            .spawn(move || {
+                let answer = crate::util::faults::with_arming(&arming, || look(&owned));
+                // Sent under the lock, so whoever sees `Back` finds the
+                // answer already in the channel.
+                let mut state = thread_state.lock().unwrap_or_else(|err| err.into_inner());
+                if *state == Look::GivenUp {
+                    back(&owned);
+                }
+                *state = Look::Back;
+                let _ = tx.send((index, answer));
+            });
+        if spawned.is_ok() {
+            first_ask.insert(path.clone(), index);
+            asked.push((index, path.clone(), state));
+        }
+    }
+    drop(tx);
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut waiting = asked.len();
+    while waiting > 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((index, answer)) => {
+                answers[index] = Some(answer);
+                waiting -= 1;
+            }
+            Err(_) => break,
+        }
+    }
+    for (index, path, state) in &asked {
+        if answers[*index].is_some() {
+            continue;
+        }
+        let mut state = state.lock().unwrap_or_else(|err| err.into_inner());
+        if *state == Look::Out {
+            *state = Look::GivenUp;
+            give_up_on(path);
+        }
+    }
+    // What came back while the last ones were given up on.
+    while let Ok((index, answer)) = rx.try_recv() {
+        answers[index] = Some(answer);
+    }
+    // A path named twice was asked once.
+    for (index, path) in paths.iter().enumerate() {
+        if answers[index].is_none()
+            && let Some(&first) = first_ask.get(path)
+            && first != index
+        {
+            answers[index] = answers[first].clone();
+        }
+    }
+    answers
+}
+
+/// Where one [`answer_within`] look is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Look {
+    Out,
+    Back,
+    GivenUp,
+}
+
+/// Paths with a look out that was given up on, and how many such looks.
+static GIVEN_UP: std::sync::Mutex<std::collections::BTreeMap<PathBuf, usize>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+fn given_up_on(path: &Path) -> bool {
+    GIVEN_UP
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .contains_key(path)
+}
+
+fn give_up_on(path: &Path) {
+    *GIVEN_UP
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .entry(path.to_path_buf())
+        .or_default() += 1;
+}
+
+fn back(path: &Path) {
+    let mut given_up = GIVEN_UP.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(count) = given_up.get_mut(path) {
+        *count -= 1;
+        if *count == 0 {
+            given_up.remove(path);
+        }
+    }
+}
+
+/// The file a stalled base holds under `paths:stall-base`.
+pub const STALL_MARKER: &str = ".fastf-test-stall";
+
+/// **A mount that stopped answering, for the suites.** With `paths:stall-base`
+/// armed (a decision), a look at a path in a folder holding
+/// [`STALL_MARKER`] does not come back while the marker is there — two
+/// minutes at most — the way every call into a dead mount blocks. Asked where
+/// fastf first touches a base: its canonical form, its probe, its index and
+/// discovery, a size and a project's detail. Nothing in release builds.
+pub fn stall_if_marked(path: &Path) {
+    #[cfg(debug_assertions)]
+    {
+        if !crate::util::faults::is_armed("paths:stall-base") {
+            return;
+        }
+        let marked = || {
+            path.ancestors()
+                .any(|folder| folder.join(STALL_MARKER).exists())
+        };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while marked() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = path;
 }
 
 /// The subset of `paths` that answered and is a directory, reporting the rest.
@@ -655,27 +876,6 @@ pub fn mounted_bases(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<(PathBuf, Probe)>)
         .filter(|(_, probe)| !probe.usable())
         .collect();
     (mounted, unusable)
-}
-
-/// The body of `probe_dirs` for one path, with the blocking call injected.
-///
-/// A real unresponsive mount cannot be created portably in a test, so the test
-/// supplies a prober that sleeps instead.
-pub(crate) fn probe_with<F>(path: &Path, timeout: std::time::Duration, look: F) -> Probe
-where
-    F: FnOnce(&Path) -> Probe + Send + 'static,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    let owned = path.to_path_buf();
-    std::thread::spawn(move || {
-        let _ = tx.send(look(&owned));
-    });
-    match rx.recv_timeout(timeout) {
-        Ok(probe) => probe,
-        // Disconnected means the prober panicked; a base fastf cannot ask about
-        // is one it must not claim is there.
-        Err(_) => Probe::Unresponsive,
-    }
 }
 
 #[cfg(test)]
@@ -823,15 +1023,17 @@ mod tests {
     /// injected. What is under test is the timeout, not the filesystem.
     #[test]
     fn a_probe_that_never_answers_is_unresponsive_within_the_timeout() {
+        let dead = PathBuf::from("/mnt/dead-share-for-the-timeout");
         let started = std::time::Instant::now();
-        let probe = probe_with(
-            Path::new("/mnt/dead-share"),
+        let answers = answer_within(
+            std::slice::from_ref(&dead),
             std::time::Duration::from_millis(120),
             |_| {
                 std::thread::sleep(std::time::Duration::from_secs(30));
                 Probe::Mounted
             },
         );
+        let probe = answers[0].unwrap_or(Probe::Unresponsive);
 
         assert_eq!(probe, Probe::Unresponsive);
         assert!(
@@ -840,6 +1042,96 @@ mod tests {
         );
         assert!(!probe.usable(), "an unresponsive base is not a target");
         assert_eq!(probe.note(), "  (unresponsive)");
+    }
+
+    /// Three dead mounts cost one timeout, not three, and a live base beside
+    /// them answers as usual.
+    #[test]
+    fn every_path_is_asked_at_once_under_one_deadline() {
+        let paths: Vec<PathBuf> = ["a", "b", "c", "live"]
+            .iter()
+            .map(|name| PathBuf::from(format!("/mnt/one-deadline-{name}")))
+            .collect();
+        let started = std::time::Instant::now();
+        let answers = answer_within(&paths, std::time::Duration::from_millis(300), |path| {
+            if !path.ends_with("one-deadline-live") {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            path.to_path_buf()
+        });
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_millis(900),
+            "one deadline for all, took {took:?}"
+        );
+        assert_eq!(answers[..3], [None, None, None]);
+        assert_eq!(answers[3].as_deref(), Some(paths[3].as_path()));
+    }
+
+    /// A path given up on answers at once the next time, with no thread
+    /// parked on it, until its look comes back.
+    #[test]
+    fn a_path_given_up_on_is_not_asked_again_until_it_answers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+
+        let path = PathBuf::from("/mnt/given-up-on-until-it-answers");
+        let asked = Arc::new(AtomicUsize::new(0));
+        let hold = Arc::new(Mutex::new(()));
+        let held = hold.lock().unwrap();
+        let ask = || {
+            let (asked, hold) = (Arc::clone(&asked), Arc::clone(&hold));
+            answer_within(
+                std::slice::from_ref(&path),
+                std::time::Duration::from_millis(100),
+                move |_| {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                    let _released = hold.lock();
+                    true
+                },
+            )[0]
+        };
+        assert_eq!(ask(), None);
+        let started = std::time::Instant::now();
+        assert_eq!(ask(), None, "still given up on");
+        assert!(started.elapsed() < std::time::Duration::from_millis(80));
+        assert_eq!(asked.load(Ordering::SeqCst), 1, "no second thread");
+
+        drop(held);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while given_up_on(&path) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(ask(), Some(true), "asked again once it came back");
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+    }
+
+    /// A stalled base, the way the suites make one.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_marked_folder_stalls_only_while_the_marker_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("stalled");
+        std::fs::create_dir(&base).unwrap();
+        std::fs::write(base.join(STALL_MARKER), "").unwrap();
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let probed = probe_dirs(
+                &[base.clone(), dir.path().to_path_buf()],
+                std::time::Duration::from_millis(200),
+            );
+            assert_eq!(probed[0].1, Probe::Unresponsive);
+            assert_eq!(probed[1].1, Probe::Mounted, "its neighbour answers");
+            std::fs::remove_file(base.join(STALL_MARKER)).unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while given_up_on(&base) && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert_eq!(
+                probe_dirs(std::slice::from_ref(&base), PROBE_TIMEOUT)[0].1,
+                Probe::Mounted,
+                "and answers once it is back"
+            );
+        });
     }
 
     // -----------------------------------------------------------------------

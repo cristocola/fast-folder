@@ -1,0 +1,17 @@
+---
+source: tests/tui_snapshots.rs
+assertion_line: 25
+expression: frame
+---
+" fast-folder   library │ templates      "
+" →┌ Unfinished — 1 needs you ────────┐! "
+" ⌕│ ⌕                                │t "
+"┌ │                                  │─┐"
+"│ │ needs you · an old copy .fastf-mo│ │"
+"│▸│──────────────────────────────────│ █"
+"│ │ An old copy with no record of    │ ║"
+"│ │ its move, whose project fastf    │ ║"
+"│ │ cannot find: it may be the only  │ ║"
+"└─│ copy.                            │─┘"
+"  └──────────────────────────────────┘  "
+" ↑↓ move  Enter choose  Esc cancel      "

@@ -66,6 +66,9 @@ pub fn run(id: &str) -> i32 {
         });
         return 0;
     }
+    // The worker works in its own folder: one started from inside a project
+    // would hold the very folder it is about to move or delete.
+    let _ = std::env::set_current_dir(&dir);
     // A terminal closing does not concern a job; a SIGTERM is a cancel.
     #[cfg(unix)]
     // SAFETY: setting a signal's disposition to ignore is always sound.
@@ -163,7 +166,17 @@ pub fn run(id: &str) -> i32 {
 /// Write the state as it stands, with the engine's latest progress in it.
 fn write(state: &Mutex<JobState>, progress: &Mutex<Progress>) {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    state.progress = progress.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    state.progress = {
+        let mut progress = progress.lock().unwrap_or_else(|e| e.into_inner());
+        let was = progress.stalled_ms;
+        progress.note_stall();
+        if was == 0
+            && let Some(stall) = progress.stall_text()
+        {
+            crate::util::log::info(stall);
+        }
+        progress.clone()
+    };
     state.updated = crate::util::time::now_iso8601();
     let _ = crate::core::jobs::write_state(&state);
 }
@@ -269,6 +282,7 @@ impl Job<'_> {
         )> = Vec::new();
         let mut failed = 0;
         let mut moved = 0;
+        let mut paused = 0;
         let mut stopped = false;
         for (index, item) in items.iter().enumerate() {
             if self.cancelled() {
@@ -322,6 +336,23 @@ impl Job<'_> {
                         self.report(index, failed_report(item, "move", &error, true));
                         break;
                     }
+                    if let Some(pause) = error.downcast_ref::<crate::core::move_engine::Paused>() {
+                        paused += 1;
+                        self.say(
+                            Level::Warn,
+                            &format!("the move of {} {} {pause}", item.id, item.name),
+                        );
+                        self.report(
+                            index,
+                            ItemReport {
+                                headline: format!("The move of {} {} paused", item.id, item.name),
+                                warning: Some(pause.to_string()),
+                                done: true,
+                                ..ItemReport::default()
+                            },
+                        );
+                        continue;
+                    }
                     failed += 1;
                     self.say(
                         Level::Error,
@@ -358,8 +389,18 @@ impl Job<'_> {
             self.say_moved(&project, &outcome);
             self.report(index, report);
         }
-        self.summarise(batch_summary("moved", moved, failed, stopped, items.len()));
-        status_of(failed, stopped)
+        let mut summary = batch_summary("moved", moved, failed, stopped, items.len());
+        if paused > 0 {
+            summary.push_str(&format!(
+                ", {paused} paused until {} mount answers",
+                if paused == 1 { "its" } else { "their" }
+            ));
+        }
+        self.summarise(summary);
+        match status_of(failed, stopped) {
+            JobStatus::Done if paused > 0 => JobStatus::Paused,
+            status => status,
+        }
     }
 
     fn say_moved(&self, project: &Project, outcome: &crate::core::library::MoveOutcome) {
@@ -598,7 +639,7 @@ fn move_report(project: &Project, outcome: &crate::core::library::MoveOutcome) -
                 None => "renamed on the same filesystem, nothing copied".to_string(),
             },
         ],
-        notes: outcome.link_notes.clone(),
+        notes: outcome.notes.clone(),
         warning: outcome.source.warning(&project.path),
         ..ItemReport::default()
     }
@@ -611,7 +652,7 @@ fn failed_report(item: &JobItem, verb: &str, error: &anyhow::Error, cancelled: b
         } else {
             format!("The {verb} of {} {} failed", item.id, item.name)
         },
-        error: Some(format!("{error:#}")),
+        error: Some(crate::util::fs_retry::explained(error)),
         done: true,
         ..ItemReport::default()
     }

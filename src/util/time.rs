@@ -37,6 +37,11 @@ pub fn now_hms() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+/// Seconds since the Unix epoch, now.
+pub fn now_unix() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
 #[cfg(test)]
 mod tests {
     use super::now_iso8601;

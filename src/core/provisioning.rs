@@ -177,11 +177,21 @@ pub struct Incomplete {
     pub path: String,
     pub kind: IncompleteKind,
     pub pending: usize,
+    /// A move's record folder, where the item is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record: Option<String>,
 }
 
 /// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
 /// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
+    list_incomplete_in(cfg, &cfg.effective_bases())
+}
+
+/// [`list_incomplete`] over `bases` alone: the ones that answered a probe
+/// (`core::attention`), so a base that does not answer never freezes it.
+pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
+    let _ = cfg;
     // A job running now is not something that needs attention: its records
     // are its own until it ends.
     let live = crate::core::jobs::live_workers();
@@ -189,8 +199,9 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
     let mut out = Vec::new();
     let mut operations = HashSet::new();
     let mut retired = Vec::new();
-    for configured in cfg.effective_bases() {
-        let Ok(base) = crate::util::paths::canonical(&configured) else {
+    let mut pointers = Vec::new();
+    for configured in bases {
+        let Ok(base) = crate::util::paths::canonical(configured) else {
             continue;
         };
         if crate::util::paths::require_real_directory(&base, "configured base").is_err() {
@@ -213,6 +224,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::MoveV2Invalid,
                         pending: 0,
+                        record: None,
                     });
                 }
                 continue;
@@ -223,6 +235,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::RenameStaging,
                         pending: 0,
+                        record: None,
                     });
                     continue;
                 }
@@ -240,6 +253,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Leftover,
                         pending: 0,
+                        record: None,
                     });
                     continue;
                 }
@@ -248,6 +262,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: legacy_create_marker_path(&path).display().to_string(),
                         kind: IncompleteKind::ObsoleteCreateV1,
                         pending: 0,
+                        record: None,
                     });
                 }
                 if entry_exists_quiet(&create_journal_path(&path)) {
@@ -256,11 +271,13 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                             path: path.display().to_string(),
                             kind: IncompleteKind::Create,
                             pending: journal.jobs.len(),
+                            record: None,
                         }),
                         Err(_) => out.push(Incomplete {
                             path: create_journal_path(&path).display().to_string(),
                             kind: IncompleteKind::CreateV2Invalid,
                             pending: 0,
+                            record: None,
                         }),
                     }
                 } else if crate::core::project_info::is_provisioning(&path) {
@@ -268,15 +285,43 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                         path: path.display().to_string(),
                         kind: IncompleteKind::Create,
                         pending: 0,
+                        record: None,
                     });
                 }
+            } else if let Some(operation) = move_cleanup::deleted_record_operation(&name) {
+                // A delete emptying its folder in place, unless it is done
+                // and only waits out the settle.
+                let settling = crate::core::records::get(operation)
+                    .is_some_and(|entry| entry.gone_at.is_some());
+                if !mine(operation) && !settling {
+                    out.push(Incomplete {
+                        path: path.display().to_string(),
+                        kind: IncompleteKind::Leftover,
+                        pending: 0,
+                        record: None,
+                    });
+                }
+            } else if let Some(operation) = transactions::pointer_operation(&name) {
+                pointers.push((path, operation.to_string()));
             } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
                 out.push(Incomplete {
                     path: path.display().to_string(),
                     kind: IncompleteKind::ObsoleteMoveV1,
                     pending: 0,
+                    record: None,
                 });
             }
+        }
+    }
+    // A pointer whose record is gone: its old copy has no record either.
+    for (path, operation) in pointers {
+        if !operations.contains(&operation) && !mine(&operation) {
+            out.push(Incomplete {
+                path: path.display().to_string(),
+                kind: IncompleteKind::Leftover,
+                pending: 0,
+                record: None,
+            });
         }
     }
     // A retired folder with a transaction is that transaction's; one without
@@ -287,6 +332,7 @@ pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
                 path: path.display().to_string(),
                 kind: IncompleteKind::Leftover,
                 pending: 0,
+                record: None,
             });
         }
     }
@@ -305,6 +351,7 @@ fn list_move_transactions(
             path: root.display().to_string(),
             kind: IncompleteKind::MoveV2Invalid,
             pending: 0,
+            record: None,
         });
         return;
     }
@@ -324,15 +371,20 @@ fn list_move_transactions(
         }
         if valid_dir {
             match transactions::read_journal(&operation_dir) {
+                // Its old copy is gone and it only waits out the settle: not
+                // something anyone needs to look at.
+                Ok(journal) if is_settling(&journal) => {}
                 Ok(journal) => out.push(Incomplete {
                     path: base.join(journal.target_folder).display().to_string(),
                     kind: IncompleteKind::Move,
                     pending: 0,
+                    record: Some(operation_dir.display().to_string()),
                 }),
                 Err(_) => out.push(Incomplete {
                     path: operation_dir.display().to_string(),
                     kind: IncompleteKind::MoveV2Invalid,
                     pending: 0,
+                    record: None,
                 }),
             }
         } else {
@@ -340,6 +392,7 @@ fn list_move_transactions(
                 path: operation_dir.display().to_string(),
                 kind: IncompleteKind::MoveV2Invalid,
                 pending: 0,
+                record: None,
             });
         }
     }
@@ -361,9 +414,33 @@ pub struct ReconcileReport {
     pub leftovers: Vec<String>,
     pub unrecoverable: Vec<String>,
     pub obsolete: Vec<String>,
+    /// Work fastf finishes by itself once a base answers again: a mount that
+    /// is not mounted or does not answer, a path it could not look at. Nothing
+    /// was changed, and nothing about it needs a person yet.
+    pub waiting: Vec<String>,
     /// The pass stopped for a cancel before it had looked at everything;
     /// what it did not reach is as it was, and the next pass takes it up.
     pub cancelled: bool,
+    /// What the pass could not settle and a person has to decide, by the
+    /// folder it is about: kept as `attention.json` (`core::attention`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verdicts: Vec<crate::core::attention::Verdict>,
+}
+
+impl ReconcileReport {
+    /// Keep a verdict: `path` needs a person, for `reason`.
+    pub(crate) fn needs(
+        &mut self,
+        path: &Path,
+        kind: crate::core::attention::VerdictKind,
+        reason: &str,
+    ) {
+        self.verdicts.push(crate::core::attention::Verdict {
+            path: path.to_path_buf(),
+            kind,
+            reason: reason.to_string(),
+        });
+    }
 }
 
 impl ReconcileReport {
@@ -377,6 +454,7 @@ impl ReconcileReport {
             && self.leftovers.is_empty()
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
+            && self.waiting.is_empty()
             && !self.cancelled
     }
 
@@ -393,12 +471,16 @@ impl ReconcileReport {
             "Nothing to reconcile — every project is fully provisioned.".to_string()
         } else {
             format!(
-                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}",
+                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}{}",
                 self.resumed,
                 self.completed,
                 self.rolled_back,
                 self.restored,
                 self.cleared,
+                match self.waiting.len() {
+                    0 => String::new(),
+                    n => format!("; {n} waiting for a base to answer"),
+                },
                 match self.unrecoverable.len() + self.leftovers.len() {
                     0 => String::new(),
                     1 => "; 1 needs a look".to_string(),
@@ -440,7 +522,17 @@ pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport 
         live: crate::core::jobs::live_workers(),
         deferred: None,
     };
-    reconcile_pass(cfg, &mut pass)
+    let report = reconcile_pass(cfg, &mut pass);
+    keep_verdicts(&report);
+    report
+}
+
+/// A complete pass's verdicts are what needs a person now; a cancelled one
+/// did not look at everything, and changes nothing.
+fn keep_verdicts(report: &ReconcileReport) {
+    if !report.cancelled {
+        crate::core::attention::write_verdicts(&report.verdicts);
+    }
 }
 
 /// What one pass carries: its progress, the live jobs whose records it leaves
@@ -479,6 +571,7 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
     // every base has been walked.
     let mut seen = HashSet::new();
     let mut retired = Vec::new();
+    let mut pointers = Vec::new();
     for configured in cfg.effective_bases() {
         let base = match crate::util::paths::canonical(&configured) {
             Ok(base)
@@ -486,10 +579,13 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
             {
                 base
             }
+            // An unplugged drive, a mount that dropped: ordinary, and nothing a
+            // person has to act on. Whatever fastf left there waits for it.
             _ => {
-                report.unrecoverable.push(format!(
-                    "configured base is unavailable; left all recovery state untouched: {}",
-                    configured.display()
+                report.waiting.push(format!(
+                    "{} is not mounted or does not answer; anything fastf left there waits \
+                     until it is back",
+                    crate::util::paths::display_path(&configured)
                 ));
                 continue;
             }
@@ -497,7 +593,46 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
         if report.cancelled {
             break;
         }
-        reconcile_base(cfg, &base, &mut report, &mut seen, &mut retired, pass);
+        reconcile_base(
+            cfg,
+            &base,
+            &mut report,
+            &mut seen,
+            &mut retired,
+            &mut pointers,
+            pass,
+        );
+    }
+    // Records the configured bases do not hold: a copy's, beside a
+    // destination outside them; a move's, in a base since dropped from
+    // `bases`. The data dir's index is where they are known.
+    for entry in crate::core::records::all() {
+        if report.cancelled || seen.contains(&entry.operation) || pass.leaves(&entry.operation) {
+            continue;
+        }
+        // A delete's record sits beside its folder, where the base's own
+        // walk finds it; the index only keeps its settle.
+        if entry.kind == "delete" {
+            if crate::util::paths::presence(&entry.record).is_absent()
+                && crate::util::paths::presence(&entry.target_base).is_present()
+            {
+                crate::core::records::remove(&entry.operation);
+            }
+            continue;
+        }
+        match crate::util::paths::presence(&entry.record) {
+            crate::util::paths::Presence::Present(_) => {
+                seen.insert(entry.operation.clone());
+                reconcile_record(cfg, &entry.target_base, &entry.record, &mut report, pass);
+            }
+            // Gone, and the base it was in answers: the index outlived it.
+            crate::util::paths::Presence::Absent
+                if crate::util::paths::presence(&entry.target_base).is_present() =>
+            {
+                crate::core::records::remove(&entry.operation);
+            }
+            _ => {}
+        }
     }
     for (path, operation) in retired {
         if !report.cancelled
@@ -505,15 +640,210 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
             && !pass.leaves(&operation)
             && entry_exists_quiet(&path)
         {
-            report.leftovers.push(format!(
-                "{}: a moved project's retired original, with no record of the move left; \
-                 fastf will not remove it without one. Look inside, and delete it yourself \
-                 if the project is safely elsewhere.",
-                crate::util::paths::display_path(&path)
-            ));
+            reconcile_recordless(cfg, &path, &operation, None, None, &mut report, pass);
+        }
+    }
+    // An in-place retire's pointer whose record is gone: the folder it names
+    // is the old copy, unless it is a project again.
+    for (pointer_path, operation) in pointers {
+        if report.cancelled || seen.contains(&operation) || pass.leaves(&operation) {
+            continue;
+        }
+        let Ok(pointer) = transactions::read_pointer(&pointer_path) else {
+            continue;
+        };
+        let Some(base) = pointer_path.parent() else {
+            continue;
+        };
+        let folder = base.join(&pointer.folder);
+        match crate::util::paths::presence(&folder) {
+            crate::util::paths::Presence::Absent => {
+                if fs::remove_file(&pointer_path).is_ok() {
+                    report.cleared += 1;
+                }
+            }
+            crate::util::paths::Presence::Present(_)
+                if crate::core::project_info::pinfo_path(&folder).is_file() =>
+            {
+                // The retire never took its `PROJECT_INFO.md`: it is still a
+                // project, and the pointer names nothing to remove.
+                if fs::remove_file(&pointer_path).is_ok() {
+                    report.cleared += 1;
+                }
+            }
+            crate::util::paths::Presence::Present(_) => reconcile_recordless(
+                cfg,
+                &folder,
+                &operation,
+                Some(pointer_path.clone()),
+                Some(pointer.project_id.clone()),
+                &mut report,
+                pass,
+            ),
+            crate::util::paths::Presence::Unknown(error) => report.waiting.push(format!(
+                "{}: an old copy being emptied does not answer ({error}); fastf finishes \
+                 it once it does",
+                crate::util::paths::display_path(&folder)
+            )),
         }
     }
     report
+}
+
+/// An old copy whose move left no record — 3.13 cleared records while their
+/// old copies were still there. One that holds nothing but folders goes; one
+/// whose project fastf can find is removed where the project holds the same
+/// thing, byte for byte (`merge::remove_identical`); what differs stays,
+/// named, and so does all of it when the project cannot be found.
+fn reconcile_recordless(
+    cfg: &Config,
+    path: &Path,
+    operation: &str,
+    pointer: Option<PathBuf>,
+    project_hint: Option<String>,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let shown = crate::util::paths::display_path(path);
+    pass.ticker.item("an old copy with no record");
+    // An empty folder a cloud mount put back after it was removed holds
+    // nothing to lose.
+    let holds_nothing = holds_only_folders(path);
+    if holds_nothing {
+        match crate::core::removal::remove_tree(
+            path,
+            None,
+            crate::core::removal::Purpose::Delete,
+            pass.ticker,
+        ) {
+            crate::core::removal::Removal::Removed => {
+                if let Some(pointer) = &pointer {
+                    let _ = fs::remove_file(pointer);
+                }
+                report.cleared += 1;
+            }
+            crate::core::removal::Removal::Leftover { reason, .. } => {
+                report.leftovers.push(format!(
+                    "{shown}: an empty old copy of a move could not be removed yet ({reason}); \
+                     `fastf reconcile` tries again"
+                ));
+            }
+        }
+        return;
+    }
+    let owner = project_hint.or_else(|| orphan_owner(path, operation));
+    let found = owner.as_ref().and_then(|id| {
+        library::discover(cfg)
+            .into_iter()
+            .find(|project| project.id == *id)
+    });
+    let Some(project) = found else {
+        let note = orphan_note(cfg, path, operation);
+        report.needs(
+            path,
+            crate::core::attention::VerdictKind::UnknownProject,
+            &match &owner {
+                Some(id) => format!(
+                    "An old copy of {id} whose move left no record. fastf finds {id} in no base \
+                     now, so this may be its only copy: put it back as the project, or discard \
+                     it."
+                ),
+                None => "An old copy whose move left no record, and that does not say which \
+                         project it was: look inside, then put it back or discard it."
+                    .to_string(),
+            },
+        );
+        report.leftovers.push(format!(
+            "{shown}: a moved project's old copy, with no record of the move left, and \
+             fastf cannot find the project it held, so it keeps all of it.{note}"
+        ));
+        return;
+    };
+    let housekeeping = move_cleanup::Housekeeping::Recordless(Box::new(move_cleanup::Recordless {
+        path: path.to_path_buf(),
+        operation: operation.to_string(),
+        moved: project.path.clone(),
+        project_id: project.id.clone(),
+        pointer,
+    }));
+    let subject = format!("{} ({})", project.id, project.name);
+    match pass.deferred.as_mut() {
+        Some(deferred) => deferred.push(Deferred {
+            housekeeping,
+            subject,
+            source: path.to_path_buf(),
+            final_path: project.path.clone(),
+        }),
+        None => {
+            let fate = housekeeping.run(pass.ticker);
+            report_recordless(path, fate, &subject, report);
+        }
+    }
+}
+
+/// Whether `path` holds nothing but folders, down to its deepest. Stops at
+/// the first thing that is not a folder — one listing, for an old copy that
+/// holds a project — since on a slow mount every listing is a request.
+fn holds_only_folders(path: &Path) -> bool {
+    let mut folders = vec![(path.to_path_buf(), 0)];
+    while let Some((folder, depth)) = folders.pop() {
+        if depth >= crate::util::paths::MAX_WALK_DEPTH {
+            return false;
+        }
+        let Ok(entries) = fs::read_dir(&folder) else {
+            return false;
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                return false;
+            };
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() && !kind.is_symlink() => {
+                    folders.push((entry.path(), depth + 1));
+                }
+                _ => return false,
+            }
+        }
+    }
+    true
+}
+
+fn report_recordless(path: &Path, fate: SourceFate, subject: &str, report: &mut ReconcileReport) {
+    match fate {
+        SourceFate::Leftover { reason, .. } => {
+            report.needs(
+                path,
+                crate::core::attention::VerdictKind::Differs,
+                &format!(
+                    "an old copy of {subject} with no record of its move; what the project \
+                     holds the same went, and what is left differs: {reason}"
+                ),
+            );
+            report.leftovers.push(format!(
+                "{}: an old copy of {subject}, whose move left no record; what the project \
+                 holds the same was removed, and what differs stays: {reason}",
+                crate::util::paths::display_path(path)
+            ))
+        }
+        _ => report.cleared += 1,
+    }
+}
+
+/// The project an old copy with no record held: its own `PROJECT_INFO.md`,
+/// or the job that moved it, when that job moved one project.
+fn orphan_owner(path: &Path, operation: &str) -> Option<String> {
+    crate::core::project_info::read_metadata(path)
+        .ok()
+        .flatten()
+        .map(|metadata| metadata.id)
+        .or_else(|| {
+            crate::core::jobs::list().into_iter().find_map(|job| {
+                let state = job.state.as_ref()?;
+                let request = job.request.as_ref()?;
+                (state.operations.iter().any(|op| op == operation) && request.items.len() == 1)
+                    .then(|| request.items[0].id.clone())
+            })
+        })
 }
 
 /// Hold the coarse cross-process mutation lock for the whole pass and load the
@@ -573,6 +903,7 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
         }
         finish_deferred(deferred, ticker, &mut report);
     }
+    keep_verdicts(&report);
     report
 }
 
@@ -582,6 +913,16 @@ fn finish_deferred(deferred: Deferred, ticker: Ticker, report: &mut ReconcileRep
         move_cleanup::Housekeeping::Deleted(path) => {
             let fate = move_cleanup::Housekeeping::Deleted(path.clone()).run(ticker);
             report_deleted(&path, fate, report);
+        }
+        deleted @ move_cleanup::Housekeeping::DeletedInPlace(_) => {
+            let path = deleted.path();
+            let fate = deleted.run(ticker);
+            report_deleted(&path, fate, report);
+        }
+        recordless @ move_cleanup::Housekeeping::Recordless(_) => {
+            let path = recordless.path();
+            let fate = recordless.run(ticker);
+            report_recordless(&path, fate, &deferred.subject, report);
         }
         housekeeping => {
             ticker.update(|state| {
@@ -605,6 +946,7 @@ fn reconcile_base(
     report: &mut ReconcileReport,
     seen: &mut HashSet<String>,
     retired: &mut Vec<(PathBuf, String)>,
+    pointers: &mut Vec<(PathBuf, String)>,
     pass: &mut Pass,
 ) {
     let ticker = pass.ticker;
@@ -696,12 +1038,108 @@ fn reconcile_base(
             } else if crate::core::project_info::is_provisioning(&path) {
                 report.incomplete.push(path.display().to_string());
             }
+        } else if let Some(operation) = transactions::pointer_operation(&name) {
+            pointers.push((path, operation.to_string()));
+        } else if let Some(operation) = move_cleanup::deleted_record_operation(&name) {
+            if pass.leaves(operation) {
+                continue;
+            }
+            ticker.item("a deleted project's folder");
+            reconcile_deleted_in_place(base, &path, operation, report, pass);
         } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
             report.obsolete.push(path.display().to_string());
         }
     }
     if let Some(root) = transaction_root {
         reconcile_transactions(cfg, base, &root, report, seen, pass);
+    }
+}
+
+/// Finish a delete made in place (a cloud mount): the record beside the
+/// folder lists what the project held when it was deleted, and only that
+/// goes. The word was typed once, for the whole delete.
+fn reconcile_deleted_in_place(
+    base: &Path,
+    record_path: &Path,
+    operation: &str,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let shown = crate::util::paths::display_path(record_path);
+    let record = match move_cleanup::read_delete_record(record_path) {
+        Ok(record) => record,
+        Err(error) => {
+            report.leftovers.push(format!(
+                "{shown}: a delete's record fastf cannot read ({error:#}); it keeps it"
+            ));
+            return;
+        }
+    };
+    let folder = base.join(&record.folder);
+    match crate::util::paths::presence(&folder) {
+        crate::util::paths::Presence::Unknown(error) => {
+            report.waiting.push(format!(
+                "{}: a deleted project's folder does not answer ({error}); fastf finishes \
+                 removing it once it does",
+                crate::util::paths::display_path(&folder)
+            ));
+            return;
+        }
+        crate::util::paths::Presence::Absent => {
+            if move_cleanup::settling(operation, &folder) {
+                return;
+            }
+            if fs::remove_file(record_path).is_ok() {
+                crate::core::records::remove(operation);
+                report.cleared += 1;
+            }
+            return;
+        }
+        crate::util::paths::Presence::Present(_) => {}
+    }
+    crate::core::records::not_gone(operation);
+    let pinfo = crate::core::project_info::pinfo_path(&folder);
+    if pinfo.is_file() {
+        let owner = crate::core::project_info::read_metadata(&folder)
+            .ok()
+            .flatten()
+            .map(|metadata| metadata.id);
+        if owner.as_deref() != Some(record.project_id.as_str()) {
+            // Another project took the name: the delete has nothing left.
+            if fs::remove_file(record_path).is_ok() {
+                crate::core::records::remove(operation);
+                report.cleared += 1;
+            }
+            return;
+        }
+        // Stopped before its `PROJECT_INFO.md` went: the delete goes on.
+        if let Err(error) = crate::util::fs_retry::remove_file(&pinfo) {
+            report.leftovers.push(format!(
+                "{}: a deleted project's PROJECT_INFO.md could not be removed ({error}); \
+                 `fastf reconcile` tries again",
+                crate::util::paths::display_path(&folder)
+            ));
+            return;
+        }
+        library::refresh_cache(&folder);
+    }
+    let housekeeping =
+        move_cleanup::Housekeeping::DeletedInPlace(Box::new(move_cleanup::DeletedInPlace {
+            folder: folder.clone(),
+            record_path: record_path.to_path_buf(),
+            record,
+        }));
+    match pass.deferred.as_mut() {
+        Some(deferred) => deferred.push(Deferred {
+            housekeeping,
+            subject: String::new(),
+            source: folder.clone(),
+            final_path: folder,
+        }),
+        None => {
+            let fate = housekeeping.run(pass.ticker);
+            report_deleted(&folder, fate, report);
+        }
     }
 }
 
@@ -730,9 +1168,9 @@ fn report_deleted(path: &Path, fate: SourceFate, report: &mut ReconcileReport) {
             "{}: a deleted project's folder is not fully removed yet ({reason}); {}",
             crate::util::paths::display_path(path),
             if redundant {
-                "`fastf reconcile` tries again, or delete it yourself."
+                "`fastf reconcile` finishes it."
             } else {
-                "fastf keeps what it cannot remove safely — look, and delete it yourself."
+                "fastf keeps what it cannot remove safely."
             }
         )),
         _ => report.cleared += 1,
@@ -772,7 +1210,9 @@ fn reconcile_case_rename(base: &Path, name: &str, path: &Path, report: &mut Reco
     // case-insensitive filesystem `destination` is a different path from
     // `path` — the staging folder is dot-prefixed. An occupied destination is
     // therefore somebody else's, and is not ours to overwrite.
-    if entry_exists_quiet(&destination) {
+    // Not only an occupied destination: one that does not answer may be
+    // occupied too, and a rename over it is not ours to risk.
+    if !crate::util::paths::presence(&destination).is_absent() {
         report.unrecoverable.push(format!(
             "{}: an interrupted rename left this project here, and {} is already \
              taken; rename it by hand to make the project visible again",
@@ -1020,19 +1460,71 @@ fn reconcile_transactions(
                 continue;
             }
         }
-        let journal = match transactions::read_journal(&operation_dir) {
-            Ok(journal) => journal,
-            Err(error) => {
-                report.unrecoverable.push(format!(
-                    "{}: malformed/unknown move journal ({error:#}); fastf changed nothing",
-                    operation_dir.display()
-                ));
-                continue;
-            }
-        };
-        ticker.item(&journal.target_folder.display().to_string());
-        reconcile_transaction(cfg, target_base, &operation_dir, journal, report, pass);
+        reconcile_record(cfg, target_base, &operation_dir, report, pass);
     }
+}
+
+/// One transaction directory: its journal read, or — when it holds nothing a
+/// move ever gets past its first write to — removed.
+/// Reconcile one move record, now, in this process — what a person's
+/// decision about it ends with (`core::attention::resolve`).
+pub(crate) fn reconcile_one_record(
+    cfg: &Config,
+    target_base: &Path,
+    operation_dir: &Path,
+) -> ReconcileReport {
+    let mut report = ReconcileReport::default();
+    let mut pass = Pass {
+        ticker: Ticker::none(),
+        live: crate::core::jobs::live_workers(),
+        deferred: None,
+    };
+    reconcile_record(cfg, target_base, operation_dir, &mut report, &mut pass);
+    report
+}
+
+fn reconcile_record(
+    cfg: &Config,
+    target_base: &Path,
+    operation_dir: &Path,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let journal = match transactions::read_journal(operation_dir) {
+        Ok(journal) => journal,
+        // Killed between making the folder and finishing `move.json`: a move
+        // writes its manifest next and only then makes its copy, so without
+        // one nothing else of it exists. 3.13 called this "invalid" for ever.
+        Err(_) if transactions::is_bare_record(operation_dir) => {
+            let name = operation_dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            match fs::remove_dir_all(operation_dir) {
+                Ok(()) => {
+                    crate::core::records::remove(&name);
+                    report.cleared += 1;
+                }
+                Err(error) => report.waiting.push(format!(
+                    "{}: an unfinished move record that holds nothing could not be removed \
+                     ({error}); fastf tries again",
+                    crate::util::paths::display_path(operation_dir)
+                )),
+            }
+            return;
+        }
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: malformed/unknown move journal ({error:#}); fastf changed nothing",
+                operation_dir.display()
+            ));
+            return;
+        }
+    };
+    pass.ticker
+        .item(&journal.target_folder.display().to_string());
+    reconcile_transaction(cfg, target_base, operation_dir, journal, report, pass);
 }
 
 /// One transaction, by the table in `src/core/CLAUDE.md` › Recovery.
@@ -1070,14 +1562,32 @@ fn reconcile_transaction(
     }
     let source_base = match configured_real_base(cfg, &journal.source_base) {
         Ok(base) => base,
+        // Still one of the bases, only not there now: an unplugged drive, a
+        // mount that dropped. The move waits for it, untouched.
+        Err(error) if is_configured_base(cfg, &journal.source_base) => {
+            report.waiting.push(format!(
+                "{subject}: its source base {} is not mounted or does not answer ({error:#}); \
+                 fastf changed nothing, and finishes the move once the base is back",
+                crate::util::paths::display_path(&journal.source_base)
+            ));
+            return;
+        }
         Err(error) => {
             report.unrecoverable.push(format!(
-                "{subject}: its source base is unavailable or no longer configured \
-                 ({error:#}); fastf changed nothing"
+                "{subject}: its source base is no longer configured ({error:#}); fastf \
+                 changed nothing"
             ));
             return;
         }
     };
+    // A mount point whose mount is gone is an empty folder, and everything
+    // under it would read as gone: wait for the mount instead.
+    if let Some(why) = crate::core::records::source_unmounted(&journal.operation_id) {
+        report.waiting.push(format!(
+            "{subject}: {why}; fastf changed nothing, and finishes the move once it is back"
+        ));
+        return;
+    }
     let source = source_base.join(&journal.source_folder);
     let final_path = target_base.join(&journal.target_folder);
     let staging = operation_dir.join(transactions::STAGING_DIR);
@@ -1086,13 +1596,41 @@ fn reconcile_transaction(
         transactions::transaction_from_journal(target_base, operation_dir, journal.clone());
     let shown = |path: &Path| crate::util::paths::display_path(path);
 
+    // **A path that does not answer is not a path that is gone.** Every
+    // decision below reads what is on disk, and one read through a mount that
+    // has just dropped would decide on nothing: 3.13 took an `EIO` for "gone"
+    // and cleared the record of an old copy that was still there. The record
+    // waits, untouched, until every path it names answers.
+    let staging_is = crate::util::paths::presence(&staging);
+    let final_is = crate::util::paths::presence(&final_path);
+    let retired_is = crate::util::paths::presence(&retired);
+    let source_is = crate::util::paths::presence(&source);
+    for (path, presence) in [
+        (&staging, &staging_is),
+        (&final_path, &final_is),
+        (&retired, &retired_is),
+        (&source, &source_is),
+    ] {
+        if let Some(error) = presence.unknown() {
+            report.waiting.push(format!(
+                "{subject}: {} does not answer ({error}); fastf changed nothing, and finishes \
+                 the move once it does",
+                shown(path)
+            ));
+            return;
+        }
+    }
+    let staging_exists = staging_is.is_present();
+    let final_exists = final_is.is_present();
+    let retired_exists = retired_is.is_present();
+    let source_exists = source_is.is_present();
+
     if journal.operation == Operation::Copy {
         // A copy keeps its source, and its journal never leaves `Copying`:
         // either it published or it did not, and neither touches the source.
-        let staging_exists = entry_exists_quiet(&staging);
         // Both there is a state no copy leaves; neither is a copy killed
         // before it staged anything, whose record is all there is to clear.
-        if staging_exists && entry_exists_quiet(&final_path) {
+        if staging_exists && final_exists {
             report.unrecoverable.push(format!(
                 "{subject}: an interrupted copy left an unexpected state at {}; \
                  fastf changed nothing",
@@ -1120,9 +1658,9 @@ fn reconcile_transaction(
     // `Copying`; a record on a cloud mount may hold the phase the mount
     // managed to upload rather than the one fastf reached.
     let phase = if (journal.phase == MovePhase::ReadyToCommit
-        && entry_exists_quiet(&retired)
-        && !entry_exists_quiet(&staging)
-        && entry_exists_quiet(&final_path))
+        && retired_exists
+        && !staging_exists
+        && final_exists)
         || (journal.phase == MovePhase::Copying && transaction.final_is_published())
     {
         MovePhase::CleanupPending
@@ -1130,12 +1668,23 @@ fn reconcile_transaction(
         journal.phase
     };
     match phase {
-        MovePhase::Copying | MovePhase::ReadyToCommit if entry_exists_quiet(&retired) => {
+        MovePhase::Copying | MovePhase::ReadyToCommit if retired_exists => {
             report.unrecoverable.push(format!(
                 "{subject}: a move that never published has a retired original at {}, \
                  which fastf does not write; fastf changed nothing",
                 shown(&retired)
             ));
+        }
+        MovePhase::Copying if transaction.is_paused() => {
+            reconcile_paused(
+                &source_base,
+                target_base,
+                &final_path,
+                transaction,
+                &subject,
+                report,
+                pass,
+            );
         }
         MovePhase::Copying => {
             if let Err(error) =
@@ -1147,7 +1696,7 @@ fn reconcile_transaction(
                 ));
                 return;
             }
-            if entry_exists_quiet(&final_path) {
+            if final_exists {
                 // Made in place and not published: fastf's own unfinished
                 // copy, which `remove` takes with the record. Anything with a
                 // readable identity of its own there is somebody else's.
@@ -1188,8 +1737,6 @@ fn reconcile_transaction(
                 ));
                 return;
             }
-            let staging_exists = entry_exists_quiet(&staging);
-            let final_exists = entry_exists_quiet(&final_path);
             if staging_exists && !final_exists {
                 if crate::util::paths::require_real_directory(&staging, "move staging").is_err() {
                     report.unrecoverable.push(format!(
@@ -1238,6 +1785,8 @@ fn reconcile_transaction(
                 final_path: &final_path,
                 project_id: &journal.project_id,
                 residue_allowed: false,
+                split: false,
+                reappeared: false,
                 ticker,
             };
             let mut notes = Vec::new();
@@ -1248,7 +1797,6 @@ fn reconcile_transaction(
             settle_or_defer(set, &cleanup, pass, &subject, report);
         }
         MovePhase::CleanupPending | MovePhase::Retired => {
-            let retired_exists = entry_exists_quiet(&retired);
             if let Err(error) =
                 move_cleanup::confirm_identity(&final_path, &journal.project_id, "moved")
             {
@@ -1257,7 +1805,7 @@ fn reconcile_transaction(
                 // finish. A moved copy that is there but reads as another
                 // project stays report-only — the record is what ties the two.
                 if !retired_exists
-                    && !entry_exists_quiet(&final_path)
+                    && !final_exists
                     && move_cleanup::confirm_identity(&source, &journal.project_id, "original")
                         .is_ok()
                 {
@@ -1289,6 +1837,17 @@ fn reconcile_transaction(
                      nothing left to finish: delete the move's record once you have looked."
                         .to_string()
                 };
+                if retired_exists {
+                    report.needs(
+                        &retired,
+                        crate::core::attention::VerdictKind::OnlyCopy,
+                        &format!(
+                            "the moved copy at {} is not this project any more, so this old \
+                             copy may be the only one",
+                            shown(&final_path)
+                        ),
+                    );
+                }
                 report.unrecoverable.push(format!(
                     "{subject}: the moved copy at {} is not this project any more \
                      ({error:#}){whole}. fastf changed nothing.{record}",
@@ -1296,7 +1855,6 @@ fn reconcile_transaction(
                 ));
                 return;
             }
-            let source_exists = entry_exists_quiet(&source);
             // Another project at the original's path is not the original,
             // whatever it holds: it is left alone, and so the move is done.
             let foreign = source_exists
@@ -1304,6 +1862,28 @@ fn reconcile_transaction(
                     .ok()
                     .flatten()
                     .is_some_and(|metadata| metadata.id != journal.project_id);
+            // Both the retired copy and something of ours at the original's
+            // path: the rename that set it aside stopped part of the way (an
+            // S3 bucket renames object by object). What is left at the
+            // original's path is this move's residue, and is recorded so, so a
+            // later pass that finds the retired copy gone still knows it.
+            // Only `CleanupPending` can show it first: `Retired` is written
+            // after a rename that finished, and what is at the original's path
+            // then is somebody else's (a program that made the folder again).
+            let split = !foreign
+                && source_exists
+                && ((retired_exists && journal.phase == MovePhase::CleanupPending)
+                    || transaction.is_split());
+            if split
+                && retired_exists
+                && let Err(error) = transaction.mark_split()
+            {
+                report.waiting.push(format!(
+                    "{subject}: the original was set aside only part of the way, and that could \
+                     not be recorded ({error:#}); fastf changed nothing and tries again"
+                ));
+                return;
+            }
             if foreign && !retired_exists {
                 let mut notes = Vec::new();
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes);
@@ -1317,7 +1897,42 @@ fn reconcile_transaction(
                 finish_record(transaction, operation_dir, &subject, report);
                 return;
             }
-            if !retired_exists && (journal.phase == MovePhase::Retired || !source_exists) {
+            if journal.retire == transactions::RetireStrategy::InPlace {
+                reconcile_in_place(
+                    InPlace {
+                        source_base: &source_base,
+                        target_base,
+                        operation_dir,
+                        source: &source,
+                        final_path: &final_path,
+                        source_exists,
+                        foreign,
+                    },
+                    &journal,
+                    transaction,
+                    &subject,
+                    report,
+                    pass,
+                );
+                return;
+            }
+            // Back after it was removed: whatever came back is merged as a
+            // residue, and the settle's clock starts again once it is gone.
+            let reappeared = retired_exists
+                && crate::core::records::get(&journal.operation_id)
+                    .is_some_and(|entry| entry.gone_at.is_some());
+            if retired_exists {
+                crate::core::records::not_gone(&journal.operation_id);
+            }
+            if !retired_exists
+                && !split
+                && (journal.phase == MovePhase::Retired || !source_exists)
+                && move_cleanup::settling(&journal.operation_id, &source)
+            {
+                return;
+            }
+            if !retired_exists && !split && (journal.phase == MovePhase::Retired || !source_exists)
+            {
                 // Nothing of the original is left for this move to remove —
                 // whatever is at its path now is somebody else's.
                 let mut notes = Vec::new();
@@ -1348,12 +1963,16 @@ fn reconcile_transaction(
                 // 3.11 deleted in place, so its transactions' originals may be
                 // part-removed already; a version-3 original never is.
                 residue_allowed: journal.source_may_be_partial(),
+                split,
+                reappeared,
                 ticker,
             };
             let mut notes = Vec::new();
-            let fate = if retired_exists {
-                // The rename happened. Whatever is at the original path now is
-                // not the original, and is never touched.
+            let fate = if retired_exists || split {
+                // The rename happened, whole or in part. Whatever is at the
+                // original path now is not the original — unless the rename
+                // was split, when it is the original's residue, which the
+                // housekeeping removes after the retired copy.
                 if journal.phase != MovePhase::Retired
                     && let Err(error) = transaction.set_phase(MovePhase::Retired)
                 {
@@ -1364,7 +1983,7 @@ fn reconcile_transaction(
                     return;
                 }
                 bookkeep(&source_base, &journal, target_base, &final_path, &mut notes);
-                SetAside::Retired(transaction)
+                SetAside::Retired(Box::new(transaction))
             } else {
                 move_cleanup::set_aside(transaction, &cleanup, || {
                     bookkeep(&source_base, &journal, target_base, &final_path, &mut notes)
@@ -1391,13 +2010,13 @@ fn settle_or_defer(
         }
         SetAside::Retired(transaction) => match pass.deferred.as_mut() {
             Some(deferred) => deferred.push(Deferred {
-                housekeeping: move_cleanup::Housekeeping::old_copy(transaction, cleanup),
+                housekeeping: move_cleanup::Housekeeping::old_copy(*transaction, cleanup),
                 subject: subject.to_string(),
                 source: cleanup.source.to_path_buf(),
                 final_path: cleanup.final_path.to_path_buf(),
             }),
             None => {
-                let fate = move_cleanup::remove_retired(transaction, cleanup);
+                let fate = move_cleanup::remove_retired(*transaction, cleanup);
                 record_fate(fate, subject, cleanup.source, cleanup.final_path, report);
             }
         },
@@ -1413,10 +2032,18 @@ fn finish_record(
     subject: &str,
     report: &mut ReconcileReport,
 ) {
-    if transaction
+    let old_staging = transaction
         .old_staging_path()
-        .is_some_and(|staging| entry_exists_quiet(&staging))
-    {
+        .map(|staging| (crate::util::paths::presence(&staging), staging));
+    if let Some((crate::util::paths::Presence::Unknown(error), staging)) = &old_staging {
+        report.waiting.push(format!(
+            "{subject}: the move's old staging folder at {} does not answer ({error}); fastf \
+             keeps the record until it does",
+            crate::util::paths::display_path(staging)
+        ));
+        return;
+    }
+    if old_staging.is_some_and(|(presence, _)| presence.is_present()) {
         let staging_shown = crate::util::paths::display_path(&transaction.staging_path());
         // The same mount may have lost the manifest; the sweep then places
         // only what the moved copy lacks.
@@ -1450,12 +2077,206 @@ fn finish_record(
             }
         }
     }
+    let pointer = (transaction.journal.retire == transactions::RetireStrategy::InPlace)
+        .then(|| transaction.pointer_path());
     match transaction.remove() {
-        Ok(()) => report.completed += 1,
+        Ok(()) => {
+            if let Some(pointer) = pointer {
+                let _ = crate::util::fs_retry::remove_file(&pointer);
+            }
+            report.completed += 1
+        }
         Err(error) => report.unrecoverable.push(format!(
             "{subject}: the move is complete, but its record could not be cleared ({error:#})"
         )),
     }
+}
+
+/// A move that paused before its publish, waiting for a mount (`move_engine::
+/// Paused`): every path it names answers again, so it goes on from the copy
+/// it made — the rest of it copied, then published and set aside like any
+/// move.
+fn reconcile_paused(
+    source_base: &Path,
+    target_base: &Path,
+    final_path: &Path,
+    transaction: transactions::MoveTransaction,
+    subject: &str,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let source = transaction.source_path();
+    let project = match crate::core::project_info::read_metadata(&source) {
+        Ok(Some(metadata)) if metadata.id == transaction.journal.project_id => {
+            library::project_from_meta(metadata, source_base, &source)
+        }
+        _ => {
+            report.unrecoverable.push(format!(
+                "{subject}: a paused move's original is not where it was; fastf changed nothing"
+            ));
+            return;
+        }
+    };
+    let local_progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
+    let local_cancel = std::sync::atomic::AtomicBool::new(false);
+    let progress = pass.ticker.progress().unwrap_or(&local_progress);
+    let cancel = pass.ticker.cancel_flag().unwrap_or(&local_cancel);
+    let resumed = crate::core::move_engine::resume_in_parts(
+        &project,
+        target_base,
+        final_path,
+        transaction,
+        progress,
+        cancel,
+    );
+    match resumed {
+        Ok((outcome, housekeeping)) => {
+            report.resumed += 1;
+            match housekeeping {
+                Some(housekeeping) => match pass.deferred.as_mut() {
+                    Some(deferred) => deferred.push(Deferred {
+                        housekeeping,
+                        subject: subject.to_string(),
+                        source: source.clone(),
+                        final_path: final_path.to_path_buf(),
+                    }),
+                    None => {
+                        let fate = housekeeping.run(pass.ticker.uncancellable());
+                        record_fate(fate, subject, &source, final_path, report);
+                    }
+                },
+                None => {
+                    if let Some(warning) = outcome.source.warning(&source) {
+                        report.leftovers.push(format!("{subject}: {warning}"));
+                    }
+                }
+            }
+        }
+        Err(error)
+            if error
+                .downcast_ref::<crate::core::move_engine::Paused>()
+                .is_some() =>
+        {
+            report.waiting.push(format!("{subject}: {error}"));
+        }
+        Err(error) => report.unrecoverable.push(format!(
+            "{subject}: a paused move could not go on ({error:#})"
+        )),
+    }
+}
+
+/// Where an in-place record's paths are, and what the pass found at them.
+struct InPlace<'a> {
+    source_base: &'a Path,
+    target_base: &'a Path,
+    operation_dir: &'a Path,
+    source: &'a Path,
+    final_path: &'a Path,
+    source_exists: bool,
+    /// The folder at the original's path holds another project.
+    foreign: bool,
+}
+
+/// A published move whose original leaves in place (`RetireStrategy::
+/// InPlace`): its `PROJECT_INFO.md` first, then the rest through the merge.
+/// The original's own path is the old copy, so whatever holds our identity
+/// there is still the original, and whatever is there without it is the old
+/// copy's remainder.
+fn reconcile_in_place(
+    at: InPlace,
+    journal: &MoveJournal,
+    transaction: transactions::MoveTransaction,
+    subject: &str,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let mut notes = Vec::new();
+    if at.foreign || !at.source_exists {
+        if !at.foreign && move_cleanup::settling(&journal.operation_id, at.source) {
+            return;
+        }
+        // Nothing of the original is left for this move to remove —
+        // whatever is at its path now is somebody else's.
+        bookkeep(
+            at.source_base,
+            journal,
+            at.target_base,
+            at.final_path,
+            &mut notes,
+        );
+        report.unrecoverable.append(&mut notes);
+        if at.foreign {
+            report.unrecoverable.push(format!(
+                "{subject}: moved to {}; the folder now at {} is a different project, so \
+                 fastf left it alone.",
+                crate::util::paths::display_path(at.final_path),
+                crate::util::paths::display_path(at.source)
+            ));
+        }
+        finish_record(transaction, at.operation_dir, subject, report);
+        return;
+    }
+    let Some(manifest) = read_manifest_or_report(at.operation_dir, subject, report) else {
+        return;
+    };
+    let published = match transaction.read_published() {
+        Ok(published) => published,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{subject}: the move's published record is unreadable ({error:#}); \
+                 fastf changed nothing"
+            ));
+            return;
+        }
+    };
+    let reappeared = crate::core::records::get(&journal.operation_id)
+        .is_some_and(|entry| entry.gone_at.is_some());
+    crate::core::records::not_gone(&journal.operation_id);
+    let cleanup = Cleanup {
+        manifest: &manifest,
+        published: published.as_ref(),
+        source: at.source,
+        final_path: at.final_path,
+        project_id: &journal.project_id,
+        residue_allowed: journal.source_may_be_partial(),
+        split: false,
+        reappeared,
+        ticker: pass.ticker,
+    };
+    let still_the_original = crate::core::project_info::pinfo_path(at.source).is_file();
+    let fate = if still_the_original {
+        // Its `PROJECT_INFO.md` is there: out of the library it goes first.
+        move_cleanup::set_aside(transaction, &cleanup, || {
+            bookkeep(
+                at.source_base,
+                journal,
+                at.target_base,
+                at.final_path,
+                &mut notes,
+            )
+        })
+    } else {
+        let mut transaction = transaction;
+        if journal.phase != MovePhase::Retired
+            && let Err(error) = transaction.set_phase(MovePhase::Retired)
+        {
+            report.unrecoverable.push(format!(
+                "{subject}: could not record that the original was retired ({error:#}); \
+                 fastf changed nothing"
+            ));
+            return;
+        }
+        bookkeep(
+            at.source_base,
+            journal,
+            at.target_base,
+            at.final_path,
+            &mut notes,
+        );
+        SetAside::Retired(Box::new(transaction))
+    };
+    report.unrecoverable.append(&mut notes);
+    settle_or_defer(fate, &cleanup, pass, subject, report);
 }
 
 fn read_manifest_or_report(
@@ -1505,7 +2326,7 @@ fn record_fate(
 ) {
     let shown = |path: &Path| crate::util::paths::display_path(path);
     match fate {
-        SourceFate::Removed { record_kept: None } => report.completed += 1,
+        SourceFate::Removed { record_kept: None } | SourceFate::Settling => report.completed += 1,
         SourceFate::Removed {
             record_kept: Some(reason),
         } => report.unrecoverable.push(format!(
@@ -1518,9 +2339,9 @@ fn record_fate(
             reason,
             redundant: true,
         } => report.leftovers.push(format!(
-            "{subject}: moved to {}; the original's retired copy at {} is not removed yet \
+            "{subject}: moved to {}; the original's old copy at {} is not removed yet \
              ({reason}). Everything in it is in the moved copy too; `fastf reconcile` \
-             tries again, or delete it yourself.",
+             finishes it.",
             shown(final_path),
             shown(&path)
         )),
@@ -1528,13 +2349,20 @@ fn record_fate(
             path,
             reason,
             redundant: false,
-        } => report.leftovers.push(format!(
-            "{subject}: moved to {}; the original's retired copy at {} was kept whole, \
-             because {reason}. fastf keeps it until you have looked; once nothing in it \
-             is needed, remove it and run `fastf reconcile`.",
-            shown(final_path),
-            shown(&path)
-        )),
+        } => {
+            report.needs(
+                &path,
+                crate::core::attention::VerdictKind::Conflict,
+                &format!("what is left of the original differs from the moved copy: {reason}"),
+            );
+            report.leftovers.push(format!(
+                "{subject}: moved to {}; what is left of the original at {} differs from the \
+                 moved copy, so fastf keeps it, with the move's record, until you decide: \
+                 {reason}",
+                shown(final_path),
+                shown(&path)
+            ))
+        }
         SourceFate::KeptWhole { reason } => report.unrecoverable.push(format!(
             "{subject}: moved to {}, but the original at {} is still there and fastf \
              removed nothing: {reason}. `fastf reconcile` tries again once that is \
@@ -1549,6 +2377,56 @@ fn record_fate(
             shown(source)
         )),
     }
+}
+
+/// What is known about a retired folder whose record is gone: which project
+/// it held — by its own `PROJECT_INFO.md`, or by the job that moved it — and
+/// where that project is now.
+fn orphan_note(cfg: &Config, path: &Path, operation: &str) -> String {
+    let Some(id) = orphan_owner(path, operation) else {
+        return String::new();
+    };
+    match library::discover(cfg)
+        .into_iter()
+        .find(|project| project.id == id)
+    {
+        Some(project) => format!(
+            " It holds {id}, which is now at {}.",
+            crate::util::paths::display_path(&project.path)
+        ),
+        None => {
+            format!(" It holds {id}, which fastf finds in no base now — it may be the only copy.")
+        }
+    }
+}
+
+/// A published move whose old copy was removed on a mount that can put it
+/// back, waiting out the settle (`core::records`).
+fn is_settling(journal: &MoveJournal) -> bool {
+    let old_copy = match journal.retire {
+        transactions::RetireStrategy::Rename => {
+            transactions::retired_path(&journal.source_base, &journal.operation_id)
+        }
+        transactions::RetireStrategy::InPlace => journal.source_base.join(&journal.source_folder),
+    };
+    journal.phase.rank() >= MovePhase::CleanupPending.rank()
+        && crate::core::records::get(&journal.operation_id)
+            .is_some_and(|entry| entry.gone_at.is_some())
+        && crate::util::paths::presence(&old_copy).is_absent()
+}
+
+/// Whether `wanted` is still one of the configured bases — by the path the
+/// record holds, without asking the filesystem, which has no answer for an
+/// unplugged drive or a mount that dropped.
+fn is_configured_base(cfg: &Config, wanted: &Path) -> bool {
+    cfg.effective_bases().iter().any(|base| base == wanted)
+        || cfg
+            .bases
+            .iter()
+            .map(String::as_str)
+            .chain(std::iter::once(cfg.base_dir.as_str()))
+            .map(str::trim)
+            .any(|raw| !raw.is_empty() && Path::new(raw) == wanted)
 }
 
 fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
@@ -1577,6 +2455,10 @@ fn remove_owned_file(path: &Path, label: &str) -> Result<()> {
     }
 }
 
+/// Whether something answers at `path` — **for finding work only**. Where a
+/// wrong "absent" would remove something or clear a record, ask
+/// [`crate::util::paths::presence`] and treat its `Unknown` as a reason to
+/// wait.
 fn entry_exists_quiet(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
@@ -1993,15 +2875,18 @@ mod tests {
         assert!(!source.exists());
     }
 
-    /// An original holding something the move did not record is kept whole —
-    /// 3.11's residue or not — and the report names the path and says fastf
-    /// removed nothing.
+    /// **Work written into the original after the scan is kept — in the
+    /// moved copy.** 3.13 kept the whole original, listed twice, for ever. The
+    /// merge carries a file that exists only there into the moved copy
+    /// (within the hour after the publish) and removes the rest. A 3.11 record
+    /// is merged as a residue: nothing is written into the moved copy, and
+    /// what is new stays in the hidden old copy, with its record, named.
     #[test]
-    fn an_original_holding_something_unrecorded_is_kept_and_named() {
+    fn work_written_into_the_original_after_the_scan_is_kept() {
         for from_311 in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let (source_base, target_base, cfg) = bases(temp.path());
-            let (source, _final, transaction) =
+            let (source, final_path, transaction) =
                 published_awaiting_cleanup(&source_base, &target_base);
             let operation = transaction.operation_dir.clone();
             if from_311 {
@@ -2011,16 +2896,32 @@ mod tests {
             fs::write(source.join("written-after.txt"), b"new work").unwrap();
 
             let report = reconcile_unlocked(&cfg);
-            assert_eq!(report.completed, 0, "{report:?}");
-            let said = report.unrecoverable.join("\n");
-            assert!(said.contains("written-after.txt"), "{said}");
-            assert!(said.contains("removed nothing"), "{said}");
-            assert_eq!(
-                fs::read(source.join("written-after.txt")).unwrap(),
-                b"new work"
-            );
-            assert!(operation.is_dir(), "the record stays for the next pass");
-            assert!(hidden_folders(&source_base).is_empty());
+            assert!(!source.exists(), "the original left the library either way");
+            if from_311 {
+                assert_eq!(report.completed, 0, "{report:?}");
+                let said = report.leftovers.join("\n");
+                assert!(said.contains("written-after.txt"), "{said}");
+                assert!(!said.contains("delete"), "{said}");
+                let hidden = hidden_folders(&source_base);
+                assert_eq!(hidden.len(), 1, "{hidden:?}");
+                assert_eq!(
+                    fs::read(source_base.join(&hidden[0]).join("written-after.txt")).unwrap(),
+                    b"new work"
+                );
+                assert!(
+                    !final_path.join("written-after.txt").exists(),
+                    "a residue never writes into the moved copy"
+                );
+                assert!(operation.is_dir(), "the record stays with it");
+            } else {
+                assert_eq!(report.completed, 1, "{report:?}");
+                assert_eq!(
+                    fs::read(final_path.join("written-after.txt")).unwrap(),
+                    b"new work"
+                );
+                assert!(hidden_folders(&source_base).is_empty());
+                assert!(!operation.exists());
+            }
         }
     }
 
@@ -2047,34 +2948,374 @@ mod tests {
         );
     }
 
-    /// A retired copy something has written into since — a program that had a
-    /// file open in the original — holds what exists nowhere else. It is kept
-    /// whole and named, never removed part of the way.
+    /// A file written into the retired copy since — a program that had it
+    /// open in the original — exists nowhere else. Within the hour after the
+    /// publish it is carried into the moved copy; later it stays where it is,
+    /// named, with the record, and only the rest of the old copy goes.
     #[test]
-    fn a_retired_copy_holding_something_unrecorded_is_kept_whole() {
+    fn a_file_written_into_the_retired_copy_is_carried_across_within_the_hour() {
+        for late in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let (source_base, target_base, cfg) = bases(temp.path());
+            let (source, final_path, mut transaction) =
+                published_awaiting_cleanup(&source_base, &target_base);
+            let operation = transaction.operation_dir.clone();
+            let retired = transaction.retired_path();
+            fs::rename(&source, &retired).unwrap();
+            transaction.set_phase(MovePhase::Retired).unwrap();
+            fs::write(retired.join("autosave.tmp"), b"only here").unwrap();
+            if late {
+                let published = fs::File::options()
+                    .write(true)
+                    .open(operation.join(transactions::PUBLISHED_FILE))
+                    .unwrap();
+                published
+                    .set_modified(
+                        std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600),
+                    )
+                    .unwrap();
+            }
+
+            let report = reconcile_unlocked(&cfg);
+            if late {
+                assert_eq!(report.completed, 0, "{report:?}");
+                let said = report.leftovers.join("\n");
+                assert!(said.contains("autosave.tmp"), "{said}");
+                assert_eq!(
+                    fs::read(retired.join("autosave.tmp")).unwrap(),
+                    b"only here"
+                );
+                assert!(
+                    !retired.join("payload.part").exists(),
+                    "what the moved copy holds went"
+                );
+                assert!(!final_path.join("autosave.tmp").exists());
+                assert!(operation.is_dir());
+            } else {
+                assert_eq!(report.completed, 1, "{report:?}");
+                assert_eq!(
+                    fs::read(final_path.join("autosave.tmp")).unwrap(),
+                    b"only here"
+                );
+                assert!(!retired.exists());
+                assert!(!operation.exists());
+            }
+        }
+    }
+
+    /// **An old copy on a mount that does not answer keeps its record.** 3.13
+    /// read the error as "gone", cleared the record, and left a folder no
+    /// reconcile would touch again ("no record of the move left … delete it
+    /// yourself"). Now the pass waits, changes nothing, and the next one that
+    /// can look finishes.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_path_that_does_not_answer_keeps_the_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, mut transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let retired = transaction.retired_path();
+        fs::rename(&source, &retired).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+        let operation = transaction.operation_dir.clone();
+
+        let report = crate::util::faults::with_thread_fault("presence:lstat:eio", || {
+            reconcile_unlocked(&cfg)
+        });
+        assert_eq!(report.completed, 0, "{report:?}");
+        assert_eq!(report.waiting.len(), 1, "{report:?}");
+        assert!(report.waiting[0].contains("does not answer"), "{report:?}");
+        assert!(
+            !report.needs_a_look(),
+            "waiting is not a person's job: {report:?}"
+        );
+        assert!(retired.join("payload.part").is_file(), "nothing removed");
+        assert!(operation.is_dir(), "the record stays");
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(!retired.exists());
+        assert!(!operation.exists());
+        assert_eq!(
+            fs::read(final_path.join("payload.part")).unwrap(),
+            [0_u8, 1, 255]
+        );
+    }
+
+    /// A base that is still configured but not mounted is waited for, not
+    /// reported as gone: an unplugged drive is ordinary.
+    #[test]
+    fn a_source_base_that_is_not_mounted_is_waited_for() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (_source, _final, transaction) = published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let unplugged = temp.path().join("unplugged");
+        fs::rename(&source_base, &unplugged).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(
+            report.waiting.len(),
+            2,
+            "the base, and the move on it: {report:?}"
+        );
+        assert!(report.unrecoverable.is_empty(), "{report:?}");
+        assert!(!report.needs_a_look(), "{report:?}");
+        assert!(operation.is_dir(), "the record stays");
+        fs::rename(&unplugged, &source_base).unwrap();
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+    }
+
+    /// **A rename that stopped part of the way** — an S3 bucket through rclone
+    /// copies and deletes object by object — leaves part of the original at
+    /// its path and part at its retired name. Both are the move's own: the
+    /// retired half goes, then what is left of the original, and the record
+    /// only after both. 3.13 removed the retired half, cleared the record, and
+    /// left the rest listed as the project.
+    #[test]
+    fn a_split_rename_is_finished_on_both_halves() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let retired = transaction.retired_path();
+        fs::create_dir(&retired).unwrap();
+        fs::rename(source.join("payload.part"), retired.join("payload.part")).unwrap();
+        fs::rename(source.join("empty"), retired.join("empty")).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(!retired.exists(), "the retired half is removed");
+        assert!(
+            !source.exists(),
+            "and so is the half left at the original's path"
+        );
+        assert!(!operation.exists(), "the record goes last");
+        assert_eq!(
+            fs::read(final_path.join("payload.part")).unwrap(),
+            [0_u8, 1, 255]
+        );
+    }
+
+    /// A split whose half at the original's path holds something the move did
+    /// not record, beside our identity, is not a residue: both halves wait
+    /// for a person, and so does the record.
+    #[test]
+    fn a_split_half_holding_something_new_is_kept_with_its_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, _final, transaction) = published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let retired = transaction.retired_path();
+        fs::create_dir(&retired).unwrap();
+        fs::rename(source.join("payload.part"), retired.join("payload.part")).unwrap();
+        fs::write(source.join("notes-since.txt"), b"written since").unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 0, "{report:?}");
+        assert_eq!(
+            fs::read(source.join("notes-since.txt")).unwrap(),
+            b"written since"
+        );
+        assert!(operation.is_dir(), "the record stays");
+        assert!(
+            report.leftovers.join("\n").contains("notes-since.txt"),
+            "{report:?}"
+        );
+    }
+
+    /// A folder a program made again at the original's path in the moment
+    /// between the retire and its record holds no identity and nothing the
+    /// move recorded: it is not a residue, it is left alone, and the move is
+    /// finished.
+    #[test]
+    fn a_folder_made_again_before_retired_was_recorded_is_left_alone() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, _final, transaction) = published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let retired = transaction.retired_path();
+        fs::rename(&source, &retired).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("saved-late.txt"), b"late").unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(!retired.exists());
+        assert!(!operation.exists());
+        assert_eq!(fs::read(source.join("saved-late.txt")).unwrap(), b"late");
+    }
+
+    /// A record whose publish could not read its own `PROJECT_INFO.md` back
+    /// left it out of `published.json`; every 3.13 pass then failed "not in
+    /// the copy that was published", for ever.
+    #[test]
+    fn a_published_record_without_project_info_still_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, _final, transaction) = published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        let published_path = operation.join(transactions::PUBLISHED_FILE);
+        let mut published: serde_json::Value =
+            serde_json::from_slice(&fs::read(&published_path).unwrap()).unwrap();
+        published["entries"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|entry| entry["path"] != crate::core::project_info::RESERVED_FILENAME);
+        fs::write(&published_path, serde_json::to_vec(&published).unwrap()).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(!source.exists());
+        assert!(!operation.exists());
+    }
+
+    /// A moved copy missing entries after the original was retired is
+    /// completed from the retired copy — where the original's entries are by
+    /// then. 3.13 read the original's old, empty path, so this could never
+    /// finish.
+    #[test]
+    fn a_moved_copy_missing_entries_after_the_retire_is_completed_from_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, mut transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let retired = transaction.retired_path();
+        fs::rename(&source, &retired).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+        fs::remove_file(final_path.join("payload.part")).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert_eq!(
+            fs::read(final_path.join("payload.part")).unwrap(),
+            [0_u8, 1, 255]
+        );
+        assert!(!retired.exists());
+    }
+
+    /// **The settle.** On a mount that can put a removed folder back (rclone
+    /// did, on R2, minutes after a move said its old copy was removed), the
+    /// record outlives the removal: a pass inside the settle keeps it without
+    /// anyone being told, one after it clears it, and an old copy that came
+    /// back is removed by the record that is still there.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_removal_on_a_mount_that_can_put_it_back_waits_out_the_settle() {
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
         let temp = tempfile::tempdir().unwrap();
         let (source_base, target_base, cfg) = bases(temp.path());
         let (source, _final, mut transaction) =
             published_awaiting_cleanup(&source_base, &target_base);
         let operation = transaction.operation_dir.clone();
+        let id = transaction.journal.operation_id.clone();
+        crate::core::records::add(&crate::core::records::Entry {
+            operation: id.clone(),
+            kind: "move".to_string(),
+            record: operation.clone(),
+            source_base: source_base.clone(),
+            target_base: target_base.clone(),
+            ..Default::default()
+        });
+        let retired = transaction.retired_path();
+        let modified = fs::metadata(source.join("payload.part"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        fs::rename(&source, &retired).unwrap();
+        transaction.set_phase(MovePhase::Retired).unwrap();
+
+        crate::util::faults::with_thread_fault("fs:as-rclone", || {
+            let report = reconcile_unlocked(&cfg);
+            assert_eq!(report.completed, 1, "{report:?}");
+            assert!(!retired.exists(), "the old copy is removed");
+            assert!(operation.is_dir(), "the record waits out the settle");
+            assert!(
+                list_incomplete(&cfg).is_empty(),
+                "a settling record is nobody's business"
+            );
+
+            // The mount puts part of it back: the upload it still had queued,
+            // the same bytes with the same time.
+            fs::create_dir(&retired).unwrap();
+            fs::write(retired.join("payload.part"), [0_u8, 1, 255]).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(retired.join("payload.part"))
+                .unwrap()
+                .set_modified(modified)
+                .unwrap();
+            let report = reconcile_unlocked(&cfg);
+            assert!(!retired.exists(), "what came back is removed: {report:?}");
+            assert!(operation.is_dir(), "and the settle starts again");
+
+            // Ten minutes on, still gone: the record goes.
+            let mut entry = crate::core::records::get(&id).unwrap();
+            entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS);
+            crate::core::records::add(&entry);
+            let report = reconcile_unlocked(&cfg);
+            assert!(!operation.exists(), "{report:?}");
+            assert_eq!(crate::core::records::get(&id), None, "and its index entry");
+        });
+    }
+
+    /// A move's record in a base since dropped from `bases` is still found,
+    /// through the data dir's index, and its old copy is finished — not
+    /// reported as having "no record of the move left".
+    #[test]
+    fn a_record_in_a_base_no_longer_configured_is_found_through_the_index() {
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, _) = bases(temp.path());
+        let (source, final_path, mut transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let operation = transaction.operation_dir.clone();
+        crate::core::records::add(&crate::core::records::Entry {
+            operation: transaction.journal.operation_id.clone(),
+            kind: "move".to_string(),
+            record: operation.clone(),
+            source_base: source_base.clone(),
+            target_base: target_base.clone(),
+            ..Default::default()
+        });
         let retired = transaction.retired_path();
         fs::rename(&source, &retired).unwrap();
         transaction.set_phase(MovePhase::Retired).unwrap();
-        fs::write(retired.join("autosave.tmp"), b"only here").unwrap();
+
+        let report = reconcile_unlocked(&config_for(&source_base));
+        assert_eq!(report.completed, 1, "{report:?}");
+        assert!(report.leftovers.is_empty(), "{report:?}");
+        assert!(!retired.exists());
+        assert!(!operation.exists());
+        assert!(final_path.join("payload.part").is_file());
+    }
+
+    /// A record killed between making its folder and finishing its journal
+    /// holds nothing else — a move writes its manifest next, and only then
+    /// copies — and is removed rather than called invalid for ever.
+    #[test]
+    fn a_record_killed_before_its_journal_was_written_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let root = transactions::ensure_transaction_root(&target_base).unwrap();
+        let torn = root.join("18d8e31be3d08289-eae64-7");
+        fs::create_dir(&torn).unwrap();
+        fs::write(
+            torn.join(transactions::JOURNAL_FILE),
+            b"{\"version\":3,\"operat",
+        )
+        .unwrap();
+        let empty = root.join("18d8e31be3d08289-eae64-8");
+        fs::create_dir(&empty).unwrap();
+        let _ = source_base;
 
         let report = reconcile_unlocked(&cfg);
-        assert_eq!(report.completed, 0, "{report:?}");
-        let said = report.leftovers.join("\n");
-        assert!(
-            said.contains("kept whole") && said.contains("autosave.tmp"),
-            "{said}"
-        );
-        assert_eq!(
-            fs::read(retired.join("autosave.tmp")).unwrap(),
-            b"only here"
-        );
-        assert!(retired.join("payload.part").is_file(), "kept whole");
-        assert!(operation.is_dir());
+        assert_eq!(report.cleared, 2, "{report:?}");
+        assert!(report.unrecoverable.is_empty(), "{report:?}");
+        assert!(!torn.exists() && !empty.exists());
     }
 
     /// Something written at the original's path after it was retired — an
@@ -2376,14 +3617,15 @@ mod tests {
     }
 
     /// A moved copy that holds an *older* file than was published — restored
-    /// from a backup taken before the move — is not something fastf overwrites
-    /// or removes the original for. Both are kept, and nobody is told to
-    /// delete anything.
+    /// from a backup taken before the move — is not something fastf
+    /// overwrites, or removes the original's version for. The original leaves
+    /// the library; that one file of it stays, hidden, with the record, and
+    /// nobody is told to delete anything.
     #[test]
-    fn a_moved_copy_older_than_published_keeps_both_and_advises_no_deletion() {
+    fn a_moved_copy_older_than_published_keeps_the_originals_version() {
         let temp = tempfile::tempdir().unwrap();
         let (source_base, target_base, cfg) = bases(temp.path());
-        let (source, final_path, _transaction) =
+        let (source, final_path, transaction) =
             published_awaiting_cleanup(&source_base, &target_base);
         let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86_400);
         let file = fs::File::options()
@@ -2395,11 +3637,24 @@ mod tests {
 
         let report = reconcile_unlocked(&cfg);
         assert_eq!(report.completed, 0, "{report:?}");
-        let said = report.unrecoverable.join("\n");
+        let said = report.leftovers.join("\n");
         assert!(said.contains("older in the moved copy"), "{said}");
-        assert!(said.contains("both copies are listed"), "{said}");
         assert!(!said.contains("delete"), "{said}");
-        assert!(source.join("payload.part").is_file(), "kept whole");
+        assert!(!source.exists(), "the original left the library");
+        let hidden = hidden_folders(&source_base);
+        assert_eq!(hidden.len(), 1, "{hidden:?}");
+        let kept = source_base.join(&hidden[0]);
+        assert!(
+            kept.join("payload.part").is_file(),
+            "the original's version is kept"
+        );
+        assert!(
+            !kept
+                .join(crate::core::project_info::RESERVED_FILENAME)
+                .exists(),
+            "and only what differs"
+        );
+        assert!(transaction.operation_dir.is_dir(), "with its record");
     }
 
     /// A copy made in its final place and killed before `PROJECT_INFO.md`
@@ -2698,7 +3953,7 @@ mod tests {
                 }
                 cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             });
-            crate::util::faults::with_thread_fault("remove:each-entry:delay-10", || {
+            crate::util::faults::with_thread_fault("pool:serial,remove:each-entry:delay-10", || {
                 reconcile_unlocked_with(&cfg, Ticker::new(&progress, &cancel))
             })
         });
@@ -2731,5 +3986,293 @@ mod tests {
                 format!("\"{name}\"")
             );
         }
+    }
+
+    /// A copy of the project at `project` as a recordless old copy beside
+    /// it in `source_base`, the way 3.13 left them: renamed aside, record
+    /// gone.
+    fn recordless_copy_of(project: &Path, source_base: &Path) -> PathBuf {
+        let old = source_base.join(".fastf-moved-18d8e2f16082c791-e6a94-0");
+        fs::create_dir_all(old.join("empty")).unwrap();
+        for name in ["payload.part", crate::core::project_info::RESERVED_FILENAME] {
+            fs::copy(project.join(name), old.join(name)).unwrap();
+        }
+        old
+    }
+
+    /// **An old copy 3.13 left without a record is finished by content.**
+    /// Every entry the project holds the same, byte for byte, goes; what
+    /// differs stays, named. No record is needed: nothing removed exists
+    /// nowhere else.
+    #[test]
+    fn a_recordless_old_copy_goes_where_the_project_holds_the_same() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let moved = write_project(&target_base, "project", "ID0001");
+        let old = recordless_copy_of(&moved, &source_base);
+
+        let report = reconcile_unlocked(&cfg);
+        assert!(!old.exists(), "{report:?}");
+        assert_eq!(report.cleared, 1, "{report:?}");
+        assert!(
+            moved.join("payload.part").is_file(),
+            "the project is untouched"
+        );
+
+        let old = recordless_copy_of(&moved, &source_base);
+        fs::write(old.join("payload.part"), b"edited only here").unwrap();
+        fs::write(old.join("extra.txt"), b"only here too").unwrap();
+        let report = reconcile_unlocked(&cfg);
+        let said = report.leftovers.join("\n");
+        assert!(
+            said.contains("payload.part") && said.contains("extra.txt"),
+            "{said}"
+        );
+        assert_eq!(
+            fs::read(old.join("payload.part")).unwrap(),
+            b"edited only here"
+        );
+        assert!(old.join("extra.txt").is_file());
+        assert!(!old.join("empty").exists(), "what the project holds went");
+        assert!(
+            !old.join(crate::core::project_info::RESERVED_FILENAME)
+                .exists(),
+            "its PROJECT_INFO.md is the project's but for its place"
+        );
+    }
+
+    /// An empty folder a cloud mount put back after an old copy was removed
+    /// holds nothing to lose, and goes; an old copy whose project fastf
+    /// cannot find is kept whole, and says so.
+    #[test]
+    fn a_recordless_marker_goes_and_an_unknown_projects_copy_stays() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let marker = source_base.join(".fastf-moved-18d8e4375a9294cf-10a6c5-0");
+        fs::create_dir_all(marker.join("nested/empty")).unwrap();
+        let elsewhere = temp.path().join("elsewhere");
+        let moved = write_project(&elsewhere, "project", "ID0042");
+        let orphan = recordless_copy_of(&moved, &source_base);
+        let _ = target_base;
+
+        let report = reconcile_unlocked(&cfg);
+        assert!(!marker.exists(), "{report:?}");
+        assert!(orphan.join("payload.part").is_file(), "kept whole");
+        let said = report.leftovers.join("\n");
+        assert!(said.contains("cannot find the project"), "{said}");
+    }
+
+    /// An in-place retire's pointer outlives its record only when a pass
+    /// stopped between the two: with its folder gone it is removed; with its
+    /// folder a project again, it names nothing to remove and goes too.
+    #[test]
+    fn a_pointer_without_its_record_goes() {
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let pointer = transactions::RetirePointer {
+            version: 1,
+            operation: "18d8e2f16082c791-e6a94-0".to_string(),
+            project_id: "ID0001".to_string(),
+            folder: PathBuf::from("gone"),
+            target_base: target_base.clone(),
+            target_folder: PathBuf::from("gone"),
+        };
+        let path = transactions::pointer_path(&source_base, &pointer.operation);
+        fs::write(&path, serde_json::to_vec(&pointer).unwrap()).unwrap();
+
+        let report = reconcile_unlocked(&cfg);
+        assert!(!path.exists(), "{report:?}");
+
+        write_project(&source_base, "gone", "ID0001");
+        fs::write(&path, serde_json::to_vec(&pointer).unwrap()).unwrap();
+        let report = reconcile_unlocked(&cfg);
+        assert!(!path.exists(), "{report:?}");
+        assert!(
+            source_base.join("gone/payload.part").is_file(),
+            "the project stays"
+        );
+    }
+
+    /// **A conflict needs you until a version is chosen**, and then nothing
+    /// does: keeping the moved copy's version removes the old copy; taking
+    /// the old copy's puts it into the moved one first. Either way the move
+    /// finishes, and attention is empty.
+    #[test]
+    fn a_conflict_needs_you_until_a_version_is_chosen() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        for keep in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let (source_base, target_base, cfg) = bases(temp.path());
+            let (source, final_path, mut transaction) =
+                published_awaiting_cleanup(&source_base, &target_base);
+            let retired = transaction.retired_path();
+            fs::rename(&source, &retired).unwrap();
+            transaction.set_phase(MovePhase::Retired).unwrap();
+            fs::write(retired.join("payload.part"), b"the old side").unwrap();
+            fs::write(final_path.join("payload.part"), b"the moved side").unwrap();
+
+            let report = reconcile_unlocked(&cfg);
+            assert_eq!(report.completed, 0, "{report:?}");
+            let now = attention(&cfg);
+            let item = now
+                .items
+                .iter()
+                .find(|item| item.state == State::NeedsYou)
+                .unwrap_or_else(|| panic!("{now:?}"));
+            assert_eq!(item.path, retired);
+            assert_eq!(item.actions, vec![Action::KeepMoved, Action::TakeOld]);
+            assert_eq!(now.needs_you(), 1);
+
+            let action = if keep {
+                Action::KeepMoved
+            } else {
+                Action::TakeOld
+            };
+            resolve(&cfg, &retired, action).unwrap();
+            assert!(!retired.exists());
+            assert_eq!(
+                fs::read(final_path.join("payload.part")).unwrap(),
+                if keep {
+                    b"the moved side".to_vec()
+                } else {
+                    b"the old side".to_vec()
+                }
+            );
+            assert!(!transaction.operation_dir.exists(), "the move is finished");
+            let after = attention(&cfg);
+            assert!(after.items.is_empty(), "{after:?}");
+        }
+    }
+
+    /// An old copy with no record whose project fastf cannot find needs you:
+    /// put it back as the project, or discard it.
+    #[test]
+    fn an_old_copy_nobody_can_place_is_put_back() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, _target_base, cfg) = bases(temp.path());
+        let elsewhere = temp.path().join("elsewhere");
+        let moved = write_project(&elsewhere, "project", "ID0042");
+        // The list holds the bases' spelling of a path: on Windows, verbatim.
+        let old = crate::util::paths::canonical(&recordless_copy_of(&moved, &source_base)).unwrap();
+        fs::remove_dir_all(&elsewhere).unwrap();
+
+        reconcile_unlocked(&cfg);
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.path == old)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::NeedsYou);
+        assert_eq!(item.actions, vec![Action::PutBack, Action::Discard]);
+
+        resolve(&cfg, &old, Action::PutBack).unwrap();
+        assert!(!old.exists());
+        assert!(source_base.join("project/payload.part").is_file());
+        assert!(
+            crate::core::library::discover(&cfg)
+                .iter()
+                .any(|project| project.id == "ID0042"),
+            "it is the project again"
+        );
+        assert!(attention(&cfg).items.is_empty());
+    }
+
+    /// A move begun on another machine needs you, and discarding it removes
+    /// its record and nothing else.
+    #[test]
+    fn a_move_from_another_machine_is_discarded_record_only() {
+        use crate::core::attention::{Action, State, attention, resolve};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let (source, final_path, transaction) =
+            published_awaiting_cleanup(&source_base, &target_base);
+        let operation = crate::util::paths::canonical(&transaction.operation_dir).unwrap();
+        edit_journal(&operation, |journal| {
+            journal.insert("host".into(), serde_json::json!("elsewhere"));
+            journal.insert("machine".into(), serde_json::json!("0000another0machine"));
+        });
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.path == operation)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::NeedsYou);
+        assert!(item.reason.contains("elsewhere"), "{}", item.reason);
+        assert!(
+            resolve(&cfg, &operation, Action::PutBack).is_err(),
+            "not offered"
+        );
+        resolve(&cfg, &operation, Action::Discard).unwrap();
+        assert!(!operation.exists());
+        assert!(
+            source.join("payload.part").is_file(),
+            "the original is untouched"
+        );
+        assert!(final_path.is_dir(), "and the moved copy");
+    }
+
+    /// An old copy waiting out the settle is a quiet waiting item — not
+    /// counted in the header — until its time is up; then it is fastf's to
+    /// finish, so the app's own reconcile clears the record.
+    #[test]
+    fn a_settling_old_copy_waits_quietly_then_is_fastfs_to_finish() {
+        use crate::core::attention::{A_SETTLE, State, attention};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        let source_base = crate::util::paths::canonical(&source_base).unwrap();
+        let operation = "18d8f68b4e22da23-378707-0".to_string();
+        let mut entry = crate::core::records::Entry {
+            operation: operation.clone(),
+            kind: "move".to_string(),
+            project_id: "ID0007".to_string(),
+            record: target_base.join(".fastf-transactions").join(&operation),
+            source_base: source_base.clone(),
+            source_folder: PathBuf::from("2026-01-01_Cloud_ID0007"),
+            gone_at: Some(crate::util::time::now_unix() - 60),
+            ..crate::core::records::Entry::default()
+        };
+        crate::core::records::add(&entry);
+        let now = attention(&cfg);
+        let item = now
+            .items
+            .iter()
+            .find(|item| item.what == A_SETTLE)
+            .unwrap_or_else(|| panic!("{now:?}"));
+        assert_eq!(item.state, State::Waiting);
+        assert!(item.reason.contains("looks again in"), "{}", item.reason);
+        assert_eq!(now.waiting_work(), 0, "nothing for the header to count");
+
+        entry.gone_at = Some(crate::util::time::now_unix() - crate::core::records::SETTLE_SECS - 1);
+        crate::core::records::add(&entry);
+        let later = attention(&cfg);
+        let item = later
+            .items
+            .iter()
+            .find(|item| item.what == A_SETTLE)
+            .unwrap_or_else(|| panic!("{later:?}"));
+        assert_eq!(item.state, State::Auto, "its time is up: fastf's to finish");
+        assert_eq!(later.auto(), 1);
+    }
+
+    /// An interrupted move fastf can finish is not a person's business.
+    #[test]
+    fn an_interrupted_move_is_finished_by_fastf() {
+        use crate::core::attention::{State, attention};
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let temp = tempfile::tempdir().unwrap();
+        let (source_base, target_base, cfg) = bases(temp.path());
+        published_awaiting_cleanup(&source_base, &target_base);
+        let now = attention(&cfg);
+        assert_eq!(now.items.len(), 1, "{now:?}");
+        assert_eq!(now.items[0].state, State::Auto);
+        assert_eq!(now.auto(), 1);
+        assert_eq!(now.needs_you(), 0);
     }
 }

@@ -11,6 +11,7 @@
 //! `impl App` for the keys and answers that belong to it.
 
 pub mod actions;
+pub mod attention;
 pub mod background;
 pub mod data;
 pub mod jobs;
@@ -47,7 +48,7 @@ use crate::tui::theme::Theme;
 use crate::tui::validators;
 use crate::util::diag::Level;
 use crate::util::size_scan::SizeCell;
-use data::{ProjectDetail, Summary, TemplateCard};
+use data::{ProjectDetail, Summary, SummaryPart, TemplateCard};
 use library::{LibraryState, Order, Sort};
 use modal::{Activity, ActivityPage, MessageLevel, Modal, ModalStack, PickItem, PickState, Then};
 use search::SearchState;
@@ -206,6 +207,11 @@ pub struct App {
     pub library: LibraryState,
     pub search: SearchState,
     pub summary: Option<Summary>,
+    /// The read each part of the summary last came from (`SummaryPart::slot`).
+    pub summary_seen: [u64; 3],
+    /// When the last summary landed (`elapsed_ms`): the clock the look
+    /// again while something waits for a base runs on.
+    pub summary_at: Option<u64>,
     pub summary_error: Option<String>,
     pub details: HashMap<PathBuf, ProjectDetail>,
     pub detail_open: bool,
@@ -348,6 +354,8 @@ impl App {
             library: LibraryState::new(),
             search: SearchState::default(),
             summary: None,
+            summary_seen: [0; 3],
+            summary_at: None,
             summary_error: None,
             details: HashMap::new(),
             detail_open: true,
@@ -782,6 +790,81 @@ impl App {
 
     // --- the library ------------------------------------------------------
 
+    /// Rows landed — a whole library, or one base's.
+    fn rows_arrived(&mut self) -> Vec<Effect> {
+        self.recompute();
+        let mut effects = self.refresh_templates();
+        // A create or a register asked for its new project to be selected;
+        // it exists only once discovery has seen it.
+        if let Some(path) = self.select_when_found.clone()
+            && self.library.select_path(&path)
+        {
+            self.select_when_found = None;
+        }
+        // The remembered row, as soon as the base that holds it answers.
+        if let Some(id) = self.select_id_when_found.clone()
+            && self.library.select_id(&id)
+        {
+            self.select_id_when_found = None;
+        }
+        effects.extend(self.after_rows_changed());
+        effects
+    }
+
+    /// A discovery ended. The remembered row is looked for no longer: a
+    /// later discovery is a reload, and the cursor is wherever the user has
+    /// since put it. A change made meanwhile asks for one more.
+    fn discovery_over(&mut self) -> Vec<Effect> {
+        self.select_id_when_found = None;
+        if self.library.dirty {
+            self.library.dirty = false;
+            return vec![self.discover()];
+        }
+        Vec::new()
+    }
+
+    /// **One part of the summary** (`SummaryPart`), unless a later read's
+    /// part is already in: a slow read answering after a newer one must not
+    /// put an older template list or base list back.
+    fn install_summary_part(&mut self, generation: u64, part: SummaryPart) -> Vec<Effect> {
+        let slot = part.slot();
+        if generation < self.summary_seen[slot] {
+            return Vec::new();
+        }
+        self.summary_seen[slot] = generation;
+        self.summary_error = None;
+        let summary = self.summary.get_or_insert_with(|| Summary {
+            probing: true,
+            ..Summary::default()
+        });
+        match part {
+            SummaryPart::Local { templates, prefs } => {
+                summary.templates = templates;
+                summary.prefs = prefs;
+                // A template written or deleted is a change to the templates
+                // tab's list, whether or not that tab is the one on screen.
+                self.refresh_templates()
+            }
+            SummaryPart::Bases {
+                bases,
+                projects,
+                max_id,
+                newest,
+            } => {
+                summary.bases = bases;
+                summary.projects = projects;
+                summary.max_id = max_id;
+                summary.newest = newest;
+                summary.probing = false;
+                Vec::new()
+            }
+            SummaryPart::Attention(attention) => {
+                summary.attention = attention;
+                self.maybe_finish_leftovers()
+            }
+        }
+    }
+
     fn discover(&mut self) -> Effect {
         self.next_generation += 1;
         self.library.inflight = Some(self.next_generation);
@@ -1078,7 +1161,7 @@ impl App {
                 if !motion::focus_easing(self.focus_moved_at, self.elapsed_ms) {
                     self.focus_moved_at = None;
                 }
-                Vec::new()
+                self.look_again_while_waiting()
             }
             Msg::Sizes(cells) => {
                 for (path, size) in cells {
@@ -1109,8 +1192,11 @@ impl App {
                 self.summary_error = None;
                 // A template written or deleted is a change to the templates
                 // tab's list, whether or not that tab is the one on screen.
-                self.refresh_templates()
+                let mut effects = self.refresh_templates();
+                effects.extend(self.maybe_finish_leftovers());
+                effects
             }
+            Msg::SummaryPart { generation, part } => self.install_summary_part(generation, *part),
             Msg::SummaryFailed(error) => {
                 self.summary_error = Some(error.clone());
                 self.error(format!("the library summary could not be read: {error}"));
@@ -1123,27 +1209,34 @@ impl App {
                 if !self.library.install(generation, projects) {
                     return Vec::new();
                 }
-                self.recompute();
-                let mut effects = self.refresh_templates();
-                // A create or a register asked for its new project to be
-                // selected; it exists only once discovery has seen it.
-                if let Some(path) = self.select_when_found.clone()
-                    && self.library.select_path(&path)
-                {
-                    self.select_when_found = None;
+                let mut effects = self.rows_arrived();
+                effects.extend(self.discovery_over());
+                effects
+            }
+            Msg::DiscoveryPlanned { generation, bases } => {
+                if self.library.plan(generation, bases) {
+                    self.rows_arrived()
+                } else {
+                    Vec::new()
                 }
-                // The remembered row is applied once, on the first answer: a
-                // later discovery is a reload, and the cursor is wherever the
-                // user has since put it.
-                if let Some(id) = self.select_id_when_found.take() {
-                    self.library.select_id(&id);
+            }
+            Msg::DiscoveredBase {
+                generation,
+                base,
+                projects,
+            } => {
+                if self.library.install_base(generation, base, projects) {
+                    self.rows_arrived()
+                } else {
+                    Vec::new()
                 }
-                effects.extend(self.after_rows_changed());
-
-                if self.library.dirty {
-                    self.library.dirty = false;
-                    effects.push(self.discover());
+            }
+            Msg::DiscoverySettled { generation, silent } => {
+                if !self.library.settle(generation, silent) {
+                    return Vec::new();
                 }
+                let mut effects = self.rows_arrived();
+                effects.extend(self.discovery_over());
                 effects
             }
             Msg::DiscoverFailed { generation, error } => {
@@ -1216,6 +1309,7 @@ impl App {
             }
             Msg::Jobs(jobs) => self.on_jobs(jobs),
             Msg::JobStarted(started) => self.on_job_started(started),
+            Msg::AutoReconcileStarted(started) => self.on_auto_reconcile_started(started),
             Msg::TemplateLoaded { slug, result } => self.on_template_loaded(&slug, result),
             Msg::TemplateSourceLoaded { slug, result } => {
                 let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
@@ -2523,6 +2617,7 @@ impl App {
             CommandId::Templates => self.toggle_templates(),
             CommandId::Settings => self.open_settings(),
             CommandId::Reconcile => self.run_job(settings::Job::Reconcile),
+            CommandId::Attention => self.open_attention(),
             // `f` on the templates tab: filter the library by this template
             // **and go back to it**. The old strip set the filter and left you
             // looking at the strip, which is the one place the answer is not.
@@ -2679,11 +2774,10 @@ impl App {
     /// offered, mounted or not — an unmounted one showing `0` is the answer to
     /// "where did those projects go", where hiding it is not.
     fn open_base_filter(&mut self) -> Vec<Effect> {
-        let Some(summary) = &self.summary else {
+        let Some(bases) = self.summary.as_ref().and_then(Summary::bases_known) else {
             return Vec::new();
         };
-        let mut items: Vec<PickItem> = summary
-            .bases
+        let mut items: Vec<PickItem> = bases
             .iter()
             .map(|base| PickItem {
                 label: base.label.clone(),

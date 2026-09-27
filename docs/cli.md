@@ -30,7 +30,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
-| `fastf reconcile` | Recover scoped v2 work and report obsolete pre-v2 markers |
+| `fastf reconcile` / `--list` / `--resolve` | Finish what moves, copies, deletes and creates left; list what is unfinished; settle what needs you |
 | `fastf jobs` / `watch` / `cancel` | Moves, copies, deletes and reconciles running now or lately |
 | `fastf messages` | What fastf said to you, in the app and here, from every session |
 | `fastf log` | Everything fastf did: every step of every move and reconcile, every warning |
@@ -421,7 +421,7 @@ fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one rename and removes it. Keep the project untouched while that copy is running. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. Changes made to the project while it moves are kept. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
 nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
@@ -474,8 +474,8 @@ missing anything, fastf copies it again from the original, which stays whole
 until the copy is complete. If the original cannot then be set aside — a
 program has a file in it open — the move says that the original is still there,
 whole, that nothing in it was removed, and why; `fastf reconcile` finishes the
-move once that is resolved, without copying again. In the app, `fastf
-reconcile` is the `!` key, named Reconcile.
+move once that is resolved, without copying again. The app runs that
+reconcile by itself; its `!` key lists what is unfinished.
 Same-filesystem moves finish instantly and print nothing extra.
 
 **Symlinks and junctions** travel as links, pointing exactly where they did, and
@@ -562,8 +562,19 @@ inside the project, it refuses before removing anything and says why.
 ### Interrupted-operation recovery
 
 ```bash
-fastf reconcile
+fastf reconcile                      # finish what fastf can
+fastf reconcile --list               # what is unfinished, and who finishes it; changes nothing
+fastf reconcile --resolve <path> keep-moved   # settle one item that needs you
 ```
+
+`--list` sorts what is unfinished by who finishes it: **fastf** (a reconcile
+does — the app starts one by itself), **waiting** (for a base that is not
+mounted or does not answer), or **needs you**, each with its reason and the
+exact commands that settle it. Only a few things need you: an old copy holding
+something that differs from the moved copy (`keep-moved` or `take-old`), an
+old copy whose project fastf cannot find (`put-back` or `discard`), a move
+another machine began, a record fastf cannot read. `discard` asks for the word
+unless `--yes`.
 
 Scoped v2 create journals let `reconcile` finish missing deferred copies after
 validating the template, project identity, relative paths, entry types, and byte
@@ -604,7 +615,7 @@ copy is authoritative.
 ## Jobs
 
 ```bash
-fastf jobs                  # every job, newest first: running, done, failed, stopped
+fastf jobs                  # every job, newest first: running, done, failed, paused, stopped
 fastf jobs watch            # follow the newest running job until it ends
 fastf jobs watch <id>
 fastf jobs cancel           # ask the newest running job to stop
@@ -622,6 +633,18 @@ A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
 after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
 between items. A job whose process was killed shows as `stopped`;
 `fastf reconcile` finishes what it left, whole.
+
+**A job waits out a filesystem that stops answering.** When nothing has moved
+for five seconds its line says so — `no answer from /mnt/cloud for 42 s; fastf
+waits for it` — and it goes on once the mount answers: an error a mount gives
+while it restarts is asked again, and a mount that drops is waited for, up to
+two minutes at a time. A move whose mount is still gone after that, before its
+copy is published, is `paused`: what it copied is kept, and it goes on from
+there when you move the project again, or with `fastf reconcile` once the mount
+is back. Only what fastf cannot fix stops a job — no permission, a program
+writing a file in the project, a full or read-only drive, a name the drive will
+not take — and then the first thing it says is what kind of problem it is and
+what to do.
 
 While a move copies it holds the library's lock, so a change made elsewhere
 meanwhile — a tag, a note — waits, and says which job it waits for. Removing
@@ -651,9 +674,9 @@ The log is everything, one line per event:
 
 — the time (UTC), the level, the job, the process, and what happened. Every
 step of every move, copy and reconcile is there with its count, and so is every
-warning. With `config set log-level debug` it also holds a line for every entry
-a move touches, which is what to read when a removal on a network drive seems
-slow. `--follow` keeps printing new events, from any fastf process, until
+warning. With `config set log-level trace` it also holds a line for every
+entry a move touches, which is what to read when a removal on a network drive
+seems slow. `--follow` keeps printing new events, from any fastf process, until
 Ctrl-C. See [config.md](config.md) for where both files live.
 
 ## Todos

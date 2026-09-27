@@ -34,20 +34,25 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// above the threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
-    Debug = 0,
-    Info = 1,
-    Warn = 2,
-    Error = 3,
+    /// Every entry a walk, a copy or a removal touches — one line per file of
+    /// a move, so only when asked for: 3.13 wrote these at debug into every
+    /// job's log, 85 MB for one move of twelve projects.
+    Trace = 0,
+    Debug = 1,
+    Info = 2,
+    Warn = 3,
+    Error = 4,
     /// As a threshold: nothing is written.
-    Off = 4,
+    Off = 5,
 }
 
 impl Level {
     /// The names `config set log-level` takes.
-    pub const NAMES: [&'static str; 5] = ["debug", "info", "warn", "error", "off"];
+    pub const NAMES: [&'static str; 6] = ["trace", "debug", "info", "warn", "error", "off"];
 
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim().to_ascii_lowercase().as_str() {
+            "trace" => Some(Self::Trace),
             "debug" => Some(Self::Debug),
             "" | "info" => Some(Self::Info),
             "warn" | "warning" => Some(Self::Warn),
@@ -64,6 +69,7 @@ impl Level {
     /// The word a log line carries, padded so the text lines up.
     fn tag(self) -> &'static str {
         match self {
+            Self::Trace => "TRACE",
             Self::Debug => "DEBUG",
             Self::Info => "INFO ",
             Self::Warn => "WARN ",
@@ -75,14 +81,23 @@ impl Level {
 
 /// A log file past this is rotated.
 pub const ROTATE_BYTES: u64 = 4 * 1024 * 1024;
+/// A job's own log past this becomes `log.1`, and one is kept: a job's story
+/// is its steps, and its entries only at `trace`.
+pub const JOB_ROTATE_BYTES: u64 = 16 * 1024 * 1024;
 /// How many rotated files are kept beside the live one.
 pub const KEEP: usize = 3;
 
 static THRESHOLD: AtomicU8 = AtomicU8::new(Level::Info as u8);
 
-/// The job this process is running, whose own log takes every line at every
-/// level — a job's log is its whole story, whatever the central threshold.
+/// The job this process is running, whose own log takes every line at debug
+/// and above — a job's log is its whole story, whatever the central
+/// threshold — and every entry too when the threshold is `trace`.
 static JOB: Mutex<Option<(String, PathBuf)>> = Mutex::new(None);
+
+/// The job log, open. Only the job's worker writes it, so it is opened once
+/// rather than for every line (3.13 made a folder, looked twice and opened
+/// the file for each of them), with how long it is, for its rotation.
+static JOB_FILE: Mutex<Option<(std::fs::File, u64)>> = Mutex::new(None);
 
 /// Write lines at `level` and above to the central log from now on.
 pub fn set_level(level: Level) {
@@ -96,7 +111,7 @@ pub fn enabled(level: Level) -> bool {
         return false;
     }
     level as u8 >= THRESHOLD.load(Ordering::Relaxed)
-        || JOB.lock().map(|job| job.is_some()).unwrap_or(false)
+        || (level >= Level::Debug && JOB.lock().map(|job| job.is_some()).unwrap_or(false))
 }
 
 /// Every later line also goes to `log`, at every level, tagged `id`; `None`
@@ -105,6 +120,13 @@ pub fn set_job(job: Option<(String, PathBuf)>) {
     if let Ok(mut slot) = JOB.lock() {
         *slot = job;
     }
+    if let Ok(mut file) = JOB_FILE.lock() {
+        *file = None;
+    }
+}
+
+pub fn trace(text: impl AsRef<str>) {
+    write(Level::Trace, text.as_ref());
 }
 
 pub fn debug(text: impl AsRef<str>) {
@@ -144,8 +166,12 @@ pub fn write(level: Level, text: &str) {
     if level == Level::Off {
         return;
     }
-    let job = JOB.lock().ok().and_then(|job| job.clone());
     let central = level as u8 >= THRESHOLD.load(Ordering::Relaxed);
+    let job = JOB
+        .lock()
+        .ok()
+        .and_then(|job| job.clone())
+        .filter(|_| central || level >= Level::Debug);
     if !central && job.is_none() {
         return;
     }
@@ -160,7 +186,39 @@ pub fn write(level: Level, text: &str) {
         append(&path, &line, ROTATE_BYTES);
     }
     if let Some((_, path)) = job {
-        append(&path, &line, u64::MAX);
+        append_job(&path, &line);
+    }
+}
+
+/// Append to this process's job log through the handle it keeps open,
+/// rotating it to `log.1` past [`JOB_ROTATE_BYTES`].
+fn append_job(path: &Path, line: &str) {
+    let Ok(mut slot) = JOB_FILE.lock() else {
+        return;
+    };
+    if slot.is_none() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(file) = OpenOptions::new().create(true).append(true).open(path) {
+            let length = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+            *slot = Some((file, length));
+        }
+    }
+    if slot
+        .as_ref()
+        .is_some_and(|(_, length)| *length > JOB_ROTATE_BYTES)
+    {
+        *slot = None;
+        let _ = std::fs::rename(path, PathBuf::from(format!("{}.1", path.display())));
+        if let Ok(file) = OpenOptions::new().create(true).append(true).open(path) {
+            *slot = Some((file, 0));
+        }
+    }
+    if let Some((file, length)) = slot.as_mut()
+        && file.write_all(line.as_bytes()).is_ok()
+    {
+        *length += line.len() as u64;
     }
 }
 

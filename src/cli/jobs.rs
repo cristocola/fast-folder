@@ -211,12 +211,20 @@ fn describe(job: &JobView) -> (String, String) {
             "done".green().to_string(),
             state.map(|state| state.summary.clone()).unwrap_or_default(),
         ),
+        Some(JobStatus::Unknown) => (
+            "ended".to_string(),
+            state.map(|state| state.summary.clone()).unwrap_or_default(),
+        ),
         Some(JobStatus::Failed) => (
             "failed".red().to_string(),
             state.map(|state| state.summary.clone()).unwrap_or_default(),
         ),
         Some(JobStatus::Cancelled) => (
             "cancelled".yellow().to_string(),
+            state.map(|state| state.summary.clone()).unwrap_or_default(),
+        ),
+        Some(JobStatus::Paused) => (
+            "paused".yellow().to_string(),
             state.map(|state| state.summary.clone()).unwrap_or_default(),
         ),
     }

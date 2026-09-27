@@ -216,11 +216,15 @@ pub(crate) fn read_base_readonly(base: &Path) -> Vec<Project> {
     let Some(cache) = load_cache(base) else {
         return scan_base(base);
     };
-    if cache_is_stale(base) {
+    let Cache { entries, seen, .. } = cache;
+    if let Freshness::Stale = freshness(base, seen.as_ref()) {
         return scan_base(base);
     }
-    let mut projects = Vec::with_capacity(cache.entries.len());
-    for entry in cache.entries {
+    // Every entry counts, a folder that has gone included: this is the
+    // floor, and a number too high is untidy where one too low is a
+    // duplicate.
+    let mut projects = Vec::with_capacity(entries.len());
+    for entry in entries {
         let Some(project) = entry.into_project(base) else {
             return scan_base(base);
         };
@@ -234,13 +238,16 @@ pub(crate) fn read_base_readonly(base: &Path) -> Vec<Project> {
 /// (files added/moved outside fastf). Returns the total project count.
 pub fn reindex(cfg: &Config) -> usize {
     let mut total = 0;
-    for base in cfg.effective_bases() {
-        if !base.is_dir() {
+    let bases = cfg.effective_bases();
+    for (base, probe) in crate::util::paths::probe_dirs(&bases, crate::util::paths::PROBE_TIMEOUT) {
+        if !probe.usable() {
             continue;
         }
-        let projects = scan_base(&base);
-        total += projects.len();
-        let _ = write_cache(&base, &projects);
+        let scanned = scan_listing(&base);
+        total += scanned.projects.len();
+        if let Some(names) = scanned.names {
+            let _ = write_index(&base, &scanned.projects, Some(names));
+        }
     }
     total
 }

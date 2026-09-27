@@ -84,11 +84,16 @@ fastf config set bases "/mnt/projects/clients,/srv/archive"
 
 Discovery scans the direct children of each base and treats every folder holding a `PROJECT_INFO.md` as a project. A base that is not mounted is skipped quietly, which makes external drives and network shares practical.
 
-A base that is mounted but does not *answer* — a network share whose host has gone away — is a different case, and fastf names it. Every list of bases is probed with a short timeout, so a dead mount is reported as `(unresponsive)` and left out of that session's move targets, instead of blocking the app for however long the operating system takes to give up on it. `(not mounted)` means the ordinary thing: nothing is there.
+A base that is mounted but does not *answer* — a network share whose host has gone away, an sshfs or rclone mount that stalled — is a different case, and fastf names it. Every base is asked at once, and one that has not answered within a second and a half is reported as `(unresponsive)` and left out of that session's move targets, instead of blocking the app or the command for however long the operating system takes to give up on it. The other bases do not wait for it: in the app their projects are listed as soon as each answers, and the silent base's appear when it does. `(not mounted)` means the ordinary thing: nothing is there.
 
 Each base carries a small `.fastf-index.json` cache at its root, next to the projects. The cache stores base-relative paths, so it stays valid when a drive is mounted at a different letter or path on another machine. It is a disposable accelerator, never an authority:
 
-- If the base changed since the cache was written, fastf rescans and rewrites it.
+- The cache remembers the names the base held when it was written. When a
+  listing of the base finds any other name — a project copied in, one moved
+  away by hand — fastf rescans and rewrites it. That one listing is also all
+  it asks of a base whose cache still holds, however many projects it has.
+  Folder times are a second signal where they mean something; on a cloud
+  mount (rclone) they do not, and the names are what notice the change.
 - Cached entries whose folders disappeared are dropped automatically.
 - Deleting the cache file costs one rescan and nothing else.
 - **An entry can only ever point at a direct child of its own base.** The cache
@@ -154,13 +159,19 @@ The app's `m` does the same, over every marked project when there are marks. The
 - Across filesystems (or to network storage), fastf writes a record of the
   move under `.fastf-transactions/<operation-id>/` in the target base, copies
   everything but `PROJECT_INFO.md` into the project's final folder there,
-  checks exact relative paths, entry types, byte lengths and link targets,
-  confirms that the source did not change, and then writes `PROJECT_INFO.md`.
-  That one file is the publish: until it lands the folder is not a project,
-  and no folder on the target is ever renamed. **Only then does the original
-  leave the library, in one step**: it is renamed, beside itself, to a hidden
-  `.fastf-moved-<operation-id>` folder, and that folder is then removed.
+  looks at the original again and copies whatever changed meanwhile, checks
+  exact relative paths, entry types, byte lengths and link targets, and then
+  writes `PROJECT_INFO.md`. That one file is the publish: until it lands the
+  folder is not a project, and no folder on the target is ever renamed.
+  **Only then does the original leave the library, in one step**: it is
+  renamed, beside itself, to a hidden `.fastf-moved-<operation-id>` folder —
+  or, on a cloud mount, its `PROJECT_INFO.md` is removed first (below). What is
+  left of it is then merged into the moved copy and removed, entry by entry.
 - Every filename is project data. Names ending in `.tmp` or `.part` are copied and verified like any other name.
+- **Several entries at once.** A walk, a copy and a removal each ask the
+  filesystem about several entries at the same time — a few on a local disk,
+  more on a network share or sshfs, most on a cloud mount, where every one is
+  a request that waits on the network.
 - **Links travel as links.** A symbolic link — or, on Windows, a junction — is
   made again at the destination pointing exactly where it pointed, by the text
   of its target. It is never followed: nothing behind it is copied, and removing
@@ -168,7 +179,37 @@ The app's `m` does the same, over every marked project when there are marks. The
   (what `node_modules/.bin` often holds) moves like any other. When a link's
   meaning may change at the new place — a relative link that climbs out of the
   project, an absolute one into the original folder — the move says which.
-- Keep the project untouched while it moves. Editing it from another program during the copy is outside the supported contract.
+- **You can keep working.** A change made to the original while it moves —
+  a dev server writing its log, a temp folder a build makes and removes, a
+  file you save — is copied too: fastf looks at the original again after the
+  copy and brings across what changed, up to three times, and what changes
+  after that is carried into the moved copy when the original is removed. A
+  program still running in the old folder keeps writing where it was started,
+  though: restart it from the new place.
+- **An empty folder at the target name gives way.** A cloud mount can leave
+  one behind for a while after a folder is removed, and it holds nothing to
+  lose; anything else there refuses the move, and says when it is a folder
+  fastf is still removing.
+
+**Only what fastf cannot fix stops a move**, and it says what and what to do:
+no permission where it has to write or remove, **a program writing a file in
+the project** (Linux names it — `python3 (pid 4242) has session.txt open for
+writing` — since after the move its writes would land in the old copy), **on
+Windows, a program holding anything in the project at all** — Windows will
+not move a folder while anything in it is open, a file whatever its sharing or
+a folder a console works in, so the original could never be set aside:
+`powershell (pid 7152) has src\main.txt open`, or `a program is working in
+src` for a console — a full drive, a read-only one, a name the drive will not
+take. Everything else is
+waited out: an input/output error or a lock a moment long is asked again with
+a growing pause, a mount that drops is waited for until the same mount is back
+— an unmounted mount point is an empty folder, and nothing under it is taken
+for gone — and a move whose mount stays gone for two minutes before its
+publish **pauses**, keeping what it copied; moving the project again, or `fastf
+reconcile` once the mount is back, takes the copy over and copies only what is
+missing. A program merely running in the folder — a dev server, a shell — does
+not stop the move; the result names it, and says to restart it from the new
+place.
 
 **Before a byte is copied**, a cross-filesystem move checks what would
 otherwise stop it at the end, and names every problem it finds at once:
@@ -197,39 +238,65 @@ a Google Drive mount three files of a moved project ended up under the folder
 it had just left. Writing the copy in its final place, with `PROJECT_INFO.md`
 last, means there is nothing to misplace.
 
-**Why the original is renamed before it is removed.** Removing a folder is not
-one step: anything that stops it part of the way — a read-only folder inside,
-a file another program holds open, a dropped network connection — would leave
-part of the project where it was, still holding its `PROJECT_INFO.md`, so still
-listed as the project. A rename either happens or does not. So:
+**Why the original leaves in one step before it is removed.** Removing a
+folder is not one step: anything that stops it part of the way — a read-only
+folder inside, a file another program holds open, a dropped network connection
+— would leave part of the project where it was, still holding its
+`PROJECT_INFO.md`, so still listed as the project. So the original first leaves
+the library in one step that either happens or does not, and only then is the
+rest removed:
 
-- If the moved copy turns out to be missing anything — a cloud mount that
-  misplaced uploads while the folder was renamed into place, a file deleted
-  there since — fastf **puts it back from the original**, which is kept whole
-  until then, and checks again. In the move itself first, and on every
-  reconcile after. Only missing entries are put back; something that is there
-  but differs (older than what was moved, or another kind of entry) is your
-  decision, and both copies stay, both listed, until it is made.
-- If the original cannot be set aside — on Windows, a program has a file in it
-  open — the move reports that **the original is still there, whole, and fastf
-  removed nothing**, and why. The moved copy is complete and is the project.
-  Once the reason is gone, `fastf reconcile` finishes the move without copying
-  again.
-- If removing the set-aside copy stops part of the way, what is left is a
-  hidden folder beside the others, never listed as a project, and everything
-  in it is also in the moved copy. `fastf reconcile` removes it.
+- On a local disk, sshfs, SMB or NFS it is **renamed** beside itself to a
+  hidden `.fastf-moved-<operation-id>` folder.
+- On a **cloud mount** (rclone — on Windows too, where its WinFsp drive calls
+  itself `FUSE-rclone` — or a mount fastf does not know) a folder rename
+  is a copy and a delete for every file in it — twelve minutes for one web
+  project on an S3 bucket — and moves uploads still in flight to the old path.
+  There the original is **emptied where it stands**: a small note
+  `.fastf-moved-<operation-id>.json` beside it names the move, its
+  `PROJECT_INFO.md` goes first, which takes it out of the library, and the rest
+  follows. Its folder name stays taken until it is empty.
 
-Nothing is removed that exists nowhere else: before the original is set aside,
-and again before its hidden copy is removed, fastf checks that every entry in it
-is one the move recorded, unchanged, and that the moved copy still holds an
-entry of the same kind at every such path, as it was published or newer. You
-can go on working in the moved copy while a cleanup waits; a moved copy
-restored from a backup taken before the move keeps the original.
+**What is left of the original is merged, not just deleted.** Every entry is
+looked at once, and removed only when the moved copy holds it:
 
-Copy moves preserve regular-file contents, directory topology and links. They
-do not promise hashes, ACLs, ownership and permissions, extended attributes,
-sparse layout, hard-link relationships (hard-linked files arrive as separate
-files), or storage-level durability. The checks are intended to prevent
+- something the moved copy is missing — a cloud mount that misplaced an upload,
+  a file deleted there since — is put back into it from the original first;
+- something that changed in the original since it was copied — a log line the
+  dev server wrote a moment before the move finished — replaces the moved
+  copy's version, when that one is untouched since the move and it is within
+  the hour after it;
+- something new in the original is copied across;
+- a file whose size agrees and whose time alone moved (a cloud mount's rename
+  can do that) is compared byte for byte before it is called changed.
+
+What is left afterwards is exactly what needs you: a file changed both in the
+original and in the moved copy since the move, or one that the moved copy holds
+as something else. Only those stay, hidden, with the move's record, and the
+report names each one; everything else is gone. Nothing is removed that exists
+nowhere else, you can go on working in the moved copy while a cleanup waits,
+and a moved copy restored from a backup taken before the move keeps the
+original's version of what it holds older. `PROJECT_INFO.md` is never written
+into the moved copy: its own is the project's.
+
+If the original cannot leave at all — on Windows, a program opened something
+in it while the move was copying — the move reports that **the original is
+still there, whole, and fastf removed nothing**, and which program holds it.
+The moved copy is complete and is the project. Once the program lets go,
+`fastf reconcile` (or the app, by itself) finishes the move without copying
+again. If removing the old copy stops part of the way, what is left is hidden,
+never listed as a project, and everything in it is also in the moved copy;
+`fastf reconcile` finishes it.
+
+Copy moves keep what `mv` keeps: regular-file contents, directory topology,
+links, and every file's and folder's permission bits (on Windows, the
+read-only attribute) and modification and access times. A read-only folder
+inside the project is made read-only again after its files have arrived. The
+project folder itself keeps the target's default permissions, and its time is
+the move's, since the move rewrites its `PROJECT_INFO.md`. They do not promise
+hashes, ACLs, ownership, extended attributes, sparse layout, hard-link
+relationships (hard-linked files arrive as separate files), or storage-level
+durability. The checks are intended to prevent
 application mistakes and ordinary interrupted copies; hardware failure, power
 loss, bit rot, and storage corruption belong to the filesystem and backups.
 
@@ -307,14 +374,15 @@ Cross-filesystem moves use a private transaction beneath the target base:
   copy into place. Reconcile finishes those the old way, and any file a cloud
   mount uploaded into that old staging folder after the rename is moved into
   place, never deleted.
-- `CleanupPending`: the original is still at its path. Reconcile checks the rule
-  above — everything in it recorded and unchanged, and still in the moved copy
-  — then sets it aside and removes it. Anything the moved copy is missing is
-  put back from the original first. If something differs in another way,
-  reconcile says what and removes nothing.
-- `Retired`: the original has been set aside. Reconcile removes the hidden copy
-  under the same rule. If the moved copy has since gone, the hidden copy may be
-  the only one left, and reconcile says where it is and how to rename it back.
+- `CleanupPending`: the original is still at its path. Reconcile checks that
+  it and the moved copy are both still this project, sets it aside, and merges
+  it away as above.
+- `Retired`: the original has been set aside. Reconcile merges what is left of
+  it. More than an hour after the move, and for anything that came back after
+  it was gone, the merge only removes what the move recorded, unchanged and in
+  the moved copy, and writes nothing into the moved copy. If the moved copy
+  has since gone, the old copy may be the only one left, and reconcile says
+  where it is and how to rename it back.
 
 A move left half-finished by fastf 3.11 or older may have deleted part of its
 original already, since those versions removed it in place. Reconcile finishes
@@ -322,16 +390,50 @@ it when everything left is exactly what the move recorded, and otherwise lists
 what differs. A move another machine began is reported, never acted on: the
 source path it names means something else here.
 
-Hidden folders fastf leaves beside the projects are handled too: a set-aside
-original with no transaction left is reported and never removed, a deleted
-project's `.fastf-deleted-*` folder is removed (you confirmed the delete), and
-a move's `.fastf-probe-*` folder is removed.
+Hidden folders fastf leaves beside the projects are handled too. A set-aside
+original with no record left — fastf 3.13 cleared records too early — is
+finished by content: one holding nothing but empty folders is removed, and
+otherwise everything in it that the project it held (found by its ID) holds the
+same, byte for byte, is removed and the rest kept and named; when fastf cannot
+find that project it keeps all of it and says it may be the only copy. A
+deleted project's `.fastf-deleted-*` folder is removed (you confirmed the
+delete), and so is a move's `.fastf-probe-*` folder.
+
+**A delete on a cloud mount** empties the folder where it stands, like a move's
+original: a `.fastf-deleted-<operation-id>.json` beside it lists everything the
+project held when you deleted it, its `PROJECT_INFO.md` goes first, and then
+only what the list names — anything a program wrote there after the delete
+began is kept, and named.
+
+**A record is never lost while anything it owns is left.** fastf counts
+something as gone only when the filesystem says "nothing there"; a mount that
+answers with an error — dropped, restarting, not answering — says nothing, and
+the record waits for it. Reconcile then reports the move as **waiting for a
+base to answer**, changes nothing, and finishes it once the base is back; an
+unplugged drive is waiting too, never something you have to look at. fastf
+also keeps a small index of every record in its data folder, so a record in a
+base you have since removed from `bases`, or beside a `copy-to` destination, is
+still found and finished.
+
+On an rclone mount a removed folder can come back: an upload still queued in
+rclone's cache lands after the removal — a note saved a moment before the move
+is the usual one. There, the record of a move — or of a delete — stays for ten
+minutes after its old copy is removed; a reconcile in that time removes
+whatever came back, and one after it clears the record. The app runs that one
+itself once the ten minutes are up (`!` lists the old copy as waiting until
+then; the header counts nothing for it), and an old copy the mount put back
+is never listed as the project a second time meanwhile.
+
+A rename that stopped part of the way — an S3 bucket through rclone renames
+object by object — leaves part of the original at its path and part at its
+hidden name. Both are the move's own: reconcile merges the hidden part, then
+removes what is left at the original's path where it is what the move
+recorded, and clears the record only after both.
 
 Every line reconcile prints names the project, its transaction and what is on
 disk. Missing configured bases, identity mismatches, malformed journals, and
-unknown states are reported without mutation. Reconciliation is explicit and
-idempotent; deleting a kept original or a hidden folder yourself is always a
-supported way out, and the next pass notices.
+unknown states are reported without mutation. Reconciliation is idempotent,
+and the next pass notices anything you settle yourself in the meantime.
 
 Create and move markers written before journal v2 are **obsolete and
 report-only**. They contain arbitrary absolute paths, so `reconcile` never
@@ -372,9 +474,10 @@ template's `files/` — never follows a link, junction or reparse point that is
 already there. The path text cannot escape its root, and the filesystem
 beneath it is checked component by component immediately before each write.
 
-**What a move or copy does not promise.** Hashes, ACLs, ownership and
-permissions, extended attributes, sparse-file layout, hard-link relationships
-and storage-level durability are outside the contract. Links are reproduced by
+**What a move or copy does not promise.** Hashes, ACLs, ownership,
+extended attributes, sparse-file layout, hard-link relationships and
+storage-level durability are outside the contract; permission bits and times
+are kept, as `mv` keeps them. Links are reproduced by
 their target text; sockets, pipes and device files are refused before anything
 is copied. A filesystem that hides links (a mount that resolves them on the
 server) is outside what fastf can see — the move checks for the one kind it can

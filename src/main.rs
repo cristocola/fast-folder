@@ -354,8 +354,19 @@ enum Commands {
     )]
     Reconcile {
         /// Start the reconcile and return at once; `fastf jobs` follows it
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["list", "resolve"])]
         detach: bool,
+        /// List what is unfinished — what fastf finishes, what waits for a
+        /// base, what needs you — and change nothing
+        #[arg(long, conflicts_with = "resolve")]
+        list: bool,
+        /// Settle one item that needs you: `--resolve <PATH> <ACTION>`, where
+        /// ACTION is keep-moved, take-old, put-back, discard or finish
+        #[arg(long, num_args = 2, value_names = ["PATH", "ACTION"])]
+        resolve: Option<Vec<String>>,
+        /// With `--resolve … discard`: discard without typing the word
+        #[arg(long, requires = "resolve")]
+        yes: bool,
     },
 
     /// Moves, copies, deletes and reconciles running now or lately
@@ -1232,7 +1243,16 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Reindex) => cli::reindex::run(),
-        Some(Commands::Reconcile { detach }) => cli::reconcile::run(detach),
+        Some(Commands::Reconcile {
+            detach,
+            list,
+            resolve,
+            yes,
+        }) => match (list, resolve) {
+            (true, _) => cli::reconcile::list(),
+            (_, Some(resolve)) => cli::reconcile::resolve(&resolve[0], &resolve[1], yes),
+            _ => cli::reconcile::run(detach),
+        },
         Some(Commands::Jobs { action }) => match action {
             None => cli::jobs::list(),
             Some(JobsAction::Watch { id }) => cli::jobs::watch(id),

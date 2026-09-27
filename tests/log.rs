@@ -139,3 +139,51 @@ fn the_log_level_is_a_config_key() {
         "{refused}"
     );
 }
+
+/// **A job's log holds its steps, not its files.** 3.13 wrote a line for every
+/// entry every walk touched into the job's log — 399,000 lines, 85 MB, for one
+/// move of twelve projects — each with a folder made and the file opened again.
+/// At the default level a move of two thousand files leaves a short log, and
+/// its entries are there only when `log-level trace` asks for them.
+#[cfg(debug_assertions)]
+#[test]
+fn a_jobs_log_holds_its_steps_and_its_entries_only_at_trace() {
+    let job_log = |sb: &Sandbox| {
+        let jobs = sb.install.join("jobs");
+        let newest = fs::read_dir(&jobs)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .max()
+            .unwrap();
+        fs::read_to_string(newest.join("log")).unwrap()
+    };
+    let moved = |sb: &Sandbox, target: &std::path::Path| {
+        let dir = sb.plant_project(&sb.base, "2026-01-01_Shoot_ID0001", "ID0001");
+        fs::create_dir_all(dir.join("takes")).unwrap();
+        for n in 0..2000 {
+            fs::write(dir.join(format!("takes/t{n}.mov")), "f").unwrap();
+        }
+        let out = sb
+            .command()
+            .args(["move", "ID0001", &target.display().to_string(), "-y"])
+            .env("FASTF_FAULT", "move:force-staged")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        job_log(sb)
+    };
+
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let log = moved(&sb, &other);
+    assert!(log.len() < 200 * 1024, "{} bytes", log.len());
+    assert!(log.contains("copied 2000 files"), "the steps are there");
+    assert!(!log.contains("t1999.mov"), "no entry at the default level");
+
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    sb.ok(&["config", "set", "log-level", "trace"]);
+    let log = moved(&sb, &other);
+    assert!(log.contains("t1999.mov"), "every entry at trace");
+}

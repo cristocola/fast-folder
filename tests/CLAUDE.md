@@ -50,6 +50,8 @@ What each suite guards — the intent, not the case list:
   data directory so the session the app saves on exit never lands in yours;
   `FASTF_SHOT_LONG=1` for folder names of ninety characters;
   `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
+  `FASTF_SHOT_STALLED=1` for an archive base that stopped answering,
+  `FASTF_SHOT_LEFTOVERS=1` for what `!` lists,
   `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
   only — drawn in `FASTF_SHOT_THEME`, default `doom-one`). **Look at every
   screen this way before writing its snapshot.**
@@ -70,6 +72,11 @@ What each suite guards — the intent, not the case list:
   to a runtime test.
 - `windows_semantics.rs` — reserved names, trailing dots, control chars, unicode,
   >MAX_PATH, case-only rename, read-only files, a real sharing violation, junctions.
+  What only a real Windows shows lives in the lib's `cfg(windows)` unit tests,
+  run in the VM: the Restart Manager naming a PowerShell that holds a file,
+  a console working in a subfolder, how a volume names its file system
+  (`util::fs_kind`'s ignored `what_a_drive_is` probes a real drive, such as a
+  WinFsp `S:`, from the desktop session).
 - `windows_live.rs` (windows; **opt-in**) — what no temporary directory can show:
   the move engine's **staged copy**, reached only by a real
   `ERROR_NOT_SAME_DEVICE`, and the **counter over a shared drive**. With either
@@ -150,4 +157,20 @@ the fix missed.
   open `fastf` for the 30-second timeout and leaving a lock file behind.
 - Lock order: `ENV_LOCK`, then `interrupt::TEST_LOCK`, which lives beside the
   process-global flag because a per-module mutex silently races. `faults` needs no
-  lock — its arming is thread-local.
+  lock — its arming is thread-local, and **a pool's workers inherit it**
+  (`faults::current`/`with_arming`), counts of `-<n>` shared across them.
+- **Filesystem failures come from io failpoints, not real mounts**:
+  `remove:unlink`, `copy:write`, `walk:readdir`, `walk:lstat` and
+  `presence:lstat` take `eio`, `enotconn`, `eacces`… with an optional `-<n>`,
+  and the code under test retries them by class (`fs_retry::with_retry`). A
+  test that needs a mount to stay gone past the wait arms
+  `fs:short-mount-wait` (one second instead of two minutes).
+- **A base that stops answering is `paths:stall-base`** (a decision) plus a
+  `.fastf-test-stall` file in the base: every look into it blocks while the
+  file is there — two minutes at most — and returns once it is removed, so a
+  test can bring the base back. Remove it before the test ends; a look still
+  blocked goes with the process.
+- **A job paced with `delay-<ms>` also arms `pool:serial`.** Walks, copies and
+  removals run on `util::pool`, so without it a per-entry delay is paid by
+  four to sixteen workers at once and a test that kills or cancels "mid-copy"
+  races the pool. `pool:serial` gives every pool one worker.

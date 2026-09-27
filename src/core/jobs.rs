@@ -39,6 +39,9 @@ pub const STATE_VERSION: u32 = 1;
 /// Finished jobs beyond this many, or older than [`KEEP_DAYS`], are pruned.
 const KEEP: usize = 50;
 const KEEP_DAYS: i64 = 30;
+/// Finished jobs are pruned, oldest first, while all of them together take
+/// more than this.
+const KEEP_BYTES: u64 = 64 * 1024 * 1024;
 
 /// What a job does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +100,10 @@ pub struct JobRequest {
     pub kind: JobKind,
     #[serde(default)]
     pub items: Vec<JobItem>,
+    /// Started by the app itself to finish leftovers, not by a person: its
+    /// end is reported quietly (`tui::app::attention`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto: bool,
 }
 
 /// What became of one item, in the words both surfaces print.
@@ -217,6 +224,18 @@ pub fn dir(id: &str) -> Result<PathBuf> {
 
 /// Write a new job's request. Its worker is not started yet.
 pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
+    create_as(kind, items, false)
+}
+
+/// Start the app's own reconcile ([`JobRequest::auto`]).
+pub fn start_auto() -> Result<String> {
+    prune();
+    let id = create_as(JobKind::Reconcile, Vec::new(), true)?;
+    spawn_worker(&id)?;
+    Ok(id)
+}
+
+fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
     let root = root_or_error()?;
     std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
     for _ in 0..64 {
@@ -228,6 +247,7 @@ pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
                     version: STATE_VERSION,
                     kind,
                     items,
+                    auto,
                 };
                 let text = serde_json::to_string_pretty(&request)?;
                 std::fs::write(dir.join("request.json"), text)
@@ -248,6 +268,17 @@ pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
 /// where its log is.
 pub fn start(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
     prune();
+    // A process working in a folder holds it: Windows will not rename a
+    // folder any process works in, fastf's own included, and the worker
+    // starts where this one is. Step out of every project the job is about.
+    if let Ok(cwd) = std::env::current_dir() {
+        let inside = items
+            .iter()
+            .find(|item| !item.path.is_empty() && cwd.starts_with(Path::new(&item.path)));
+        if let Some(item) = inside {
+            let _ = std::env::set_current_dir(&item.base);
+        }
+    }
     let id = create(kind, items)?;
     spawn_worker(&id)?;
     let started = Instant::now();
@@ -600,14 +631,32 @@ pub struct Live {
     operations: HashSet<String>,
 }
 
-/// Whether `operation` is a live job's own: made by its worker, or claimed.
+/// Whether `operation` is a live job's own: made by its worker, or claimed —
+/// or made by any fastf still running on this machine, whichever data dir it
+/// works in (`util::process`): a second data dir's reconcile once discarded a
+/// live move's copy while it was being written, because this data dir's jobs
+/// were all it asked.
 pub fn owned_by(operation: &str, live: &Live) -> bool {
-    live.operations.contains(operation)
-        || operation
-            .split('-')
-            .nth(1)
-            .and_then(|pid| u32::from_str_radix(pid, 16).ok())
-            .is_some_and(|pid| live.pids.contains(&pid))
+    if live.operations.contains(operation) {
+        return true;
+    }
+    let mut parts = operation.split('-');
+    let minted = parts
+        .next()
+        .and_then(|stamp| u128::from_str_radix(stamp, 16).ok());
+    let Some(pid) = parts
+        .next()
+        .and_then(|pid| u32::from_str_radix(pid, 16).ok())
+    else {
+        return false;
+    };
+    if live.pids.contains(&pid) {
+        return true;
+    }
+    // This process's own records are its own business: an in-process
+    // reconcile after an in-process move is how the library is tested.
+    pid != std::process::id()
+        && minted.is_some_and(|minted| crate::util::process::is_live_fastf_since(pid, minted))
 }
 
 /// The job this process is the worker of, if it is one.
@@ -659,7 +708,11 @@ pub fn lock_holder() -> Option<String> {
 /// and an interrupted one nobody has seen, are kept.
 pub fn prune() {
     let now = chrono::Utc::now();
-    for (index, job) in list().into_iter().enumerate() {
+    let jobs = list();
+    let mut total: u64 = jobs.iter().map(|job| job_bytes(&job.id)).sum();
+    // Finished jobs kept by the rules above, newest first.
+    let mut kept = Vec::new();
+    for (index, job) in jobs.into_iter().enumerate() {
         if job.alive || job.young || (job.interrupted() && !job.seen) {
             continue;
         }
@@ -673,9 +726,41 @@ pub fn prune() {
         if (index >= KEEP || (old && job.seen))
             && let Ok(dir) = dir(&job.id)
         {
+            total = total.saturating_sub(job_bytes(&job.id));
+            let _ = std::fs::remove_dir_all(dir);
+        } else {
+            kept.push(job.id);
+        }
+    }
+    // Then by size, the oldest first: fifty jobs of per-entry logs came to
+    // 196 MB in one data dir.
+    for id in kept.iter().rev() {
+        if total <= KEEP_BYTES {
+            break;
+        }
+        if let Ok(dir) = dir(id) {
+            total = total.saturating_sub(job_bytes(id));
             let _ = std::fs::remove_dir_all(dir);
         }
     }
+}
+
+/// What one job's folder takes on disk: its files, and what it owns.
+fn job_bytes(id: &str) -> u64 {
+    fn walk(path: &std::path::Path, depth: usize) -> u64 {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .map(|entry| match entry.metadata() {
+                Ok(meta) if meta.is_dir() && depth < 2 => walk(&entry.path(), depth + 1),
+                Ok(meta) => meta.len(),
+                Err(_) => 0,
+            })
+            .sum()
+    }
+    dir(id).map(|dir| walk(&dir, 0)).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -714,6 +799,7 @@ mod tests {
                 version: 1,
                 kind,
                 items,
+                auto: false,
             }),
             state: None,
             alive: false,

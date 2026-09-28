@@ -151,7 +151,9 @@ tell you.
   read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are named
   around a keyword and `std::path`.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
-  `runtime.rs` (the one owner of the alternate screen, the threads and the loop),
+  `runtime/` (the one owner of the alternate screen, the threads and the loop;
+  beside it `actions` — an `Action` carried out — `discovery`, `input` and
+  `detail`, the workers),
   `entry.rs` (how the app was opened), `app/` (`App` and `update`; the app's own
   `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`,
   for the pane `pane_edit` / `pane_add` / `pane_cursor`, and for the templates

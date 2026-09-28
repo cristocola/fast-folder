@@ -82,7 +82,7 @@ terminal nobody is holding is never switched to the alternate screen.
 
 `app::update(&mut App, Msg) -> Vec<Effect>` is the one state transition and
 **performs no I/O**: everything it wants done is an `Effect` (`effect.rs`) that
-`runtime.rs` carries out, and `view::view(&App, &mut Frame)` takes the app by
+`runtime` carries out, and `view::view(&App, &mut Frame)` takes the app by
 shared reference. So `tests/tui_update/` drives the state machine with no
 terminal, `tests/tui_snapshots.rs` renders any state a test can build, and a slow
 filesystem can never reach the key handler.
@@ -94,7 +94,7 @@ the view would need `&mut App`.
 
 ## The runtime owns the screen
 
-`runtime.rs` takes raw mode, the alternate screen and bracketed paste **on
+`runtime` takes raw mode, the alternate screen and bracketed paste **on
 stderr**, so `fastf > log` still opens the app and stdout keeps choosing output
 format. `Runtime::init` calls `tty::mark_interactive_surface` and installs a
 screen-restoring panic hook for the **main thread only**; `spawn_worker` turns a
@@ -106,7 +106,7 @@ trip through the console host — 45 ms first frames and 117 ms fade frames in
 Windows Terminal, under 1 ms and 7 ms buffered. `Terminal::draw` and `execute!`
 flush, so nothing is left waiting.
 
-**Two modules take the terminal** (`tests/layering.rs`): `runtime.rs` the
+**Two modules take the terminal** (`tests/layering.rs`): `runtime/` the
 alternate screen, `inline.rs` a few rows at the cursor for a command-line prompt.
 A third owner would be two unsynchronised writers on one tty. `Suspended` has two
 variants, both because the *terminal* is needed: `Note` (the `$EDITOR` flow) and

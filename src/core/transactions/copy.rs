@@ -299,6 +299,37 @@ pub(crate) fn keep_folder_attributes(manifest: &MoveManifest, source: &Path, des
     }
 }
 
+/// **Make a published copy's names durable**: a file's sync keeps its bytes,
+/// and only its folder's keeps its name. Every folder of the copy is synced,
+/// then the copy's own folder — after [`keep_folder_attributes`], whose
+/// changes are a folder's own too, and before anything of the original is
+/// touched. Best effort, as every sync of a folder is: a cloud mount that has
+/// no such thing loses nothing by it. Unix only, as
+/// `move_cleanup::sync_dir` is.
+#[cfg(not(unix))]
+pub(crate) fn sync_folders(_manifest: &MoveManifest, _destination: &Path) {}
+
+/// See the other definition.
+#[cfg(unix)]
+pub(crate) fn sync_folders(manifest: &MoveManifest, destination: &Path) {
+    let mut folders: Vec<&ManifestEntry> = manifest
+        .entries
+        .iter()
+        .filter(|entry| entry.kind == ManifestKind::Directory)
+        .collect();
+    folders.sort_by_key(|entry| std::cmp::Reverse(entry.path.components().count()));
+    let width = crate::util::pool::width_for(destination);
+    let _ = crate::util::pool::run(width, folders, |entry| {
+        let folder = destination.join(&entry.path);
+        // Only a folder fastf made: never through a link something put there.
+        if fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            crate::core::move_cleanup::sync_dir(&folder);
+        }
+        Ok::<(), ()>(())
+    });
+    crate::core::move_cleanup::sync_dir(destination);
+}
+
 #[cfg(unix)]
 fn set_folder_attributes(folder: &Path, original: &fs::Metadata) {
     use std::os::unix::ffi::OsStrExt;

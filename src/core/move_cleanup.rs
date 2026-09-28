@@ -245,6 +245,15 @@ pub(crate) fn set_aside(
             reason: format!("{error:#}"),
         });
     }
+    // **What was published is on disk before the original is touched**: a
+    // file's sync keeps its bytes and only its folder's keeps its name, and a
+    // copy a killed move published was never synced at all. Here, since every
+    // retire comes through here, the move's and recovery's alike.
+    transactions::sync_folders(cleanup.manifest, cleanup.final_path);
+    if let Some(base) = cleanup.final_path.parent() {
+        sync_dir(base);
+    }
+    crate::util::trace::hit("retire");
     let retired = transaction.old_copy_path();
     let outcome = match transaction.journal.retire {
         RetireStrategy::Rename => {
@@ -876,6 +885,9 @@ fn step_out_of(tree: &Path) {
 pub(crate) fn sync_dir(dir: &Path) {
     #[cfg(unix)]
     if let Ok(handle) = fs::File::open(dir) {
+        if let Some(name) = dir.file_name() {
+            crate::util::trace::hit(&format!("sync {}", name.to_string_lossy()));
+        }
         let _ = handle.sync_all();
     }
     #[cfg(not(unix))]

@@ -252,6 +252,10 @@ fn copy_unlocked(
         transactions::publish(&manifest, &project.path, &staging, progress)
             .with_context(|| format!("publishing the copy at {}", target.display()))?;
         transactions::keep_folder_attributes(&manifest, &project.path, &staging);
+        transactions::sync_folders(&manifest, &staging);
+        if let Some(parent) = staging.parent() {
+            crate::core::move_cleanup::sync_dir(parent);
+        }
         Ok(totals)
     })();
 

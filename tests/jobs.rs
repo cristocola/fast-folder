@@ -674,3 +674,110 @@ fn a_staged_move_walks_each_tree_as_few_times_as_it_can() {
         "the mount table was read {reads} times for a move of 40 files: {lines}"
     );
 }
+
+/// **What a move has published is on disk before its original is touched.**
+/// A file's sync keeps its bytes and only its folder's keeps its name, so
+/// every folder of the moved copy is synced, deepest first, then the copy's
+/// own folder, then the base it is in, and only then does the original leave
+/// the library. Read from the worker's own trace.
+#[cfg(unix)]
+#[test]
+fn a_staged_move_syncs_the_moved_copys_folders_before_the_original_goes() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 4);
+    fs::create_dir_all(original.join("renders/day1")).unwrap();
+    fs::write(original.join("renders/day1/final.mov"), "frames").unwrap();
+    let trace = sb.tmp.path().join("syncs");
+    let out = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env("FASTF_FAULT", "move:force-staged,pool:serial")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists());
+
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let at = |name: &str| {
+        lines
+            .lines()
+            .position(|line| line == name)
+            .unwrap_or_else(|| panic!("no `{name}` in the trace:\n{lines}"))
+    };
+    let order = [
+        at("sync day1"),
+        at("sync renders"),
+        at("sync 2026-01-01_Shoot_ID0001"),
+        lines
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| *line == "sync other")
+            .map(|(index, _)| index)
+            .last()
+            .expect("the base is synced"),
+        at("retire"),
+    ];
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "deepest first, the base last, all before the original goes: {order:?}\n{lines}"
+    );
+    at("sync takes");
+    assert!(at("sync takes") < at("sync 2026-01-01_Shoot_ID0001"));
+}
+
+/// The same when recovery finishes a move: a copy published by a move that
+/// was killed before it set its original aside was never synced, so the
+/// reconcile that retires the original syncs the copy's folders first.
+#[cfg(unix)]
+#[test]
+fn a_reconcile_syncs_a_published_copy_before_it_retires_the_original() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 4);
+    let killed = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env(
+            "FASTF_FAULT",
+            "move:force-staged,pool:serial,move:after-publication:abort",
+        )
+        .output()
+        .unwrap();
+    assert!(!killed.status.success(), "{killed:?}");
+    assert!(
+        original.join("takes/take0.mov").is_file(),
+        "not retired yet"
+    );
+    assert!(
+        other
+            .join("2026-01-01_Shoot_ID0001/PROJECT_INFO.md")
+            .is_file(),
+        "published"
+    );
+
+    let trace = sb.tmp.path().join("syncs");
+    let out = sb
+        .command()
+        .args(["reconcile"])
+        .env("FASTF_FAULT", "pool:serial")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists(), "the move is finished");
+
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let at = |name: &str| {
+        lines
+            .lines()
+            .position(|line| line == name)
+            .unwrap_or_else(|| panic!("no `{name}` in the trace:\n{lines}"))
+    };
+    assert!(
+        at("sync takes") < at("sync 2026-01-01_Shoot_ID0001"),
+        "{lines}"
+    );
+    assert!(at("sync 2026-01-01_Shoot_ID0001") < at("retire"), "{lines}");
+}

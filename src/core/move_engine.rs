@@ -807,7 +807,8 @@ fn staged_in_parts(
 
     // A power loss must not keep the retire below and lose the publish above:
     // they are on different filesystems, and each one's new entry is only
-    // durable once its folder is.
+    // durable once its folder is. The copy's own folders are synced where the
+    // original is set aside (`move_cleanup::set_aside`).
     move_cleanup::sync_dir(new_base);
     transactions::keep_folder_attributes(&manifest, &project.path, new_path);
     let mut moved: Option<Project> = None;

@@ -77,11 +77,6 @@ None is a wrong result today; each is where the next one would come from.
 
 **The engine.**
 
-1. After a move's publish only the target *base* is synced, not the project
-   folder `PROJECT_INFO.md` was just written into (`move_engine`). After a power
-   loss the moved copy can lack its identity while the original is already set
-   aside; reconcile reports it and nothing is lost, but the copy is not durable
-   when the move says it is.
 2. Three reads ask one base after another with no deadline: `library::max_id`
    (every create and every preview), `Counters::base_floor` and `fastf
    reindex`. A mount that stopped answering holds `fastf new` for the kernel's

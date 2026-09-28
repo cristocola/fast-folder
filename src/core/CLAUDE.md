@@ -390,7 +390,9 @@ entry a mount lists but hides) leaves a husk that still holds
 `PROJECT_INFO.md` and is listed as the project, which is why the original
 leaves the library in one step before anything of it is removed. The
 order is fsync the target base (unix), `CleanupPending`, both copies'
-identities, retire, `Retired` (written *after* the retire; a crash between
+identities, **every folder of the moved copy synced** (`sync_folders`: a
+file's sync keeps its bytes and only its folder's keeps its name, and a copy a
+killed move published was never synced), retire, `Retired` (written *after* the retire; a crash between
 reads the same), bookkeeping, **merge the old copy away**, remove the
 transaction, the pointer. **Nothing is walked before the retire**: a check of
 both whole trees there keeps the original whole over a single difference, and

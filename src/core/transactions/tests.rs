@@ -355,6 +355,39 @@ fn a_record_still_uploading_is_asked_about_twenty_more_times() {
     assert!(pauses.is_empty());
 }
 
+/// **Two loops do not both wait one error out.** A record whose mount
+/// answers `EIO` for good is given up on after the twenty pauses of a second
+/// that wait for an upload, and no others: asked again by class inside each
+/// of those tries as well, the waits multiply into four minutes.
+#[cfg(unix)]
+#[test]
+fn a_records_removal_waits_for_an_upload_once_not_twice() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut pauses = Vec::new();
+    let mut asked = 0;
+    let answer = remove_record_folder(
+        |pause| pauses.push(pause.as_millis() as u64),
+        temp.path(),
+        || {
+            asked += 1;
+            Err(std::io::Error::from_raw_os_error(libc::EIO))
+        },
+    );
+    assert_eq!(answer.unwrap_err().raw_os_error(), Some(libc::EIO));
+    assert_eq!(pauses, vec![1000; 20], "twenty seconds in all");
+    assert_eq!(asked, 21);
+
+    // A lock is still asked again by class, inside the one try.
+    let mut pauses = Vec::new();
+    let refused = remove_record_folder(
+        |pause| pauses.push(pause.as_millis() as u64),
+        temp.path(),
+        || Err(std::io::Error::from_raw_os_error(libc::EBUSY)),
+    );
+    assert_eq!(refused.unwrap_err().raw_os_error(), Some(libc::EBUSY));
+    assert_eq!(pauses, [200, 400, 800, 1600, 3200, 5000]);
+}
+
 /// A missing source is an error, never an empty manifest that would verify
 /// against an empty destination.
 #[test]

@@ -499,10 +499,11 @@ schedule and a judge (`by_class`, contention, `still_uploading`) and never
 writes a loop or a pause of its own: `tests/layering.rs` counts the `sleep`s
 under `src/core` and names what each of the three left waits for, none of
 them a retry. **Waits nest, and multiply**: `with_retry` around
-`fs_retry::remove_file` waits contention out inside every by-class try, and a
-record's removal asks both again inside each of its twenty-one, so on a mount
-that answers `EIO` for good it gives up after about four minutes, not twenty
-seconds. A removal whose mount is not the
+`fs_retry::remove_file` waits contention out inside every by-class try. So
+**two loops never both wait one error out**: a record's removal waits for an
+upload (`EIO`) on its own schedule, twenty seconds, and takes that error away
+from the by-class loop inside it (`with_retry_judged`), which would otherwise
+spend eleven seconds on it in each of the twenty-one tries — four minutes. A removal whose mount is not the
 one it started on is never `Removed`, and reconcile waits on a record whose
 source base is not on the mount the index recorded (`records::source_mount`,
 `records::source_unmounted`). `fs_retry::explain` is the one sentence a person

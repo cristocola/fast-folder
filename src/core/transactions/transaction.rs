@@ -530,15 +530,42 @@ impl MoveTransaction {
         // A cloud mount refuses to remove a folder whose files it is still
         // uploading — the record's last files were written seconds ago — and
         // says so with an I/O error that clears once they are up.
-        through_uploads(std::thread::sleep, || {
-            crate::util::fs_retry::with_retry(&self.operation_dir, || {
-                crate::util::fs_retry::remove_dir_all(&self.operation_dir)
-            })
+        remove_record_folder(std::thread::sleep, &self.operation_dir, || {
+            crate::util::fs_retry::remove_dir_all(&self.operation_dir)
         })
         .with_context(|| format!("removing move transaction {}", self.operation_dir.display()))?;
         crate::core::records::remove(&self.journal.operation_id);
         Ok(())
     }
+}
+
+/// A record's folder, removed through a mount's uploads ([`through_uploads`])
+/// and asked again by class inside that; pausing through `sleep`. **What a
+/// mount still uploading answers is the outer loop's alone to wait out**, a
+/// second apart for twenty seconds: asked again by class as well, inside each
+/// of those tries, the two waits multiply into four minutes.
+pub(super) fn remove_record_folder(
+    sleep: impl FnMut(std::time::Duration),
+    folder: &Path,
+    mut remove: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use crate::util::fs_retry::{Next, by_class, mount_wait, still_uploading, with_retry_judged};
+    let sleep = std::cell::RefCell::new(sleep);
+    through_uploads(
+        |pause| (sleep.borrow_mut())(pause),
+        || {
+            with_retry_judged(
+                |pause| (sleep.borrow_mut())(pause),
+                folder,
+                mount_wait(),
+                |error| match still_uploading(error) {
+                    Next::Again => Next::Stop,
+                    _ => by_class(error),
+                },
+                &mut remove,
+            )
+        },
+    )
 }
 
 /// Ask `op` again for as long as a mount is still uploading

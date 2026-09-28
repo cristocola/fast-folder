@@ -10,7 +10,7 @@
 //! | a file's copy (`transactions::copy`) | the same, of the error an `anyhow` chain holds, until a cancel | the same |
 //! | [`rename`], [`remove_file`], [`remove_dir`], [`remove_dir_all`] | contention: four Windows codes | `CONTENTION` |
 //! | [`rename_dir`] | contention | `FOLDER_RENAME` |
-//! | a record's removal (`MoveTransaction::remove`) | [`still_uploading`] | `RECORD_UPLOAD` |
+//! | a record's removal (`MoveTransaction::remove`) | [`still_uploading`]; by class inside it for every other error | `RECORD_UPLOAD`; `BY_CLASS` |
 //! | the publish's read-back (`move_engine`) | anything | `READ_BACK` |
 //!
 //! **Contention is Windows's alone.** There Defender, the Search Indexer,
@@ -23,8 +23,9 @@
 //! restarts, ESTALE and a lagging ENOTCONN are Linux's too.
 //!
 //! **Waits nest, and multiply.** A caller that asks [`with_retry`] about
-//! [`remove_file`] waits contention out inside every by-class try, and the
-//! record's removal asks both again inside each of its own.
+//! [`remove_file`] waits contention out inside every by-class try. A loop
+//! around another takes the errors it waits out away from the one inside
+//! ([`with_retry_judged`]), as a record's removal does with `EIO`.
 //!
 //! An error that asking again cannot change (`NotFound`, a permission, no
 //! room) is the answer at once: every judge is a short allow-list.
@@ -202,7 +203,7 @@ pub mod schedule {
 
     /// A folder that says it is not empty once everything in it was taken: a
     /// cloud mount whose listing has not caught up. Each pause follows a
-    /// fresh listing (`core::removal`), the last one included.
+    /// fresh listing and is followed by another (`core::removal`).
     pub const LISTING_LAG: &[u64] = &[300, 600, 900, 1200];
 
     /// A mount that answers about a path while the call on it still says "not
@@ -375,6 +376,20 @@ fn with_retry_sleeping<T>(
     mount_wait: Duration,
     op: impl FnMut() -> io::Result<T>,
 ) -> io::Result<T> {
+    with_retry_judged(sleep, path, mount_wait, by_class, op)
+}
+
+/// [`with_retry`] by a judge of the caller's, pausing through `sleep`: for a
+/// caller inside a loop of its own, which takes the errors that loop waits
+/// out away from this one. Two loops that both ask again about one error
+/// multiply their waits.
+pub fn with_retry_judged<T>(
+    sleep: impl FnMut(Duration),
+    path: &Path,
+    mount_wait: Duration,
+    judge: impl FnMut(&io::Error) -> Next,
+    op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
     Retry {
         pauses: schedule::BY_CLASS,
         mounts: &[path],
@@ -382,7 +397,7 @@ fn with_retry_sleeping<T>(
     }
     .run_sleeping(
         sleep,
-        by_class,
+        judge,
         |error, next| match next {
             Next::AfterMount => crate::util::log::info(format!(
                 "{}: {error}; waiting for its mount",

@@ -27,6 +27,87 @@ fn a_recent_preset_is_a_filter_esc_takes_off() {
     );
 }
 
+/// **A read lands in the dialog that asked for it.** Two projects can carry
+/// one id — `copy-to` keeps it, and the copy's folder can become a base — so
+/// their dialogs carry one title, and a slow read of the first must not fill
+/// the second's.
+#[test]
+fn a_late_read_never_fills_the_dialog_of_another_project() {
+    let mut app = fixture(3, 120, 40);
+    let mut projects = sample_projects(3);
+    let original = projects[0].clone();
+    let mut copy = original.clone();
+    copy.base = std::path::PathBuf::from("/mnt/archive");
+    copy.path = copy.base.join(&copy.name);
+    projects.push(copy.clone());
+    press(&mut app, Key::plain(KeyCode::F(5)));
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects,
+        },
+    );
+
+    assert!(app.library.select_path(&original.path));
+    let effects = press(&mut app, Key::ch('M'));
+    let Some(Effect::LoadView {
+        request: first,
+        title,
+        ..
+    }) = effects.first()
+    else {
+        panic!("a read is asked for: {effects:?}");
+    };
+    let (first, title) = (*first, title.clone());
+    press(&mut app, Key::plain(KeyCode::Esc));
+
+    assert!(app.library.select_path(&copy.path));
+    let effects = press(&mut app, Key::ch('M'));
+    let Some(Effect::LoadView {
+        request: second,
+        title: same,
+        ..
+    }) = effects.first()
+    else {
+        panic!("a read is asked for: {effects:?}");
+    };
+    let second = *second;
+    assert_eq!(&title, same, "one id, one title: the case this is about");
+    assert_ne!(first, second);
+
+    update(
+        &mut app,
+        Msg::ViewLoaded {
+            request: first,
+            title: title.clone(),
+            lines: vec!["base             /mnt/projects".to_string()],
+        },
+    );
+    let Some(Modal::Message { lines, .. }) = app.modals.top() else {
+        panic!("the dialog is up");
+    };
+    assert_eq!(
+        lines,
+        &vec!["reading…".to_string()],
+        "the first project's read is not this dialog's"
+    );
+
+    update(
+        &mut app,
+        Msg::ViewLoaded {
+            request: second,
+            title,
+            lines: vec!["base             /mnt/archive".to_string()],
+        },
+    );
+    let Some(Modal::Message { lines, .. }) = app.modals.top() else {
+        panic!("the dialog is up");
+    };
+    assert_eq!(lines[0], "base             /mnt/archive");
+}
+
 #[test]
 fn a_dialog_that_reads_from_a_worker_goes_up_at_once() {
     let mut app = fixture(3, 120, 40);
@@ -38,9 +119,11 @@ fn a_dialog_that_reads_from_a_worker_goes_up_at_once() {
     assert!(title.ends_with("metadata"));
     assert_eq!(lines, &vec!["reading…".to_string()]);
     let title = title.clone();
+    let request = app.view_request;
     let _ = update(
         &mut app,
         Msg::ViewLoaded {
+            request,
             title: title.clone(),
             lines: vec!["id             ID0248".to_string()],
         },
@@ -53,6 +136,7 @@ fn a_dialog_that_reads_from_a_worker_goes_up_at_once() {
     let _ = update(
         &mut app,
         Msg::ViewLoaded {
+            request,
             title,
             lines: vec!["late".to_string()],
         },

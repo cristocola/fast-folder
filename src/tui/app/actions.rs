@@ -712,11 +712,25 @@ impl App {
         path: PathBuf,
         kind: ViewKind,
     ) -> Vec<Effect> {
-        self.modals.push(Modal::message(
-            title.clone(),
-            "reading…",
-            MessageLevel::Info,
-        ));
-        vec![Effect::LoadView { title, path, kind }]
+        let request = self.open_reading(&title);
+        vec![Effect::LoadView {
+            request,
+            title,
+            path,
+            kind,
+        }]
+    }
+
+    /// Put up the dialog a worker's read will fill, and number the read.
+    ///
+    /// **The answer names its question by that number, not by the title**:
+    /// two projects can carry one id (`copy-to` keeps it), so two dialogs can
+    /// carry one title, and a slow read of the first would land as the
+    /// second's contents.
+    pub(super) fn open_reading(&mut self, title: &str) -> u64 {
+        self.modals
+            .push(Modal::message(title, "reading…", MessageLevel::Info));
+        self.view_request += 1;
+        self.view_request
     }
 }

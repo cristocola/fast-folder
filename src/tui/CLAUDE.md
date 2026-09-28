@@ -435,7 +435,10 @@ what is left of them, and with none left it is a refusal, never a neighbour.
 
 **A worker's answer names its question.** `Builder::pending` carries the slug a
 template read was for, as `on_template_loaded` and `TemplateViewLoaded` check
-theirs, so a slow read never lands as another template's contents.
+theirs, so a slow read never lands as another template's contents. A
+read-only dialog's read is numbered (`App::open_reading`, `App.view_request`)
+and `Msg::ViewLoaded` carries the number back: the title is no name for the
+question, since two projects may share an id and so a title.
 
 ## Discovery, patches and generations
 

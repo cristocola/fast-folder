@@ -119,7 +119,11 @@ impl App {
                 // A page that shrank must not leave its scroll past the end.
                 self.scroll_top_modal(0)
             }
-            Msg::ViewLoaded { title, lines } => self.on_view_loaded(title, lines),
+            Msg::ViewLoaded {
+                request,
+                title,
+                lines,
+            } => self.on_view_loaded(request, title, lines),
             Msg::ActionDone { id, outcome } => self.on_action_done(id, outcome),
             Msg::Spawned { what, outcome } => self.on_spawned(what, outcome),
             Msg::Resumed(Resumed::PostCreate) => {
@@ -290,10 +294,14 @@ impl App {
         vec![Effect::Retheme { theme, motion }]
     }
 
-    fn on_view_loaded(&mut self, title: String, lines: Vec<String>) -> Vec<Effect> {
+    fn on_view_loaded(&mut self, request: u64, title: String, lines: Vec<String>) -> Vec<Effect> {
         // The dialog went up when the key was pressed, saying it was
-        // reading; fill it in if it is still the one on top, else
-        // the user has moved on and the read is dropped.
+        // reading; fill it in if it is still the one on top and this is
+        // the read it asked for, else the user has moved on and the read
+        // is dropped.
+        if request != self.view_request {
+            return Vec::new();
+        }
         if let Some(Modal::Message {
             title: shown,
             lines: body,

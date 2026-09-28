@@ -241,6 +241,9 @@ pub struct App {
     /// note or a todo added — so the answer lands on the row it was about:
     /// the cursor settles there and it pulses, as an edit's does.
     pane_pending: Option<pane::PaneTarget>,
+    /// The number of the last read a read-only dialog asked for
+    /// (`open_reading`); an answer carrying another is an older dialog's.
+    pub view_request: u64,
     /// What the `$EDITOR` note was opened about, kept while the editor has
     /// the terminal: the text it comes back with goes to these.
     editor_note_for: Option<actions::Targets>,
@@ -374,6 +377,7 @@ impl App {
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
             pane_pending: None,
+            view_request: 0,
             editor_note_for: None,
             pane_anchor: None,
             pane_for: None,

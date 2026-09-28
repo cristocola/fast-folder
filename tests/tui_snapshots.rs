@@ -183,9 +183,11 @@ fn metadata_view_open() {
         "tags:".to_string(),
         "  • draft".to_string(),
     ];
+    let request = app.view_request;
     let _ = update(
         &mut app,
         Msg::ViewLoaded {
+            request,
             title: "ID0248 · metadata".to_string(),
             lines,
         },
@@ -202,9 +204,11 @@ fn journal_view_open() {
         "2026-08-29  revision two uploaded".to_string(),
         "2026-08-30  final mix approved".to_string(),
     ];
+    let request = app.view_request;
     let _ = update(
         &mut app,
         Msg::ViewLoaded {
+            request,
             title: "ID0248 · notes".to_string(),
             lines,
         },

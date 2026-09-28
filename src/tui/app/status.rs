@@ -113,12 +113,8 @@ impl App {
                     .map(|job| job.title())
                     .unwrap_or_else(|| id.clone())
             );
-            self.modals.push(Modal::message(
-                title.clone(),
-                "reading…",
-                MessageLevel::Info,
-            ));
-            return vec![Effect::LoadJobLog { id, title }];
+            let request = self.open_reading(&title);
+            return vec![Effect::LoadJobLog { request, id, title }];
         }
         self.on_scroll_modal_key(key)
     }

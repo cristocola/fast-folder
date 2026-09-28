@@ -483,11 +483,20 @@ impl Runtime {
                         });
                     });
                 }
-                Effect::LoadView { title, path, kind } => {
+                Effect::LoadView {
+                    request,
+                    title,
+                    path,
+                    kind,
+                } => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-view", move || {
                         let lines = loaders::view(&path, kind);
-                        let _ = tx.send(Msg::ViewLoaded { title, lines });
+                        let _ = tx.send(Msg::ViewLoaded {
+                            request,
+                            title,
+                            lines,
+                        });
                     });
                 }
                 Effect::LoadTemplate { slug } => {
@@ -558,7 +567,7 @@ impl Runtime {
                     }
                 }
                 Effect::MarkSeen(id) => crate::core::jobs::mark_seen(&id),
-                Effect::LoadJobLog { id, title } => self.load_job_log(id, title),
+                Effect::LoadJobLog { request, id, title } => self.load_job_log(request, id, title),
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;
                     let _ = self.tx.send(Msg::Resumed(resumed));
@@ -611,7 +620,7 @@ impl Runtime {
         });
     }
 
-    fn load_job_log(&self, id: String, title: String) {
+    fn load_job_log(&self, request: u64, id: String, title: String) {
         let tx = self.tx.clone();
         spawn_worker("fastf-job-log", move || {
             let lines = crate::core::jobs::dir(&id)
@@ -625,7 +634,11 @@ impl Runtime {
                     .flat_map(|event| event.lines().map(str::to_string))
                     .collect()
             };
-            let _ = tx.send(Msg::ViewLoaded { title, lines });
+            let _ = tx.send(Msg::ViewLoaded {
+                request,
+                title,
+                lines,
+            });
         });
     }
 

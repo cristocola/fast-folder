@@ -116,8 +116,9 @@ pub enum Msg {
         messages: Vec<crate::util::messages::Message>,
         log: Vec<String>,
     },
-    /// A read-only view's content landed.
+    /// A read-only view's content landed, for the read `request` numbers.
     ViewLoaded {
+        request: u64,
         title: String,
         lines: Vec<String>,
     },

@@ -48,8 +48,9 @@ pub enum Effect {
     /// Start another program on the user's behalf; answered by `Msg::Spawned`.
     Spawn(SpawnKind),
     /// Read one project's full metadata or journal for a read-only view;
-    /// answered by `Msg::ViewLoaded`.
+    /// answered by `Msg::ViewLoaded`, which carries `request` back.
     LoadView {
+        request: u64,
         title: String,
         path: PathBuf,
         kind: ViewKind,
@@ -92,8 +93,10 @@ pub enum Effect {
     CancelJob(String),
     /// Say that a job's outcome has been shown.
     MarkSeen(String),
-    /// Read a job's own log into the message dialog titled `title`.
+    /// Read a job's own log into the message dialog titled `title`; answered
+    /// as a `LoadView` is.
     LoadJobLog {
+        request: u64,
         id: String,
         title: String,
     },

@@ -29,6 +29,21 @@ in phases. Open work lives in `ROADMAP.md`; a decision lives in the CLAUDE.md
 beside the code it constrains; what happened lives in the release notes and
 the git history.
 
+## What a comment is for
+
+A comment says **what must stay true and what breaks if it does not**, in the
+present tense: what Windows refuses, what a cloud mount misplaces, what a
+release build compiles out, which order must hold. How the code came to be —
+what it used to do, which release had the defect, how it was found — is the
+commit message's. A version number appears in a comment only where it names
+**data an older fastf wrote** that this code still reads ("a record 3.11 wrote
+has no published list"). A measurement that justifies a constant stays, as one
+clause. A decision wider than its function lives in the CLAUDE.md beside the
+code, and the comment is the rule or a pointer. A test's doc says what the test
+guards, in the caller's terms. The `///` lines on the clap types in
+`src/main.rs` are not comments: they are `--help`, the man page and the
+completions.
+
 ## Build commands
 
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows
@@ -123,7 +138,8 @@ tell you.
   starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
   `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
-  cooked mode a signal handler restores).
+  cooked mode a signal handler restores), `win` (Windows only: the error codes
+  and flags more than one module names, each named once).
 - `src/cli/` — `job_worker.rs` is not a subcommand but the worker a job runs
   (`fastf --fastf-job <id>`, taken off argv in `main`); `jobs.rs` starts and
   follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
@@ -237,9 +253,9 @@ The helper walks such a path itself and refuses a link it cannot follow;
 **`util::fs_kind` asks a Windows volume by its drive root when the mount
 manager does not know it.** A WinFsp drive — how rclone mounts on Windows —
 gets the path itself back from `GetVolumePathNameW` (1005, the gap `canonical`
-walks around), and a path that is no root has no volume information: rclone's
-`S:` read as a local disk and was renamed aside object by object. Its root
-answers `FUSE-rclone`.
+walks around), and a path that is no root has no volume information: asked
+that way, an rclone drive reads as a local disk and is renamed aside object by
+object. Its root answers `FUSE-rclone`.
 
 **A path that will be stored goes through `util::paths::storable`**, which refuses
 non-UTF-8 rather than recording the `?`-substituted path `display()` produces.
@@ -263,6 +279,13 @@ show` prints.** `Config` has no `deny_unknown_fields`, so a mismatched spelling 
 silently ignored; a field whose Rust name differs carries `serde(rename)` plus an
 `alias` for older spellings (`recent_default_limit`).
 
+**A value sitting in `config.toml` parses leniently; `config set` is strict.**
+An unknown word reads as the default (`#[serde(other)]` on
+`NameCollision::Suffix`, the lenient parse of `theme`, `motion` and
+`log_level`), because a config that will not parse stops every command. The
+setter refuses the same word, since a typo at the command line is a mistake to
+report.
+
 **Retired keys stay harmless.** `config set` accepts `show_banner`, `show_frame`
 and `mouse` and says each is unused, so no script starts failing;
 `project_info_enabled`, `project_info_filename`, `pinfo_*` and
@@ -285,9 +308,9 @@ authority. **It records the names the base held when its scan listed it**
 (`Cache.seen`), and `discover_base` trusts it only while one names-only listing
 of the base returns exactly those (`discovery::freshness`); that listing is
 also the existence check, and the time gate (base newer than its index) stays
-as a second signal. Comparing times alone hid a project added while a scan that
-missed it was being written, and never fired on rclone, whose folder times read
-2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
+as a second signal. Comparing times alone hides a project added while a scan
+that missed it is being written, and never fires on rclone, whose folder times
+read 2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
 name, `cache_remove` drops it only once the folder is `Absent` (an unregistered
 project's folder stays) — so a name anybody else added still reads as stale; an
 index without `seen` (an older fastf's) is rescanned once, with no version bump.
@@ -456,6 +479,10 @@ skips the `$EDITOR` fallback `cfg.resolve_editor()` applies.
 - Do not bulk-edit source with PowerShell 5.1 `Get-Content -Raw` +
   `Set-Content`: it reads the ANSI codepage and writes UTF-8, double-encoding every
   `—`, `→`, `…` and `✓` in this repo, `char` literals included.
+- **Windows APIs are declared by hand** (`unsafe extern "system"` beside the one
+  call that needs them; the numbers more than one module names are in
+  `util::win`), and `libc` is the only platform crate. No bindings crate is
+  added for a handful of calls.
 - `util::yaml` is the only module that names the YAML crate, and
   `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins its output: users
   diff, commit and hand-edit these files, so the bytes may not move.

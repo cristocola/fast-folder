@@ -109,7 +109,7 @@ What each suite guards — the intent, not the case list:
 because neither the app nor a prompt draws without a TTY. `#![allow(dead_code)]`,
 since each binary uses a subset.
 
-## Three ways a test passes over the thing it is for
+## Ways a test passes over the thing it is for
 
 **Do not read the artefact through the code that repairs it.** `discover` rescans
 and rewrites the index on the way past, so asking it whether a restore worked can
@@ -124,6 +124,10 @@ Assert a word only that screen has (`frame.contains("one base per line")`) befor
 the id you formatted into it, or wrapping the output in an already-proven
 sanitizer, passes whatever the code returns. Assert the result, in the caller's
 units.
+
+**A property does not assume away the input it exists for.** A `prop_assume!`
+that discards a case because callers reject it holds only while every caller
+does; assert what the function does with that case instead.
 
 **Write the test against the broken build first.** One that passes before the fix
 is a design guard and is labelled so; one that still fails after has found a case

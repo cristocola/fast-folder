@@ -197,7 +197,14 @@ the screens whose rows are not commands.
 ## The command line's own prompts
 
 `prompt.rs` is the contract — the `require_tty` guard, `Ok(None)` for cancelled —
-over `inline.rs`'s drawing. `pickers::pick_project` is the ambiguity picker
+over `inline.rs`'s drawing. **Every prompt goes through it**, so Esc cancels all
+of them or none: one written straight against `inline` is how Esc comes to back
+out of some questions and be swallowed by others. **Every "you cancelled" is
+`prompt::report_cancelled`**, one sentence — `Cancelled — <what did not
+happen>.` — because a bare `Aborted.` says neither what was cancelled nor what
+state the project is in. **The template, base and project pickers exist once
+each** (`pickers.rs`), so their labels, their clamping and their "nothing to
+pick" refusals cannot differ between two commands. `pickers::pick_project` is the ambiguity picker
 `open`/`copy`/`path`/`term` share, never the app; `vars` holds the variable
 prompts a scripted `fastf new` falls back to. The picker is **not filterable**:
 the query already narrowed the list, and it should be answered in a keystroke or
@@ -258,9 +265,9 @@ body and `TableNeeds`): **beside** the table when the names fit whole with
 `PANE_BESIDE_MIN` next to them; **below** it, full width, when the body holds
 `TABLE_BELOW_MIN` + `PANE_BELOW_MIN` rows — the table as tall as its projects, up
 to its share; otherwise **over** it, `Regions.detail` being the body itself, drawn
-instead of the table while the pane has the focus. The pane used to need 100
-columns *and* 26 left by the names, so a library of long names never showed it at
-all. `place` takes no focus: the pane's width is what its rows wrap to, and a
+instead of the table while the pane has the focus. No width is asked of the
+terminal for it: a fixed minimum never shows the pane to a library of long
+names. `place` takes no focus: the pane's width is what its rows wrap to, and a
 focus that changed it would re-wrap them under the cursor. The app asks three
 questions of it: `pane_live` (switched on, and a library with a project in it —
 the pane arrives with the first project instead of moving when the names land),
@@ -703,8 +710,10 @@ will not load.
 **The builder stays up until the write has landed** (`Builder::saving`), so a
 refusal from under the lock — an occupied slug, a held lock, a full disk — lands
 on the list with every answer intact; `on_action_done` pops only on success, like
-the `Settings` and `Onboarding` arms. While saving it takes no keys, Esc included,
-because a sent write cannot be cancelled.
+the `Settings` and `Onboarding` arms. While saving it ignores Esc and `q`,
+because a sent write cannot be cancelled and its refusal needs the list to land
+on; **Ctrl-C still closes it**, since the write can wait thirty seconds on the
+data lock and the interrupt key is the one way out.
 
 **Leaving asks only when something would be lost**: `is_dirty` compares against
 `Builder::original` whole, so an undone typo is not "worked on". Esc, `q` and
@@ -928,8 +937,8 @@ one, or the end. **The line takes keys while its write is on its way**: Enter
 empties it at once and records the text in `sending`, an Enter meanwhile goes to
 `queued` and is sent when the first lands (`flush_adds`), and Esc or an empty
 Enter meanwhile sets `closing`, so the line goes once everything entered is
-written — the line used to refuse keys until the answer came, and a fast typist
-lost the first letters of the next todo. **Where it landed is the writer's
+written — a line that refuses keys until the answer comes loses a fast typist
+the first letters of the next todo. **Where it landed is the writer's
 answer** (`ActionOutcome::todo_ordinal`), never the app's guess. A refusal puts
 the text back on the line when nothing was typed after it, and otherwise names
 what was not added. **Closing the line** (`close_pane_edit`, which Esc, an empty
@@ -939,8 +948,8 @@ its index was a heading's. A paste goes in at the caret: several lines are that
 many todos (what was typed before it the start of the first, list markers off,
 `pane::todo_text_of`), one line is the field's, markers off when it was empty.
 `on_paste` normalises a terminal's line breaks first: many send a bare `\r`, and
-`str::lines` splits on `\n` alone, so every multi-line paste used to arrive as
-one line.
+`str::lines` splits on `\n` alone, so a multi-line paste would arrive as one
+line.
 
 **`Context::PaneEdit` is a text-entry context**: the field has first refusal, and
 the registry answers Enter, Esc and `Ctrl-S` (`on_pane_edit_key`). So Enter on the

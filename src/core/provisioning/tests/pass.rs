@@ -249,24 +249,3 @@ fn a_cancel_stops_a_removal_and_the_next_pass_finishes_it() {
     assert_eq!(finished.cleared, 1, "{finished:?}");
     assert!(!deleted.exists());
 }
-
-/// These names are on disk in journals another build has to read, so the
-/// enum must serialize to exactly these strings.
-#[test]
-fn incomplete_kinds_serialize_to_their_documented_names() {
-    use super::IncompleteKind;
-
-    for (value, name) in [
-        (IncompleteKind::Create, "create"),
-        (IncompleteKind::Move, "move"),
-        (IncompleteKind::ObsoleteCreateV1, "obsolete-create-v1"),
-        (IncompleteKind::ObsoleteMoveV1, "obsolete-move-v1"),
-        (IncompleteKind::CreateV2Invalid, "create-v2-invalid"),
-        (IncompleteKind::MoveV2Invalid, "move-v2-invalid"),
-    ] {
-        assert_eq!(
-            serde_json::to_string(&value).unwrap(),
-            format!("\"{name}\"")
-        );
-    }
-}

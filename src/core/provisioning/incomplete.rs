@@ -2,45 +2,36 @@
 
 use super::*;
 
-/// What kind of unfinished work a marker or journal represents.
-///
-/// The serialized names never change: they sit in journals on disk that an
-/// older or newer binary has to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// What kind of unfinished work a marker or journal represents. It is what a
+/// pass found on disk, and is written nowhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IncompleteKind {
     /// A v2 create journal that can be resumed or reported.
     Create,
     /// A v2 move transaction.
     Move,
     /// A pre-v2 create marker. Reported, never parsed — see the module docs.
-    #[serde(rename = "obsolete-create-v1")]
     ObsoleteCreateV1,
     /// A pre-v2 move marker.
-    #[serde(rename = "obsolete-move-v1")]
     ObsoleteMoveV1,
-    #[serde(rename = "create-v2-invalid")]
     CreateV2Invalid,
-    #[serde(rename = "move-v2-invalid")]
     MoveV2Invalid,
     /// A case-only rename that was killed between its two renames, leaving the
     /// project parked under `.<target>.fastf-case`. Discovery skips dot-prefixed
     /// folders, so until this is finished the project is simply gone from the
     /// library.
-    #[serde(rename = "rename-staging")]
     RenameStaging,
     /// A project that has left the library — moved, or deleted — whose old
     /// folder, hidden beside the others, is not removed yet.
     Leftover,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Incomplete {
     pub path: String,
     pub kind: IncompleteKind,
     pub pending: usize,
     /// A move's record folder, where the item is one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub record: Option<String>,
 }
 

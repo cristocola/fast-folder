@@ -100,7 +100,7 @@ fn bar<'a>(app: &App, width: usize, done: u64, total: u64) -> Line<'a> {
 /// the entry it is at, the rest dim — so removing the old copy after a move,
 /// minutes on a cloud mount, is a step that moves, never a full bar that sits
 /// still. A window too short for every row shows the current step alone.
-pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
+pub fn render_job_progress(app: &App, frame: &mut Frame, area: Rect) {
     if app.job.is_some() {
         return;
     }
@@ -290,7 +290,7 @@ fn indented(line: Line<'_>) -> Line<'_> {
 }
 
 /// An in-app batch's progress (tag, note, unregister), drawn over the
-/// dashboard while one runs. Like `render_move_progress`, it is not a modal on
+/// dashboard while one runs. Like `render_job_progress`, it is not a modal on
 /// the stack — it lives exactly as long as `App::job`. The modal names the
 /// item being acted on and counts the failures so far.
 pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
@@ -1320,7 +1320,10 @@ fn render_help(app: &App, ctx: command::Context, scroll: usize, frame: &mut Fram
         });
     }
     lines.push(Line::from(Span::styled(
-        " The command palette (c) lists every command with its key; type to filter.",
+        format!(
+            " The command palette ({}) lists every command with its key; type to filter.",
+            crate::tui::command::key_of(crate::tui::command::CommandId::Palette)
+        ),
         theme.dim(),
     )));
     lines.push(Line::from(Span::styled(

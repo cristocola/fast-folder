@@ -295,16 +295,20 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     // the status line.
     if app.library.loaded && app.library.is_empty() && inner.height > 3 {
         let sentence = if app.library.snapshot.is_empty() {
-            "nothing here yet — n creates a project, e registers a folder"
+            format!(
+                "nothing here yet — {} creates a project, {} registers a folder",
+                crate::tui::command::key_of(crate::tui::command::CommandId::NewProject),
+                crate::tui::command::key_of(crate::tui::command::CommandId::Register)
+            )
         } else {
-            "nothing matches"
+            "nothing matches".to_string()
         };
         // Centred in the box, so the gutter the table reserves does not push
         // the one sentence in an empty list half a column off.
         let line = Rect::new(full_inner.x, full_inner.y + 2, full_inner.width, 1);
         frame.render_widget(
             Paragraph::new(Span::styled(
-                fit(sentence, full_inner.width as usize, g.ellipsis),
+                fit(&sentence, full_inner.width as usize, g.ellipsis),
                 theme.dim(),
             ))
             .alignment(ratatui::layout::Alignment::Center),

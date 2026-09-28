@@ -464,7 +464,13 @@ fn render_variables(
         .collect();
     if items.is_empty() {
         frame.render_widget(
-            Paragraph::new(Span::styled(" no variables yet — a adds one", theme.dim())),
+            Paragraph::new(Span::styled(
+                format!(
+                    " no variables yet — {} adds one",
+                    crate::tui::command::key_of(crate::tui::command::CommandId::BuilderAdd)
+                ),
+                theme.dim(),
+            )),
             area,
         );
     } else {
@@ -547,7 +553,11 @@ fn render_files(
     if items.is_empty() {
         frame.render_widget(
             Paragraph::new(Span::styled(
-                " no files yet — a adds one (PROJECT_INFO.md is written for every project already)",
+                format!(
+                    " no files yet — {} adds one (PROJECT_INFO.md is written for every \
+                     project already)",
+                    crate::tui::command::key_of(crate::tui::command::CommandId::BuilderAdd)
+                ),
                 theme.dim(),
             )),
             area,

@@ -26,9 +26,11 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::crossterm::{cursor, execute};
 
+use crate::core::library::Project;
 use crate::tui::app::{self, App};
 use crate::tui::effect::{
-    Action, ActionOutcome, Effect, Exit, FollowUp, ListChange, SpawnKind, Suspended,
+    Action, ActionId, ActionOutcome, ApplyRequest, CreateRequest, Effect, Exit, FollowUp,
+    FromFolderRequest, ListChange, SpawnKind, Suspended,
 };
 use crate::tui::entry::Entry;
 use crate::tui::loaders;
@@ -37,6 +39,7 @@ use crate::tui::session::Session;
 use crate::tui::theme::Theme;
 
 use crate::tui::view;
+use crate::util::paths::display_path;
 use crate::util::size_scan::{SizeCell, SizeScanner};
 use crate::util::{diag, interrupt, tty};
 
@@ -469,20 +472,7 @@ impl Runtime {
                         self.reported.remove(path);
                     }
                 }
-                Effect::Run(id, action) => {
-                    let tx = self.tx.clone();
-                    spawn_worker("fastf-action", move || {
-                        let outcome = match run_action(*action) {
-                            Ok(mut outcome) => {
-                                outcome.message = for_the_app(&outcome.message);
-                                outcome.warning = outcome.warning.map(|w| for_the_app(&w));
-                                Ok(Box::new(outcome))
-                            }
-                            Err(e) => Err(for_the_app(&format!("{e:#}"))),
-                        };
-                        let _ = tx.send(Msg::ActionDone { id, outcome });
-                    });
-                }
+                Effect::Run(id, action) => self.start_action(id, action),
                 Effect::Spawn(kind) => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-spawn", move || {
@@ -544,19 +534,7 @@ impl Runtime {
                         let _ = tx.send(Msg::TemplateViewLoaded { slug, lines });
                     });
                 }
-                Effect::Preview(request) => {
-                    let tx = self.tx.clone();
-                    spawn_worker("fastf-preview", move || {
-                        let msg = match loaders::preview(&request) {
-                            Ok(preview) => Msg::Previewed(Box::new(preview)),
-                            Err(refusal) => Msg::PreviewFailed {
-                                field: refusal.field.map(str::to_string),
-                                error: refusal.error,
-                            },
-                        };
-                        let _ = tx.send(msg);
-                    });
-                }
+                Effect::Preview(request) => self.preview(request),
                 Effect::StartJob { kind, items } => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-start-job", move || {
@@ -580,23 +558,7 @@ impl Runtime {
                     }
                 }
                 Effect::MarkSeen(id) => crate::core::jobs::mark_seen(&id),
-                Effect::LoadJobLog { id, title } => {
-                    let tx = self.tx.clone();
-                    spawn_worker("fastf-job-log", move || {
-                        let lines = crate::core::jobs::dir(&id)
-                            .map(|dir| crate::util::log::tail(&dir.join("log"), 5000))
-                            .unwrap_or_default();
-                        let lines = if lines.is_empty() {
-                            vec!["This job's log is empty.".to_string()]
-                        } else {
-                            lines
-                                .iter()
-                                .flat_map(|event| event.lines().map(str::to_string))
-                                .collect()
-                        };
-                        let _ = tx.send(Msg::ViewLoaded { title, lines });
-                    });
-                }
+                Effect::LoadJobLog { id, title } => self.load_job_log(id, title),
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;
                     let _ = self.tx.send(Msg::Resumed(resumed));
@@ -617,6 +579,54 @@ impl Runtime {
             }
         }
         Ok(None)
+    }
+
+    /// One mutation on a worker, answered by `Msg::ActionDone` in the app's words.
+    fn start_action(&self, id: ActionId, action: Box<Action>) {
+        let tx = self.tx.clone();
+        spawn_worker("fastf-action", move || {
+            let outcome = match run_action(*action) {
+                Ok(mut outcome) => {
+                    outcome.message = for_the_app(&outcome.message);
+                    outcome.warning = outcome.warning.map(|w| for_the_app(&w));
+                    Ok(Box::new(outcome))
+                }
+                Err(e) => Err(for_the_app(&format!("{e:#}"))),
+            };
+            let _ = tx.send(Msg::ActionDone { id, outcome });
+        });
+    }
+
+    fn preview(&self, request: Box<crate::tui::effect::Request>) {
+        let tx = self.tx.clone();
+        spawn_worker("fastf-preview", move || {
+            let msg = match loaders::preview(&request) {
+                Ok(preview) => Msg::Previewed(Box::new(preview)),
+                Err(refusal) => Msg::PreviewFailed {
+                    field: refusal.field.map(str::to_string),
+                    error: refusal.error,
+                },
+            };
+            let _ = tx.send(msg);
+        });
+    }
+
+    fn load_job_log(&self, id: String, title: String) {
+        let tx = self.tx.clone();
+        spawn_worker("fastf-job-log", move || {
+            let lines = crate::core::jobs::dir(&id)
+                .map(|dir| crate::util::log::tail(&dir.join("log"), 5000))
+                .unwrap_or_default();
+            let lines = if lines.is_empty() {
+                vec!["This job's log is empty.".to_string()]
+            } else {
+                lines
+                    .iter()
+                    .flat_map(|event| event.lines().map(str::to_string))
+                    .collect()
+            };
+            let _ = tx.send(Msg::ViewLoaded { title, lines });
+        });
     }
 
     /// Give the terminal back and run a new project's post-create actions.
@@ -975,116 +985,22 @@ fn for_the_app(text: &str) -> String {
 
 /// One mutation through `core::operations`, on a worker.
 fn run_action(action: Action) -> Result<ActionOutcome> {
-    use crate::util::paths::display_path;
-
     match action {
-        Action::Reindex => {
-            let (cfg, count) = crate::core::operations::reindex()?;
-            let bases = cfg.effective_bases().len();
-            Ok(ActionOutcome::new(
-                ListChange::Reload,
-                format!(
-                    "Reindexed {count} project{} across {bases} base{}.",
-                    if count == 1 { "" } else { "s" },
-                    if bases == 1 { "" } else { "s" }
-                ),
-            ))
-        }
-        Action::AddTag { project, tag } => {
-            let tags = crate::core::operations::add_tags(&project, std::slice::from_ref(&tag))?;
-            let mut patched = (*project).clone();
-            let path = patched.path.clone();
-            patched.tags = tags;
-            Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project: Box::new(patched),
-                    was: path.clone(),
-                    stale: vec![path],
-                },
-                format!("Added 1 tag to {}", project.id),
-            )
-            .session(format!("tagged {} {tag}", project.id)))
-        }
-        Action::RemoveTags { project, tags } => {
-            let count = tags.len();
-            let remaining = crate::core::operations::remove_tags(&project, &tags)?;
-            let mut patched = (*project).clone();
-            let path = patched.path.clone();
-            patched.tags = remaining;
-            Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project: Box::new(patched),
-                    was: path.clone(),
-                    stale: vec![path],
-                },
-                format!(
-                    "Removed {count} tag{} from {}",
-                    if count == 1 { "" } else { "s" },
-                    project.id
-                ),
-            ))
-        }
+        Action::Reindex => reindex(),
+        Action::AddTag { project, tag } => add_tag(project, tag),
+        Action::RemoveTags { project, tags } => remove_tags(project, tags),
         Action::SetVariable {
             project,
             slug,
             value,
-        } => {
-            let meta = crate::core::operations::set_variable(&project, &slug, &value)?;
-            let mut patched = (*project).clone();
-            let path = patched.path.clone();
-            // The tag derived from the variable may have changed with it.
-            patched.tags = meta.tags;
-            let stored = meta.variables.get(&slug).cloned().unwrap_or_default();
-            Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project: Box::new(patched),
-                    was: path.clone(),
-                    stale: vec![path],
-                },
-                format!("Set {slug} to {stored} on {}", project.id),
-            )
-            .session(format!("set {} {slug}", project.id)))
-        }
-        Action::ReplaceTag { project, from, to } => {
-            let tag = to
-                .as_deref()
-                .map(crate::core::validated::Tag::parse)
-                .transpose()?;
-            let tags = crate::core::operations::replace_tag(&project, &from, tag.as_ref())?;
-            let mut patched = (*project).clone();
-            let path = patched.path.clone();
-            patched.tags = tags;
-            let message = match &to {
-                Some(to) => format!("Renamed tag {from} to {to} on {}", project.id),
-                None => format!("Removed tag {from} from {}", project.id),
-            };
-            Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project: Box::new(patched),
-                    was: path.clone(),
-                    stale: vec![path],
-                },
-                message,
-            ))
-        }
+        } => set_variable(project, slug, value),
+        Action::ReplaceTag { project, from, to } => replace_tag(project, from, to),
         Action::ReplaceNote {
             project,
             ordinal,
             was,
             text,
-        } => {
-            crate::core::operations::replace_note(&project, ordinal, &was, &text)?;
-            Ok(ActionOutcome::new(
-                ListChange::DetailOnly {
-                    path: project.path.clone(),
-                },
-                if text.trim().is_empty() {
-                    "Note removed."
-                } else {
-                    "Note saved."
-                },
-            ))
-        }
+        } => replace_note(project, ordinal, was, text),
         Action::ToggleTodo {
             project,
             ordinal,
@@ -1103,154 +1019,17 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
             ordinal,
             was,
             text,
-        } => {
-            crate::core::operations::replace_todo(&project, ordinal, &was, &text)?;
-            Ok(ActionOutcome::new(
-                ListChange::DetailOnly {
-                    path: project.path.clone(),
-                },
-                if text.trim().is_empty() {
-                    "Todo removed."
-                } else {
-                    "Todo reworded."
-                },
-            ))
-        }
+        } => replace_todo(project, ordinal, was, text),
         Action::AddTodos {
             project,
             texts,
             place,
-        } => {
-            let first = crate::core::operations::add_todos_at(&project, &texts, &place)?;
-            let added = texts.iter().filter(|text| !text.trim().is_empty()).count();
-            Ok(ActionOutcome::new(
-                ListChange::DetailOnly {
-                    path: project.path.clone(),
-                },
-                match added {
-                    1 => "Todo added.".to_string(),
-                    n => format!("{n} todos added."),
-                },
-            )
-            .todo(first + added.saturating_sub(1)))
-        }
-        Action::ReautoTags(project) => {
-            let derived = crate::core::operations::replace_auto_tags(&project)?;
-            // The free-form tags survive the operation, so the row has to be
-            // re-read rather than patched from the derived list alone.
-            Ok(ActionOutcome::new(
-                ListChange::Reload,
-                format!(
-                    "Re-derived {} auto-tag{} for {}",
-                    derived.len(),
-                    if derived.len() == 1 { "" } else { "s" },
-                    project.id
-                ),
-            ))
-        }
-        Action::Rename { project, name } => {
-            let renamed = crate::core::operations::rename(&project, &name)?;
-            let stale = vec![project.path.clone(), renamed.path.clone()];
-            Ok(ActionOutcome::new(
-                ListChange::Patched {
-                    project: Box::new(renamed.clone()),
-                    was: project.path.clone(),
-                    stale,
-                },
-                format!("Renamed to {}", renamed.name),
-            )
-            .session(format!("renamed {} → {}", renamed.id, renamed.name)))
-        }
-        Action::Create(request) => {
-            // The plan is recomputed under the data lock inside `create`: the
-            // ID the preview showed is advisory, and reusing it is how
-            // duplicate IDs are minted.
-            let mut created =
-                crate::core::operations::create(crate::core::operations::CreateOptions {
-                    template_slug: request.template_slug.clone(),
-                    variables: request.vars.clone(),
-                    base_dir_override: request.base_dir_override.clone(),
-                })?;
-            drop(created.take_mutation_lock());
-            let root = crate::util::paths::canonical(&created.plan.root_path)
-                .unwrap_or_else(|_| created.plan.root_path.clone());
-            let id = created.plan.id_str.clone();
-            let outcome = ActionOutcome::new(
-                ListChange::Reload,
-                format!("Created {id}  {}", created.plan.folder_name),
-            )
-            .session(format!("created {id}"))
-            .select(root.clone());
-            // Post-create actions want the main screen, and they must not run
-            // under the lock that was just dropped.
-            let actions =
-                crate::core::project::resolve_post_create(&created.template, &created.config);
-            Ok(if actions.is_empty() {
-                outcome
-            } else {
-                outcome.follow_up(FollowUp::PostCreate {
-                    root,
-                    template_slug: created.template.slug.clone(),
-                })
-            })
-        }
-        Action::Apply(request) => {
-            let outcome = crate::core::operations::apply(
-                &request.template_slug,
-                &request.target,
-                &request.vars,
-            )?;
-            let created = outcome
-                .actions
-                .iter()
-                .filter(|action| {
-                    use crate::core::project::ApplyAction::*;
-                    matches!(action, CreateFolder(_) | CreateFile(_))
-                })
-                .count();
-            Ok(ActionOutcome::new(
-                // An apply can turn a folder into a project only if it already
-                // was one, but it can add files to a project the list is
-                // showing, so the row is re-read rather than guessed at.
-                ListChange::Reload,
-                format!(
-                    "Applied {} — {created} item{} created",
-                    request.template_slug,
-                    if created == 1 { "" } else { "s" }
-                ),
-            )
-            .session(format!(
-                "applied {} → {}",
-                request.template_slug,
-                display_path(&request.target)
-            )))
-        }
-        Action::Register(request) if request.recursive => {
-            let targets = crate::cli::register::recursive_targets(&request.path)?;
-            let mut registered = 0usize;
-            let mut failures = Vec::new();
-            for path in targets {
-                match register_one(&request, &path) {
-                    Ok(_) => registered += 1,
-                    Err(error) => {
-                        failures.push(format!("{}: {error:#}", display_path(&path)));
-                    }
-                }
-            }
-            let outcome = ActionOutcome::new(
-                ListChange::Reload,
-                format!(
-                    "Registered {registered} folder{}",
-                    if registered == 1 { "" } else { "s" }
-                ),
-            )
-            .session(format!("registered {registered} folders"));
-            Ok(if failures.is_empty() {
-                outcome
-            } else {
-                outcome.warning(Some(failures.join("; ")))
-            })
-        }
+        } => add_todos(project, texts, place),
+        Action::ReautoTags(project) => rederive_auto_tags(project),
+        Action::Rename { project, name } => rename_project(project, name),
+        Action::Create(request) => create_project(&request),
+        Action::Apply(request) => apply_template(&request),
+        Action::Register(request) if request.recursive => register_recursively(request),
         Action::Register(request) => {
             let outcome = register_one(&request, &request.path.clone())?;
             let project = outcome.project;
@@ -1265,18 +1044,7 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
         Action::SaveTemplate {
             template,
             original_slug,
-        } => {
-            let slug = template.slug.clone();
-            let manifest =
-                crate::core::operations::save_template(&template, original_slug.as_deref())?;
-            Ok(ActionOutcome::new(
-                // A template's counts are on the header and the strip, so the
-                // summary is re-read; not a folder moved, so the list is not.
-                ListChange::SummaryOnly,
-                format!("Saved template {slug} to {}", display_path(&manifest)),
-            )
-            .session(format!("saved template {slug}")))
-        }
+        } => save_template(template, original_slug),
         Action::DeleteTemplate(slug) => {
             crate::core::operations::delete_template(&slug)?;
             Ok(
@@ -1284,57 +1052,8 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
                     .session(format!("deleted template {slug}")),
             )
         }
-        Action::TemplateFromFolder(request) => {
-            let report = crate::core::operations::template_from_folder(
-                &request.source,
-                &request.slug,
-                request.force,
-                request.bundle_assets,
-            )?;
-            let mut message = format!(
-                "Generated template {} — {} folder{}, {} text file{}",
-                request.slug,
-                report.folders,
-                if report.folders == 1 { "" } else { "s" },
-                report.text_files,
-                if report.text_files == 1 { "" } else { "s" }
-            );
-            if report.bundled > 0 {
-                message.push_str(&format!(
-                    ", {} bundled ({})",
-                    report.bundled,
-                    crate::util::human_bytes::human_bytes(report.bundled_bytes)
-                ));
-            }
-            let outcome = ActionOutcome::new(ListChange::SummaryOnly, message)
-                .session(format!("generated template {}", request.slug));
-            Ok(if report.skipped > 0 {
-                outcome.warning(Some(format!(
-                    "{} binary or oversized file{} skipped — turn on Bundle assets to include them",
-                    report.skipped,
-                    if report.skipped == 1 { "" } else { "s" }
-                )))
-            } else {
-                outcome
-            })
-        }
-        Action::SetConfig { key, value } => {
-            let mut said = String::new();
-            crate::core::operations::update_config(|config| {
-                said = crate::cli::config::apply(config, key, &value)?;
-                Ok(())
-            })?;
-            // A base, a default template or a date format changes what the
-            // header, the templates tab and the wizard are functions of; the projects
-            // themselves only move when a base does, and a base change is a
-            // different library.
-            let change = if key == "base-dir" || key == "bases" {
-                ListChange::Reload
-            } else {
-                ListChange::SummaryOnly
-            };
-            Ok(ActionOutcome::new(change, said).settings())
-        }
+        Action::TemplateFromFolder(request) => template_from_folder(&request),
+        Action::SetConfig { key, value } => set_config(key, value),
         Action::InitBaseDir(raw) => {
             let resolved = crate::core::config::init_base_dir(&raw)?;
             Ok(ActionOutcome::new(
@@ -1384,6 +1103,338 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
             .session(format!("noted {}", project.id)))
         }
     }
+}
+
+fn reindex() -> Result<ActionOutcome> {
+    let (cfg, count) = crate::core::operations::reindex()?;
+    let bases = cfg.effective_bases().len();
+    Ok(ActionOutcome::new(
+        ListChange::Reload,
+        format!(
+            "Reindexed {count} project{} across {bases} base{}.",
+            if count == 1 { "" } else { "s" },
+            if bases == 1 { "" } else { "s" }
+        ),
+    ))
+}
+
+fn add_tag(project: Box<Project>, tag: String) -> Result<ActionOutcome> {
+    let tags = crate::core::operations::add_tags(&project, std::slice::from_ref(&tag))?;
+    let mut patched = (*project).clone();
+    let path = patched.path.clone();
+    patched.tags = tags;
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(patched),
+            was: path.clone(),
+            stale: vec![path],
+        },
+        format!("Added 1 tag to {}", project.id),
+    )
+    .session(format!("tagged {} {tag}", project.id)))
+}
+
+fn remove_tags(project: Box<Project>, tags: Vec<String>) -> Result<ActionOutcome> {
+    let count = tags.len();
+    let remaining = crate::core::operations::remove_tags(&project, &tags)?;
+    let mut patched = (*project).clone();
+    let path = patched.path.clone();
+    patched.tags = remaining;
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(patched),
+            was: path.clone(),
+            stale: vec![path],
+        },
+        format!(
+            "Removed {count} tag{} from {}",
+            if count == 1 { "" } else { "s" },
+            project.id
+        ),
+    ))
+}
+
+fn set_variable(project: Box<Project>, slug: String, value: String) -> Result<ActionOutcome> {
+    let meta = crate::core::operations::set_variable(&project, &slug, &value)?;
+    let mut patched = (*project).clone();
+    let path = patched.path.clone();
+    // The tag derived from the variable may have changed with it.
+    patched.tags = meta.tags;
+    let stored = meta.variables.get(&slug).cloned().unwrap_or_default();
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(patched),
+            was: path.clone(),
+            stale: vec![path],
+        },
+        format!("Set {slug} to {stored} on {}", project.id),
+    )
+    .session(format!("set {} {slug}", project.id)))
+}
+
+fn replace_tag(project: Box<Project>, from: String, to: Option<String>) -> Result<ActionOutcome> {
+    let tag = to
+        .as_deref()
+        .map(crate::core::validated::Tag::parse)
+        .transpose()?;
+    let tags = crate::core::operations::replace_tag(&project, &from, tag.as_ref())?;
+    let mut patched = (*project).clone();
+    let path = patched.path.clone();
+    patched.tags = tags;
+    let message = match &to {
+        Some(to) => format!("Renamed tag {from} to {to} on {}", project.id),
+        None => format!("Removed tag {from} from {}", project.id),
+    };
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(patched),
+            was: path.clone(),
+            stale: vec![path],
+        },
+        message,
+    ))
+}
+
+fn replace_note(
+    project: Box<Project>,
+    ordinal: usize,
+    was: String,
+    text: String,
+) -> Result<ActionOutcome> {
+    crate::core::operations::replace_note(&project, ordinal, &was, &text)?;
+    Ok(ActionOutcome::new(
+        ListChange::DetailOnly {
+            path: project.path.clone(),
+        },
+        if text.trim().is_empty() {
+            "Note removed."
+        } else {
+            "Note saved."
+        },
+    ))
+}
+
+fn replace_todo(
+    project: Box<Project>,
+    ordinal: usize,
+    was: String,
+    text: String,
+) -> Result<ActionOutcome> {
+    crate::core::operations::replace_todo(&project, ordinal, &was, &text)?;
+    Ok(ActionOutcome::new(
+        ListChange::DetailOnly {
+            path: project.path.clone(),
+        },
+        if text.trim().is_empty() {
+            "Todo removed."
+        } else {
+            "Todo reworded."
+        },
+    ))
+}
+
+fn add_todos(
+    project: Box<Project>,
+    texts: Vec<String>,
+    place: crate::core::body::TodoPlace,
+) -> Result<ActionOutcome> {
+    let first = crate::core::operations::add_todos_at(&project, &texts, &place)?;
+    let added = texts.iter().filter(|text| !text.trim().is_empty()).count();
+    Ok(ActionOutcome::new(
+        ListChange::DetailOnly {
+            path: project.path.clone(),
+        },
+        match added {
+            1 => "Todo added.".to_string(),
+            n => format!("{n} todos added."),
+        },
+    )
+    .todo(first + added.saturating_sub(1)))
+}
+
+fn rederive_auto_tags(project: Box<Project>) -> Result<ActionOutcome> {
+    let derived = crate::core::operations::replace_auto_tags(&project)?;
+    // The free-form tags survive the operation, so the row has to be
+    // re-read rather than patched from the derived list alone.
+    Ok(ActionOutcome::new(
+        ListChange::Reload,
+        format!(
+            "Re-derived {} auto-tag{} for {}",
+            derived.len(),
+            if derived.len() == 1 { "" } else { "s" },
+            project.id
+        ),
+    ))
+}
+
+fn rename_project(project: Box<Project>, name: String) -> Result<ActionOutcome> {
+    let renamed = crate::core::operations::rename(&project, &name)?;
+    let stale = vec![project.path.clone(), renamed.path.clone()];
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(renamed.clone()),
+            was: project.path.clone(),
+            stale,
+        },
+        format!("Renamed to {}", renamed.name),
+    )
+    .session(format!("renamed {} → {}", renamed.id, renamed.name)))
+}
+
+fn create_project(request: &CreateRequest) -> Result<ActionOutcome> {
+    // The plan is recomputed under the data lock inside `create`: the
+    // ID the preview showed is advisory, and reusing it is how
+    // duplicate IDs are minted.
+    let mut created = crate::core::operations::create(crate::core::operations::CreateOptions {
+        template_slug: request.template_slug.clone(),
+        variables: request.vars.clone(),
+        base_dir_override: request.base_dir_override.clone(),
+    })?;
+    drop(created.take_mutation_lock());
+    let root = crate::util::paths::canonical(&created.plan.root_path)
+        .unwrap_or_else(|_| created.plan.root_path.clone());
+    let id = created.plan.id_str.clone();
+    let outcome = ActionOutcome::new(
+        ListChange::Reload,
+        format!("Created {id}  {}", created.plan.folder_name),
+    )
+    .session(format!("created {id}"))
+    .select(root.clone());
+    // Post-create actions want the main screen, and they must not run
+    // under the lock that was just dropped.
+    let actions = crate::core::project::resolve_post_create(&created.template, &created.config);
+    Ok(if actions.is_empty() {
+        outcome
+    } else {
+        outcome.follow_up(FollowUp::PostCreate {
+            root,
+            template_slug: created.template.slug.clone(),
+        })
+    })
+}
+
+fn apply_template(request: &ApplyRequest) -> Result<ActionOutcome> {
+    let outcome =
+        crate::core::operations::apply(&request.template_slug, &request.target, &request.vars)?;
+    let created = outcome
+        .actions
+        .iter()
+        .filter(|action| {
+            use crate::core::project::ApplyAction::*;
+            matches!(action, CreateFolder(_) | CreateFile(_))
+        })
+        .count();
+    Ok(ActionOutcome::new(
+        // An apply can turn a folder into a project only if it already
+        // was one, but it can add files to a project the list is
+        // showing, so the row is re-read rather than guessed at.
+        ListChange::Reload,
+        format!(
+            "Applied {} — {created} item{} created",
+            request.template_slug,
+            if created == 1 { "" } else { "s" }
+        ),
+    )
+    .session(format!(
+        "applied {} → {}",
+        request.template_slug,
+        display_path(&request.target)
+    )))
+}
+
+fn register_recursively(request: Box<crate::tui::app::register::Request>) -> Result<ActionOutcome> {
+    let targets = crate::cli::register::recursive_targets(&request.path)?;
+    let mut registered = 0usize;
+    let mut failures = Vec::new();
+    for path in targets {
+        match register_one(&request, &path) {
+            Ok(_) => registered += 1,
+            Err(error) => {
+                failures.push(format!("{}: {error:#}", display_path(&path)));
+            }
+        }
+    }
+    let outcome = ActionOutcome::new(
+        ListChange::Reload,
+        format!(
+            "Registered {registered} folder{}",
+            if registered == 1 { "" } else { "s" }
+        ),
+    )
+    .session(format!("registered {registered} folders"));
+    Ok(if failures.is_empty() {
+        outcome
+    } else {
+        outcome.warning(Some(failures.join("; ")))
+    })
+}
+
+fn save_template(
+    template: Box<crate::core::template::Template>,
+    original_slug: Option<String>,
+) -> Result<ActionOutcome> {
+    let slug = template.slug.clone();
+    let manifest = crate::core::operations::save_template(&template, original_slug.as_deref())?;
+    Ok(ActionOutcome::new(
+        // A template's counts are on the header and the strip, so the
+        // summary is re-read; not a folder moved, so the list is not.
+        ListChange::SummaryOnly,
+        format!("Saved template {slug} to {}", display_path(&manifest)),
+    )
+    .session(format!("saved template {slug}")))
+}
+
+fn template_from_folder(request: &FromFolderRequest) -> Result<ActionOutcome> {
+    let report = crate::core::operations::template_from_folder(
+        &request.source,
+        &request.slug,
+        request.force,
+        request.bundle_assets,
+    )?;
+    let mut message = format!(
+        "Generated template {} — {} folder{}, {} text file{}",
+        request.slug,
+        report.folders,
+        if report.folders == 1 { "" } else { "s" },
+        report.text_files,
+        if report.text_files == 1 { "" } else { "s" }
+    );
+    if report.bundled > 0 {
+        message.push_str(&format!(
+            ", {} bundled ({})",
+            report.bundled,
+            crate::util::human_bytes::human_bytes(report.bundled_bytes)
+        ));
+    }
+    let outcome = ActionOutcome::new(ListChange::SummaryOnly, message)
+        .session(format!("generated template {}", request.slug));
+    Ok(if report.skipped > 0 {
+        outcome.warning(Some(format!(
+            "{} binary or oversized file{} skipped — turn on Bundle assets to include them",
+            report.skipped,
+            if report.skipped == 1 { "" } else { "s" }
+        )))
+    } else {
+        outcome
+    })
+}
+
+fn set_config(key: &'static str, value: String) -> Result<ActionOutcome> {
+    let mut said = String::new();
+    crate::core::operations::update_config(|config| {
+        said = crate::cli::config::apply(config, key, &value)?;
+        Ok(())
+    })?;
+    // A base, a default template or a date format changes what the
+    // header, the templates tab and the wizard are functions of; the projects
+    // themselves only move when a base does, and a base change is a
+    // different library.
+    let change = if key == "base-dir" || key == "bases" {
+        ListChange::Reload
+    } else {
+        ListChange::SummaryOnly
+    };
+    Ok(ActionOutcome::new(change, said).settings())
 }
 
 /// One folder, registered. Shared by the single and the recursive arms so

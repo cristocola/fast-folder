@@ -544,8 +544,20 @@ impl App {
             return effects;
         }
         let lines = text.lines().count();
-        let first = text.lines().next().unwrap_or_default().to_string();
         let dropped = lines.saturating_sub(1);
+        let (effects, kept_first) = self.paste_into_field(text);
+        if kept_first && dropped > 0 {
+            self.warn(format!(
+                "pasted {lines} lines — kept the first, this field takes one"
+            ));
+        }
+        effects
+    }
+
+    /// The paste given to the field with the caret; `true` beside the effects
+    /// when that field took only the first line.
+    fn paste_into_field(&mut self, text: &str) -> (Vec<Effect>, bool) {
+        let first = text.lines().next().unwrap_or_default().to_string();
         let mut kept_first = false;
         let effects = match self.modals.top_mut() {
             Some(Modal::Palette(palette)) => {
@@ -578,51 +590,11 @@ impl App {
                 Vec::new()
             }
             Some(Modal::Builder(builder)) => {
-                match &mut builder.open {
-                    Some(Open::Metadata(form)) | Some(Open::Id(form)) => {
-                        if let Some(field) = form.focused_mut() {
-                            field.paste(&first);
-                            kept_first = true;
-                        }
-                    }
-                    Some(Open::Variables(list)) => {
-                        if let Some((_, form)) = &mut list.editing
-                            && let Some(field) = form.focused_mut()
-                        {
-                            field.paste(&first);
-                            kept_first = true;
-                        }
-                    }
-                    Some(Open::Structure(area)) => area.paste(text),
-                    Some(Open::Files(list)) => {
-                        if let Some(edit) = &mut list.editing {
-                            if edit.in_body {
-                                edit.body.paste(text);
-                            } else {
-                                edit.path.paste(&first);
-                                kept_first = true;
-                            }
-                        }
-                    }
-                    None => {}
-                }
+                kept_first = paste_into_builder(builder, text, &first);
                 Vec::new()
             }
             Some(Modal::Settings(state)) => {
-                match &mut state.editing {
-                    Some(Editing::Value { input, error, .. }) => {
-                        input.paste(&first);
-                        *error = None;
-                        kept_first = true;
-                    }
-                    Some(Editing::Bases { area, .. }) => area.paste(text),
-                    Some(Editing::Filter) => {
-                        state.filter.paste(&first);
-                        state.apply_filter();
-                        kept_first = true;
-                    }
-                    None => {}
-                }
+                kept_first = paste_into_settings(state, text, &first);
                 Vec::new()
             }
             Some(Modal::Onboarding(state)) => {
@@ -642,16 +614,7 @@ impl App {
             // An edit open in the pane: a line takes the first line, a note
             // every line — and nothing while its write is on its way.
             None if self.pane_edit.as_ref().is_some_and(|edit| !edit.pending()) => {
-                if let Some(edit) = &mut self.pane_edit {
-                    edit.clear_error();
-                    match edit {
-                        pane::PaneEdit::Line { input, .. } => {
-                            input.paste(&first);
-                            kept_first = true;
-                        }
-                        pane::PaneEdit::Note { area, .. } => area.paste(text),
-                    }
-                }
+                kept_first = self.paste_into_pane_edit(text, &first);
                 Vec::new()
             }
             None => {
@@ -662,11 +625,76 @@ impl App {
                 Vec::new()
             }
         };
-        if kept_first && dropped > 0 {
-            self.warn(format!(
-                "pasted {lines} lines — kept the first, this field takes one"
-            ));
-        }
-        effects
+        (effects, kept_first)
     }
+
+    /// `true` when the pane's edit took only the first line.
+    fn paste_into_pane_edit(&mut self, text: &str, first: &str) -> bool {
+        let mut kept_first = false;
+        if let Some(edit) = &mut self.pane_edit {
+            edit.clear_error();
+            match edit {
+                pane::PaneEdit::Line { input, .. } => {
+                    input.paste(first);
+                    kept_first = true;
+                }
+                pane::PaneEdit::Note { area, .. } => area.paste(text),
+            }
+        }
+        kept_first
+    }
+}
+
+/// `true` when the builder's open field took only the first line.
+fn paste_into_builder(builder: &mut Builder, text: &str, first: &str) -> bool {
+    let mut kept_first = false;
+    match &mut builder.open {
+        Some(Open::Metadata(form)) | Some(Open::Id(form)) => {
+            if let Some(field) = form.focused_mut() {
+                field.paste(first);
+                kept_first = true;
+            }
+        }
+        Some(Open::Variables(list)) => {
+            if let Some((_, form)) = &mut list.editing
+                && let Some(field) = form.focused_mut()
+            {
+                field.paste(first);
+                kept_first = true;
+            }
+        }
+        Some(Open::Structure(area)) => area.paste(text),
+        Some(Open::Files(list)) => {
+            if let Some(edit) = &mut list.editing {
+                if edit.in_body {
+                    edit.body.paste(text);
+                } else {
+                    edit.path.paste(first);
+                    kept_first = true;
+                }
+            }
+        }
+        None => {}
+    }
+    kept_first
+}
+
+/// `true` when the settings field being edited took only the first line.
+fn paste_into_settings(state: &mut settings::SettingsState, text: &str, first: &str) -> bool {
+    let mut kept_first = false;
+    match &mut state.editing {
+        Some(Editing::Value { input, error, .. }) => {
+            input.paste(first);
+            *error = None;
+            kept_first = true;
+        }
+        Some(Editing::Bases { area, .. }) => area.paste(text),
+        Some(Editing::Filter) => {
+            state.filter.paste(first);
+            state.apply_filter();
+            kept_first = true;
+        }
+        None => {}
+    }
+    kept_first
 }

@@ -836,8 +836,17 @@ pub fn panel_for_field(section: Section, key: &str) -> Option<Vec<Note>> {
 }
 
 fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Block])> {
-    Some(match (section, key) {
-        (Section::Metadata, "name") => (
+    match section {
+        Section::Metadata => metadata_field_body(key),
+        Section::Id => id_field_body(key),
+        Section::Variables => variable_field_body(key),
+        _ => None,
+    }
+}
+
+fn metadata_field_body(key: &str) -> Option<(&'static str, &'static [Block])> {
+    Some(match key {
+        "name" => (
             "Name",
             &[
                 Block::Para("What the template is called wherever it is listed or picked."),
@@ -845,7 +854,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Aside("Ordinary words: Music Video, Client Project."),
             ],
         ),
-        (Section::Metadata, "slug") => (
+        "slug" => (
             "Slug",
             &[
                 Block::Para("The template's folder name, and how you name it on the command line."),
@@ -859,7 +868,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Metadata, "description") => (
+        "description" => (
             "Description",
             &[
                 Block::Para("One line, shown beside the template wherever it is listed."),
@@ -867,7 +876,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Aside("Optional."),
             ],
         ),
-        (Section::Metadata, "naming_pattern") => (
+        "naming_pattern" => (
             "Naming pattern",
             &[
                 Block::Para(
@@ -888,7 +897,13 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Id, "prefix") => (
+        _ => return None,
+    })
+}
+
+fn id_field_body(key: &str) -> Option<(&'static str, &'static [Block])> {
+    Some(match key {
+        "prefix" => (
             "Prefix",
             &[
                 Block::Para("The letters in front of the number: ID in ID0047."),
@@ -900,7 +915,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Id, "digits") => (
+        "digits" => (
             "Digits",
             &[
                 Block::Para("How wide the number is written, padded with zeros. 4 gives ID0001."),
@@ -911,7 +926,13 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Variables, "slug") => (
+        _ => return None,
+    })
+}
+
+fn variable_field_body(key: &str) -> Option<(&'static str, &'static [Block])> {
+    Some(match key {
+        "slug" => (
             "Slug",
             &[
                 Block::Para(
@@ -922,7 +943,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Aside("Lowercase with underscores is the shape that always works."),
             ],
         ),
-        (Section::Variables, "label") => (
+        "label" => (
             "Label",
             &[
                 Block::Para("The words the question is asked in when a project is made."),
@@ -930,7 +951,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Code(&["Artist / band name"]),
             ],
         ),
-        (Section::Variables, "type") => (
+        "type" => (
             "Type",
             &[
                 Block::Para("text is typed in freely."),
@@ -941,7 +962,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Variables, "options") => (
+        "options" => (
             "Options",
             &[
                 Block::Para("The answers a select offers, on one line, separated by commas."),
@@ -949,7 +970,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Code(&["Client, Personal, Collab, Spec"]),
             ],
         ),
-        (Section::Variables, "default") => (
+        "default" => (
             "Default",
             &[
                 Block::Para("Offered as the answer, so Enter accepts it."),
@@ -957,7 +978,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 Block::Aside("Optional. For a select, it is the answer that starts chosen."),
             ],
         ),
-        (Section::Variables, "transform") => (
+        "transform" => (
             "Transform",
             &[
                 Block::Para("How the answer is reshaped before it lands in a folder name."),
@@ -975,7 +996,7 @@ fn field_body(section: Section, key: &str) -> Option<(&'static str, &'static [Bl
                 ),
             ],
         ),
-        (Section::Variables, "required") => (
+        "required" => (
             "Required",
             &[
                 Block::Para("A required question cannot be left empty."),

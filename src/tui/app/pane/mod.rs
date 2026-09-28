@@ -501,6 +501,28 @@ impl PaneRow {
 /// holds that the template no longer declares — or every variable of a
 /// registered project, which has no template — is free text after them.
 pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
+    let mut rows = header_rows(project, detail, width);
+
+    rows.push(PaneRow::Rule(PaneSection::Tags));
+    rows.extend(project.tags.iter().cloned().map(PaneRow::Tag));
+    rows.push(PaneRow::AddTag);
+
+    let Some(detail) = detail else {
+        rows.push(PaneRow::Reading);
+        return rows;
+    };
+    if let Some(error) = &detail.error {
+        rows.push(PaneRow::Warning(error.clone()));
+    }
+
+    rows.extend(todo_rows(detail, width));
+    rows.extend(note_rows(detail, width));
+    rows.extend(variable_rows(detail));
+    rows.extend(listing_rows(detail));
+    rows
+}
+
+fn header_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
     let mut rows = Vec::new();
     let mut name = wrap_name(&project.name, width).into_iter();
     rows.push(PaneRow::Name(name.next().unwrap_or_default()));
@@ -526,19 +548,11 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
             .into_iter()
             .map(PaneRow::Facts),
     );
+    rows
+}
 
-    rows.push(PaneRow::Rule(PaneSection::Tags));
-    rows.extend(project.tags.iter().cloned().map(PaneRow::Tag));
-    rows.push(PaneRow::AddTag);
-
-    let Some(detail) = detail else {
-        rows.push(PaneRow::Reading);
-        return rows;
-    };
-    if let Some(error) = &detail.error {
-        rows.push(PaneRow::Warning(error.clone()));
-    }
-
+fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
+    let mut rows = Vec::new();
     rows.push(PaneRow::Rule(PaneSection::Todo));
     // Each label is drawn where the file has it, over the run of tasks up to
     // the next one, with how much of the run is done — a label with nothing
@@ -577,7 +591,11 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
     push_labels(&mut rows, detail.todos.len());
     rows.push(PaneRow::AddTodo);
     rows.push(PaneRow::AddPhase);
+    rows
+}
 
+fn note_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
+    let mut rows = Vec::new();
     rows.push(PaneRow::Rule(PaneSection::Notes));
     let earlier = detail.notes.len().saturating_sub(NOTES_SHOWN);
     if earlier > 0 {
@@ -602,7 +620,11 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
         }
     }
     rows.push(PaneRow::AddNote);
+    rows
+}
 
+fn variable_rows(detail: &ProjectDetail) -> Vec<PaneRow> {
+    let mut rows = Vec::new();
     if let Some(meta) = &detail.meta {
         let mut variables = Vec::new();
         for variable in &detail.variables {
@@ -638,7 +660,11 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
             rows.extend(variables);
         }
     }
+    rows
+}
 
+fn listing_rows(detail: &ProjectDetail) -> Vec<PaneRow> {
+    let mut rows = Vec::new();
     if !detail.listing.is_empty() {
         rows.push(PaneRow::Rule(PaneSection::Inside));
         rows.extend(

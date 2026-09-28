@@ -279,158 +279,179 @@ impl App {
             _ => return Vec::new(),
         };
         match then {
-            TextThen::Rename(path) => {
-                if let Err(error) = validators::folder_name(&text) {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(error);
-                    }
-                    return Vec::new();
-                }
-                self.modals.pop();
-                let Some(project) = self.project_at(&path) else {
-                    return self.gone_from_the_library();
-                };
-                self.run_action(
-                    "renaming…",
-                    Action::Rename {
-                        project: Box::new(project),
-                        name: text,
-                    },
-                )
+            TextThen::Rename(path) => self.rename_to(path, text),
+            TextThen::AddPhase(path) => self.add_phase_named(path, text),
+            TextThen::AddTodo { place, project } => self.add_typed_todo(place, project, text),
+            TextThen::AddTag(targets) => self.add_typed_tag(targets, text),
+            TextThen::CopyTo(targets) => self.copy_to_typed(targets, text),
+            TextThen::RaiseCounter => self.raise_counter_to(text),
+            TextThen::DiscardAttention(path) => self.discard_when_typed(path, text),
+            TextThen::Delete(targets) => self.delete_when_typed(targets, text),
+        }
+    }
+
+    fn rename_to(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if let Err(error) = validators::folder_name(&text) {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(error);
             }
-            TextThen::AddPhase(path) => {
-                if text.trim().is_empty() {
-                    self.modals.pop();
-                    return Vec::new();
-                }
-                let Some(name) = crate::core::body::phase_label(&text) else {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(validators::PHASE_NAMELESS.to_string());
-                    }
-                    return Vec::new();
-                };
-                self.modals.pop();
-                if !self.is_selected(&path) {
-                    return self.gone_from_the_library();
-                }
-                self.start_adding(crate::core::body::TodoPlace::Phase(name))
+            return Vec::new();
+        }
+        self.modals.pop();
+        let Some(project) = self.project_at(&path) else {
+            return self.gone_from_the_library();
+        };
+        self.run_action(
+            "renaming…",
+            Action::Rename {
+                project: Box::new(project),
+                name: text,
+            },
+        )
+    }
+
+    fn add_phase_named(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if text.trim().is_empty() {
+            self.modals.pop();
+            return Vec::new();
+        }
+        let Some(name) = crate::core::body::phase_label(&text) else {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(validators::PHASE_NAMELESS.to_string());
             }
-            TextThen::AddTodo { place, project } => {
-                self.modals.pop();
-                if text.trim().is_empty() {
-                    return Vec::new();
+            return Vec::new();
+        };
+        self.modals.pop();
+        if !self.is_selected(&path) {
+            return self.gone_from_the_library();
+        }
+        self.start_adding(crate::core::body::TodoPlace::Phase(name))
+    }
+
+    fn add_typed_todo(
+        &mut self,
+        place: crate::core::body::TodoPlace,
+        project: PathBuf,
+        text: String,
+    ) -> Vec<Effect> {
+        self.modals.pop();
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        let Some(project) = self.project_at(&project) else {
+            return self.gone_from_the_library();
+        };
+        let next = self
+            .details
+            .get(&project.path)
+            .map(|detail| detail.todos.len())
+            .unwrap_or(0);
+        let effects = self.run_action(
+            "writing…",
+            Action::AddTodos {
+                project: Box::new(project),
+                texts: vec![text],
+                place,
+            },
+        );
+        if !effects.is_empty() {
+            self.pane_pending = Some(pane::PaneTarget::Todo(next));
+        }
+        effects
+    }
+
+    fn add_typed_tag(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        if text.trim().is_empty() {
+            self.modals.pop();
+            return Vec::new();
+        }
+        // Refused under the line, with the rule named, while the
+        // text is still there to correct — the same shape a rename
+        // takes.
+        let tag = match validators::tag(&text) {
+            Ok(tag) => tag,
+            Err(error) => {
+                if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                    prompt.error = Some(error);
                 }
-                let Some(project) = self.project_at(&project) else {
-                    return self.gone_from_the_library();
-                };
-                let next = self
-                    .details
-                    .get(&project.path)
-                    .map(|detail| detail.todos.len())
-                    .unwrap_or(0);
-                let effects = self.run_action(
-                    "writing…",
-                    Action::AddTodos {
-                        project: Box::new(project),
-                        texts: vec![text],
-                        place,
-                    },
-                );
-                if !effects.is_empty() {
-                    self.pane_pending = Some(pane::PaneTarget::Todo(next));
-                }
-                effects
+                return Vec::new();
             }
-            TextThen::AddTag(targets) => {
-                if text.trim().is_empty() {
-                    self.modals.pop();
-                    return Vec::new();
-                }
-                // Refused under the line, with the rule named, while the
-                // text is still there to correct — the same shape a rename
-                // takes.
-                let tag = match validators::tag(&text) {
-                    Ok(tag) => tag,
-                    Err(error) => {
-                        if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                            prompt.error = Some(error);
-                        }
-                        return Vec::new();
-                    }
-                };
-                self.modals.pop();
-                self.add_tag(tag, &targets)
+        };
+        self.modals.pop();
+        self.add_tag(tag, &targets)
+    }
+
+    fn copy_to_typed(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        let typed = text.trim().to_string();
+        if typed.is_empty() {
+            return Vec::new();
+        }
+        self.modals.pop();
+        // Expanded here, refused in the engine: `~/backups` has to mean
+        // the same thing it means in `config set bases`, and the rule
+        // about bases is stated once, in `copy_engine`.
+        let destination = match crate::core::config::expand_base_path(&typed) {
+            Ok(path) => path,
+            Err(error) => {
+                self.warn(format!("{error:#}"));
+                return Vec::new();
             }
-            TextThen::CopyTo(targets) => {
-                let typed = text.trim().to_string();
-                if typed.is_empty() {
-                    return Vec::new();
-                }
-                self.modals.pop();
-                // Expanded here, refused in the engine: `~/backups` has to mean
-                // the same thing it means in `config set bases`, and the rule
-                // about bases is stated once, in `copy_engine`.
-                let destination = match crate::core::config::expand_base_path(&typed) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        self.warn(format!("{error:#}"));
-                        return Vec::new();
-                    }
-                };
-                let projects = self.still_here(&targets);
-                if projects.is_empty() {
-                    return self.gone_from_the_library();
-                }
-                self.start_background(
-                    crate::core::jobs::JobKind::Copy,
-                    projects,
-                    Some(destination),
-                )
-            }
-            TextThen::RaiseCounter => {
-                self.modals.pop();
-                match text.trim().parse::<u64>() {
-                    Ok(value) => self.run_action(
-                        settings::Job::RaiseCounter.busy(),
-                        Action::RaiseCounter(value),
-                    ),
-                    Err(_) => {
-                        self.warn(format!("expected a number, got '{}'", text.trim()));
-                        Vec::new()
-                    }
-                }
-            }
-            TextThen::DiscardAttention(path) => {
-                if !text
-                    .trim()
-                    .eq_ignore_ascii_case(super::attention::DISCARD_WORD)
-                {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(super::attention::DISCARD_MISMATCH.to_string());
-                    }
-                    return Vec::new();
-                }
-                self.modals.pop();
-                self.resolve_attention(path, crate::core::attention::Action::Discard)
-            }
-            TextThen::Delete(targets) => {
-                if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
-                    // The text stays: one Backspace fixes a typo.
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(validators::DELETE_MISMATCH.to_string());
-                    }
-                    return Vec::new();
-                }
-                self.modals.pop();
-                // What is left of what the question named, and nothing else:
-                // the word was typed about those folders.
-                let projects = self.still_here(&targets);
-                if projects.is_empty() {
-                    return self.gone_from_the_library();
-                }
-                self.start_background(crate::core::jobs::JobKind::Delete, projects, None)
+        };
+        let projects = self.still_here(&targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        self.start_background(
+            crate::core::jobs::JobKind::Copy,
+            projects,
+            Some(destination),
+        )
+    }
+
+    fn raise_counter_to(&mut self, text: String) -> Vec<Effect> {
+        self.modals.pop();
+        match text.trim().parse::<u64>() {
+            Ok(value) => self.run_action(
+                settings::Job::RaiseCounter.busy(),
+                Action::RaiseCounter(value),
+            ),
+            Err(_) => {
+                self.warn(format!("expected a number, got '{}'", text.trim()));
+                Vec::new()
             }
         }
+    }
+
+    fn discard_when_typed(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if !text
+            .trim()
+            .eq_ignore_ascii_case(super::attention::DISCARD_WORD)
+        {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(super::attention::DISCARD_MISMATCH.to_string());
+            }
+            return Vec::new();
+        }
+        self.modals.pop();
+        self.resolve_attention(path, crate::core::attention::Action::Discard)
+    }
+
+    fn delete_when_typed(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
+            // The text stays: one Backspace fixes a typo.
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(validators::DELETE_MISMATCH.to_string());
+            }
+            return Vec::new();
+        }
+        self.modals.pop();
+        // What is left of what the question named, and nothing else:
+        // the word was typed about those folders.
+        let projects = self.still_here(&targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        self.start_background(crate::core::jobs::JobKind::Delete, projects, None)
     }
 
     /// One tag, on the projects its question was about.

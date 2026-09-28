@@ -95,43 +95,77 @@ pub fn build(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     if !projects_only {
-        let words = Fuzzy::words(query);
-        for (i, (command, availability)) in commands.iter().enumerate() {
-            // A hit in the title outranks any hit in the description: `open`
-            // is Open project folder before it is "open the action menu".
-            let (score, hits) = if words.is_empty() {
-                (0, Vec::new())
-            } else {
-                let title = fuzzy.match_all(&words, &Fuzzy::haystack(command.title));
-                let description = fuzzy.match_all(&words, &Fuzzy::haystack(command.description));
-                match (title, description) {
-                    (Some(hit), _) => (1_000_000 + hit.score, hit.indices),
-                    (None, Some(hit)) => (hit.score, Vec::new()),
-                    (None, None) => continue,
-                }
-            };
-            candidates.push(Candidate {
-                entry: PaletteEntry {
-                    target: PaletteTarget::Command(command.id),
-                    title: command.title.to_string(),
-                    detail: command.description.to_string(),
-                    key: command.keys.first().map(|k| k.label()).unwrap_or_default(),
-                    enabled: *availability == Availability::Enabled,
-                    reason: match availability {
-                        Availability::Disabled(reason) => Some(reason),
-                        _ => None,
-                    },
-                    hits,
-                    group: "commands",
-                },
-                // Commands outrank a project of equal score: they are what the
-                // palette is for, and a project has its own search bar.
-                score: score + 1,
-                order: i,
-            });
-        }
+        candidates.extend(command_candidates(query, &commands, fuzzy));
+    }
+    candidates.extend(project_candidates(
+        query,
+        projects_only,
+        empty,
+        library,
+        fuzzy,
+    ));
+    if !projects_only {
+        candidates.extend(template_candidates(query, cards, fuzzy));
     }
 
+    if !empty {
+        candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
+    }
+    candidates.into_iter().map(|c| c.entry).collect()
+}
+
+fn command_candidates(
+    query: &str,
+    commands: &[(&'static Command, Availability)],
+    fuzzy: &mut Fuzzy,
+) -> Vec<Candidate> {
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let words = Fuzzy::words(query);
+    for (i, (command, availability)) in commands.iter().enumerate() {
+        // A hit in the title outranks any hit in the description: `open`
+        // is Open project folder before it is "open the action menu".
+        let (score, hits) = if words.is_empty() {
+            (0, Vec::new())
+        } else {
+            let title = fuzzy.match_all(&words, &Fuzzy::haystack(command.title));
+            let description = fuzzy.match_all(&words, &Fuzzy::haystack(command.description));
+            match (title, description) {
+                (Some(hit), _) => (1_000_000 + hit.score, hit.indices),
+                (None, Some(hit)) => (hit.score, Vec::new()),
+                (None, None) => continue,
+            }
+        };
+        candidates.push(Candidate {
+            entry: PaletteEntry {
+                target: PaletteTarget::Command(command.id),
+                title: command.title.to_string(),
+                detail: command.description.to_string(),
+                key: command.keys.first().map(|k| k.label()).unwrap_or_default(),
+                enabled: *availability == Availability::Enabled,
+                reason: match availability {
+                    Availability::Disabled(reason) => Some(reason),
+                    _ => None,
+                },
+                hits,
+                group: "commands",
+            },
+            // Commands outrank a project of equal score: they are what the
+            // palette is for, and a project has its own search bar.
+            score: score + 1,
+            order: i,
+        });
+    }
+    candidates
+}
+
+fn project_candidates(
+    query: &str,
+    projects_only: bool,
+    empty: bool,
+    library: &LibraryState,
+    fuzzy: &mut Fuzzy,
+) -> Vec<Candidate> {
+    let mut candidates: Vec<Candidate> = Vec::new();
     let projects: Vec<(usize, String)> = library
         .snapshot
         .iter()
@@ -172,42 +206,40 @@ pub fn build(
             order: usize::MAX / 2 + i,
         });
     }
+    candidates
+}
 
-    if !projects_only {
-        let items: Vec<(usize, String)> = cards
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (i, format!("{} {}", c.slug, c.name)))
-            .collect();
-        for (i, hit) in fuzzy.rank(query, items).into_iter().take(TEMPLATE_LIMIT) {
-            let card = &cards[i];
-            let slug_len = card.slug.chars().count() as u32;
-            candidates.push(Candidate {
-                entry: PaletteEntry {
-                    target: PaletteTarget::Template(card.slug.clone()),
-                    title: format!("filter by template {}", card.slug),
-                    detail: card.name.clone(),
-                    key: String::new(),
-                    enabled: true,
-                    reason: None,
-                    hits: hit
-                        .indices
-                        .into_iter()
-                        .filter(|&h| h < slug_len)
-                        .map(|h| h + "filter by template ".len() as u32)
-                        .collect(),
-                    group: "templates",
-                },
-                score: hit.score,
-                order: usize::MAX / 2 + i,
-            });
-        }
+fn template_candidates(query: &str, cards: &[TemplateCard], fuzzy: &mut Fuzzy) -> Vec<Candidate> {
+    let mut candidates: Vec<Candidate> = Vec::new();
+    let items: Vec<(usize, String)> = cards
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, format!("{} {}", c.slug, c.name)))
+        .collect();
+    for (i, hit) in fuzzy.rank(query, items).into_iter().take(TEMPLATE_LIMIT) {
+        let card = &cards[i];
+        let slug_len = card.slug.chars().count() as u32;
+        candidates.push(Candidate {
+            entry: PaletteEntry {
+                target: PaletteTarget::Template(card.slug.clone()),
+                title: format!("filter by template {}", card.slug),
+                detail: card.name.clone(),
+                key: String::new(),
+                enabled: true,
+                reason: None,
+                hits: hit
+                    .indices
+                    .into_iter()
+                    .filter(|&h| h < slug_len)
+                    .map(|h| h + "filter by template ".len() as u32)
+                    .collect(),
+                group: "templates",
+            },
+            score: hit.score,
+            order: usize::MAX / 2 + i,
+        });
     }
-
-    if !empty {
-        candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.order.cmp(&b.order)));
-    }
-    candidates.into_iter().map(|c| c.entry).collect()
+    candidates
 }
 
 impl App {

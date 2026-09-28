@@ -459,6 +459,19 @@ const LOG_LEVELS: &[&str] = &crate::util::log::Level::NAMES;
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
+    [
+        project_basics(s),
+        creating_a_project(s),
+        appearance(s),
+        library_bases(s),
+        after_creation(s),
+        id_counter(s),
+        maintenance(s),
+    ]
+    .concat()
+}
+
+fn project_basics(s: &Settings) -> Vec<Row> {
     vec![
         heading("Project basics"),
         text(
@@ -497,6 +510,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.register_naming_pattern.clone(),
             "what `register --rename` names a folder with no template; must contain {id}",
         ),
+    ]
+}
+
+fn creating_a_project(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Creating a project"),
         toggle(
             "Confirm before creating",
@@ -522,6 +540,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             hint: "suffix gives a taken folder name _2, _3, …; error refuses it",
             kind: Kind::Choice("on-name-collision", COLLISION),
         },
+    ]
+}
+
+fn appearance(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Appearance"),
         Row {
             label: "Theme",
@@ -535,6 +558,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             hint: "a row a verb just changed lights up and fades, the focus eases between the panes, a message arrives and dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
             kind: Kind::Choice("motion", MOTION),
         },
+    ]
+}
+
+fn library_bases(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Library bases"),
         Row {
             label: "Bases",
@@ -552,6 +580,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.recent_default_limit.to_string(),
             "the default --limit for `fastf recent`",
         ),
+    ]
+}
+
+fn after_creation(s: &Settings) -> Vec<Row> {
+    vec![
         heading("After a project is created"),
         toggle(
             "git init",
@@ -577,6 +610,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.print_path,
             "print the absolute path on its own line, for `cd \\\"$(fastf new …)\\\"`",
         ),
+    ]
+}
+
+fn id_counter(s: &Settings) -> Vec<Row> {
+    vec![
         heading("ID counter"),
         run(
             "Counter",
@@ -590,6 +628,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             String::new(),
             "make every mounted base agree on that number — after copying projects in from elsewhere",
         ),
+    ]
+}
+
+fn maintenance(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Maintenance"),
         Row {
             label: "Log level",

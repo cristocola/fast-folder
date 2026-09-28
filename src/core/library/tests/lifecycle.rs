@@ -92,6 +92,27 @@ fn a_case_only_rename_waits_for_a_folder_held_for_a_moment() {
     assert_eq!(names, ["Proj_A"], "one folder, under its new name");
 }
 
+/// A case-only rename looks for a free staging name a bounded number of
+/// times, and says what is in its way.
+#[test]
+fn a_case_only_rename_gives_up_on_a_base_full_of_staging_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "myproject", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    for attempt in 0..super::super::lifecycle::CASE_STAGING_ATTEMPTS {
+        fs::create_dir(base.join(case_staging_name("MyProject", attempt))).unwrap();
+    }
+    let project = scan_base(base)
+        .into_iter()
+        .find(|project| project.name == "myproject")
+        .unwrap();
+
+    let refused = rename_project_unlocked(&project, "MyProject").unwrap_err();
+    let said = format!("{refused:#}");
+    assert!(said.contains("reconcile"), "{said}");
+    assert!(base.join("myproject").is_dir(), "the project stayed put");
+}
+
 #[test]
 fn stale_project_identity_cannot_authorize_deletion() {
     let tmp = tempfile::tempdir().unwrap();

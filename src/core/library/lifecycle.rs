@@ -324,6 +324,11 @@ pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<
 /// beside the only writer, and read there.
 pub(crate) const CASE_STAGING_SUFFIX: &str = ".fastf-case";
 
+/// How many staging names a case-only rename tries before it says the base
+/// is full of them: a filesystem that answers "taken" to every name would
+/// otherwise be asked for ever.
+pub(crate) const CASE_STAGING_ATTEMPTS: u32 = 32;
+
 /// The staging folder name for a case-only rename to `target`, attempt `n`.
 pub(crate) fn case_staging_name(target: &str, attempt: u32) -> String {
     if attempt == 0 {
@@ -410,6 +415,15 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         let mut staging = base.join(case_staging_name(&sanitized, attempt));
         while assets::entry_exists(&staging)? {
             attempt += 1;
+            if attempt >= CASE_STAGING_ATTEMPTS {
+                anyhow::bail!(
+                    "{} names like {} are taken in {}: what interrupted renames left \
+                     there; `fastf reconcile` finishes them",
+                    CASE_STAGING_ATTEMPTS,
+                    case_staging_name(&sanitized, 0),
+                    crate::util::paths::display_path(&base)
+                );
+            }
             staging = base.join(case_staging_name(&sanitized, attempt));
         }
         crate::util::fs_retry::rename_dir(&project.path, &staging)

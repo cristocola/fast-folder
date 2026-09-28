@@ -1,5 +1,6 @@
 //! What the app remembers between runs: the sort order, whether the detail
-//! pane was open, and the row the cursor was on.
+//! pane was open, the row the cursor was on, whether the template guide has
+//! been shown, and whether the editor's explanation panel is open.
 //!
 //! A few keystrokes' worth, kept in `state.toml` beside `config.toml` — the
 //! data directory is the one place that is this machine's own — and never

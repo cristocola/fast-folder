@@ -54,10 +54,8 @@ pub fn summary_local(cfg: &Config) -> SummaryPart {
 /// The header's bases, from the indexes: no base is scanned to draw it.
 /// **Every base is asked at once, under one deadline** — its canonical form,
 /// whether it is a folder, what its index says — so a base on a mount that
-/// stopped answering costs `PROBE_TIMEOUT` once and is called unresponsive,
-/// where asking one base after another, each canonicalized before its probe,
-/// cost a timeout per base and the kernel's own for the first. Also answers
-/// each base's probe, which the attention part reads.
+/// stopped answering costs `PROBE_TIMEOUT` once and is called unresponsive.
+/// Also answers each base's probe, which the attention part reads.
 pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>) {
     let candidates = cfg.base_candidates();
     let answers = paths::answer_within(&candidates, paths::PROBE_TIMEOUT, |configured| {
@@ -417,9 +415,8 @@ fn preview_recursive(
 /// The register form's path field, named once so a refusal can point at it.
 const REGISTER_PATH: &str = crate::tui::app::register::FIELD_PATH;
 
-/// A folder an answer names, checked where it was typed. This is the check
-/// that used to happen after three more questions had been answered, taking
-/// all four answers with it — and the wording is the one those prompts used.
+/// A folder an answer names, checked where it was typed, so the refusal lands
+/// on its own field before any other answer is at stake.
 fn existing_directory(
     path: &std::path::Path,
     field: &'static str,
@@ -457,7 +454,6 @@ fn template_card(t: &template::Template) -> TemplateCard {
     }
 }
 
-/// Every project, newest first, through the caches.
 /// One base's rows for a discovery: `cached` gets what its index holds as
 /// soon as that is read, and the answer is what the base holds. A base that
 /// is not there is empty — the header says why. `configured` is the base as

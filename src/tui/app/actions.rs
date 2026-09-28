@@ -45,12 +45,10 @@ impl ActionsState {
 pub enum TextThen {
     /// Rename the project the prompt named, carried by path.
     ///
-    /// **The dialog carries its target rather than re-reading the selection.**
-    /// The prompt text is built once from the row under the cursor, and the
-    /// action used to be built from whatever was selected when Enter landed —
-    /// so a discovery arriving under an open dialog, which moves the cursor
-    /// when the named row is no longer in the snapshot, could point a
-    /// destructive verb at a different project from the one on screen.
+    /// **The dialog carries its target rather than re-reading the selection**:
+    /// a discovery arriving under an open dialog moves the cursor when the
+    /// named row is no longer in the snapshot, and a verb built from the
+    /// selection at Enter would land on a project other than the one on screen.
     Rename(std::path::PathBuf),
     AddTag,
     /// A todo for the selected project, where the pane cannot show its list:
@@ -494,11 +492,10 @@ impl App {
                 self.modals.pop();
                 Vec::new()
             }
-            // Enter is the commonest reflex there is on a two-button dialog,
-            // and nothing bound it in `Context::Modal` — so it fell through to
-            // the registry and produced silence. It answers `y`, which is the
-            // key line's first entry and the default every `confirm` in this
-            // app already offers.
+            // Enter, the commonest reflex on a two-button dialog, answers `y`:
+            // the key line's first entry and the default every `confirm` in
+            // this app offers. Nothing binds it in `Context::Modal`, so without
+            // this arm it falls through to the registry and does nothing.
             KeyCode::Enter => self.answer_confirm(true),
             _ => self.lookup_and_run(key),
         }

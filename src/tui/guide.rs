@@ -3,9 +3,7 @@
 //! The same bargain [`crate::tui::command`] makes for keys. The builder's
 //! explanation panel, the guide overlay and the coach all read this module, so
 //! a sentence about what a naming pattern is exists in exactly one place and
-//! cannot drift from the sentence three rows away. Before this, the whole
-//! teaching budget of the template editor was one footer line cut with an
-//! ellipsis, and five nouns above it.
+//! cannot drift from the sentence three rows away.
 //!
 //! **Pure.** No I/O, no clock, no `Config` — `update` calls into here and
 //! `update` reads no disk. The one dynamic input is the scratch `Template`
@@ -130,8 +128,8 @@ pub fn notes(blocks: &[Block]) -> Vec<Note> {
 /// How many rows `notes` occupies once wrapped to `width`.
 ///
 /// The scroll ceiling is computed from this, in `update`, at the width the view
-/// draws with — counting entries rather than wrapped rows is what once made the
-/// end of a long journal unreachable (`view::modals::message_rows`).
+/// draws with: counted in entries rather than wrapped rows, it stops short of
+/// the end of a long page (`view::modals::message_rows` counts the same way).
 pub fn note_rows(notes: &[Note], width: usize) -> usize {
     notes.iter().map(|note| wrapped_rows(note, width)).sum()
 }
@@ -1066,10 +1064,8 @@ mod tests {
     ///
     /// Every one of them has an ASCII spelling for terminals that draw the
     /// Unicode form as a replacement box, and a literal written into prose has
-    /// no theme to ask. The first draft of this file drew a folder tree out of
-    /// `├──` and headed its walkthrough steps with `·`, both of which are
-    /// exactly that mistake. Prose punctuation — an em dash, an ellipsis
-    /// spelled with three dots — is not a glyph and is fine.
+    /// no theme to ask. Prose punctuation — an em dash, an ellipsis spelled
+    /// with three dots — is not a glyph and is fine.
     #[test]
     fn no_glyph_the_theme_owns_is_written_into_the_prose() {
         use crate::tui::theme::Glyphs;
@@ -1091,7 +1087,7 @@ mod tests {
             unicode.bar_empty,
         ];
         // The box-drawing pieces `widgets::tree` draws, which are the theme's
-        // too and were the first thing to go wrong here.
+        // too.
         let drawing = ["├", "└", "│", "┌", "┐", "┘", "┬", "┴"];
         for block in all_blocks() {
             for text in texts(block) {

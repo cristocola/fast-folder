@@ -7,24 +7,21 @@
 //! the shell keeps the whole run — which is exactly the difference between a
 //! prompt and the guided app.
 //!
-//! It replaces `dialoguer`. The line editor, the palette and the glyphs are the
-//! app's (`widgets::input::LineEdit`, `theme::Theme`), which is what makes
+//! The line editor, the palette and the glyphs are the app's
+//! (`widgets::input::LineEdit`, `theme::Theme`), which is what makes
 //! `fastf copy lullaby`'s picker and the guided app look like one tool.
 //!
 //! **Every movement is relative, and the cursor position is never queried.**
 //! ratatui's `Viewport::Inline` is the obvious way to do this and the wrong one:
 //! it asks the terminal where the cursor is (`ESC [ 6 n`) and waits up to two
-//! seconds for an answer. A pty under test never sends one — `cargo test`
-//! failed on it immediately — and neither does every real terminal. The same
-//! trap already cost this codebase `Terminal::clear` (`src/tui/CLAUDE.md`), and
-//! it would be worse here: a query on the command-line path would put a stall
-//! in front of `fastf copy`, which exists to be instant. So the block is
-//! reserved by printing newlines, and every repaint is `move up n`, draw, and
-//! nothing else.
+//! seconds for an answer, which a pty under test, and some real terminals,
+//! never send — the trap that rules out `Terminal::clear` too
+//! (`src/tui/CLAUDE.md`). Here it would put a stall in front of `fastf copy`,
+//! which exists to be instant. So the block is reserved by printing newlines,
+//! and every repaint is `move up n`, draw, and nothing else.
 //!
-//! **Everything is drawn on stderr**, the stream fastf has always prompted on,
-//! so `cd "$(fastf path lullaby)"` still gets a picker and stdout still carries
-//! nothing but the path.
+//! **Everything is drawn on stderr**, so `cd "$(fastf path lullaby)"` gets a
+//! picker and stdout carries nothing but the path.
 //!
 //! `Ok(None)` is a cancelled prompt and never an error: `cli` classifies a
 //! *broken* prompt (no terminal, stdin at EOF) as fatal and a cancelled one as
@@ -150,8 +147,8 @@ impl Inline {
     }
 
     /// Repaint the block. `caret` is `(row, column)` within it, and the cursor
-    /// is shown there — a text field with no visible insertion point is the
-    /// regression that cost a release.
+    /// is shown there — a text field with no visible insertion point does not
+    /// say where the next character lands.
     fn paint(&self, rows: &[Row], caret: Option<(usize, usize)>) {
         let mut out = String::from("\x1b[?25l");
         for index in 0..self.height {
@@ -474,9 +471,9 @@ impl<'a> TextOpts<'a> {
 
 /// Read a line. `Ok(None)` is Esc.
 ///
-/// The caret is parked in the text being edited. Leaving it at the start of the
-/// line — or hidden — is the regression that cost a release: the text moved as
-/// you typed and nothing said where the next character would land.
+/// The caret is parked in the text being edited. Left at the start of the
+/// line, or hidden, the text moves as you type and nothing says where the next
+/// character will land.
 pub fn text(prompt: &str, opts: TextOpts<'_>) -> Result<Option<String>> {
     let inline = Inline::open(2)?;
     let theme = inline.theme.clone();

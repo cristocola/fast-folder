@@ -135,13 +135,11 @@ impl App {
 
     /// A success, with the theme's own tick in front of it.
     ///
-    /// **The glyph belongs here and not in the message.** Twelve of
-    /// `runtime::run_action`'s strings carried a literal `✓`, which
-    /// `Glyphs::ascii` maps to `+` — so on a legacy Windows console, or under
-    /// `FASTF_ASCII=1`, they drew a replacement box beside the app's own
-    /// correctly-themed messages. `run_action` runs on a worker with no theme
-    /// to ask, and this is the one place every one of its messages passes
-    /// through.
+    /// **The glyph belongs here and not in the message.** `runtime::run_action`
+    /// runs on a worker with no theme to ask, so a literal `✓` in its strings
+    /// draws a replacement box on a legacy Windows console or under
+    /// `FASTF_ASCII=1`, where `Glyphs::ascii` spells it `+`. This is the one
+    /// place every one of its messages passes through.
     pub(super) fn good(&mut self, text: impl Into<String>) {
         let text = format!("{}  {}", self.theme.glyphs.check, text.into());
         self.set_status(StatusLevel::Good, text);

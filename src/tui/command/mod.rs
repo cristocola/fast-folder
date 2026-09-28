@@ -4,8 +4,8 @@
 //! fires in, its default keys, whether the palette and the hint bar show it —
 //! and every surface that names a command reads it from here: the keymap
 //! (`lookup`), the fuzzy palette (`palette_entries`), the help overlay
-//! (`help_sections`) and the hint bar (`hints`). The prototype this replaces
-//! carried four copies of its key table, and they had already drifted.
+//! (`help_sections`) and the hint bar (`hints`). A second copy of a key table
+//! drifts from the first.
 //!
 //! `tests/tui_commands.rs` holds the invariants: no two commands share a key in
 //! one context, every command has a title and a description, every id is

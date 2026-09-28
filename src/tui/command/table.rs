@@ -5,9 +5,8 @@ use super::*;
 
 const G: &[Context] = &[Context::Global];
 /// The library's own screen: the table and its pane. The templates
-/// tab is **not** in it — it was, while the templates were a strip along the
-/// bottom of this screen, and that is why `n` used to mean both "new project"
-/// and "new template" in the same hint bar.
+/// tab is **not** in it, so `n` means one thing per hint bar: "new project"
+/// here, "new template" on the tab.
 const LISTS: &[Context] = &[Context::Projects, Context::Detail];
 const PD: &[Context] = &[Context::Projects, Context::Detail];
 const ACTIONS: &[Context] = &[Context::Projects, Context::Detail, Context::Actions];
@@ -18,10 +17,9 @@ const TABS: &[Context] = &[Context::Projects, Context::Detail, Context::Template
 const BACKSTEP: &[Context] = TABS;
 /// Every list and every scrollable dialog: where the arrow keys go — and,
 /// since one grammar is the whole point, where the page keys and the jumps to
-/// the ends go too. The pages and the jumps used to have narrower lists of
-/// their own that stopped short of the action menu and the builder, the two
-/// lists that cannot be searched, so eighteen verbs could only be walked a row
-/// at a time.
+/// the ends go too. Declared over anything narrower, they skip some list, and
+/// a list that cannot be searched — the action menu, the builder — is then
+/// walked a row at a time.
 const SCROLLERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
@@ -53,8 +51,7 @@ const STUDIO: &[Context] = &[Context::Templates];
 /// The guide overlay itself — the reader, not the key that opens it.
 const READER: &[Context] = &[Context::Guide];
 /// The palette itself. Everything printable there is the query, so these are
-/// the only keys it can declare — which is exactly why it had none before, and
-/// why `?` in the palette described a screen it was not on.
+/// the only keys it can declare.
 const IN_PALETTE: &[Context] = &[Context::Palette];
 const IN_PROMPT: &[Context] = &[Context::Prompt];
 const IN_PANE_EDIT: &[Context] = &[Context::PaneEdit];
@@ -883,9 +880,8 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- marks (what a batch verb will act on) ----------------------------
     // Marking is how every batch verb is aimed, so it belongs in the hint bar
-    // and the palette like any other verb. It was advertised only by a
-    // hand-written sentence on the status line, which is exactly the drift the
-    // one registry exists to prevent.
+    // and the palette like any other verb, never in a hand-written sentence on
+    // the status line.
     cmd!(
         MarkToggle,
         "Mark / unmark",
@@ -980,7 +976,7 @@ pub static COMMANDS: &[Command] = &[
     // --- the horizontal axis: focus ------------------------------------------
     // Declared after the tab switch so the bar reads verbs first, then the
     // ways to look around, then the ways to ask: `→ pane` ahead of the verbs
-    // pushed `? help` off an 80-column bar.
+    // pushes `? help` off an 80-column bar.
     cmd!(
         FocusList,
         "Back to the list",

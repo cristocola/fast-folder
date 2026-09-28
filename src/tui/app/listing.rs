@@ -167,8 +167,7 @@ impl App {
     /// there is no pane left to be in.
     ///
     /// A resize to the size the app already has is nothing at all: one comes
-    /// back from every `$EDITOR` note and every `fg`, and it used to close
-    /// whatever edit was open in the pane.
+    /// back from every `$EDITOR` note and every `fg`.
     pub(super) fn on_resize(&mut self, width: u16, height: u16) -> Vec<Effect> {
         if (width, height) == self.size {
             return Vec::new();
@@ -207,9 +206,9 @@ impl App {
     }
 
     /// Read the project's detail, or — when one is cached — check it is
-    /// still what is on disk: a stat, and a read only if the file changed.
-    /// The pane used to trust its cache until a verb inside the app dropped
-    /// it, so a line added to `PROJECT_INFO.md` in an editor never showed.
+    /// still what is on disk: a stat, and a read only if the file changed. A
+    /// cache that only a verb inside the app drops never shows a line added
+    /// to `PROJECT_INFO.md` in an editor.
     pub(super) fn detail_effect(&self, path: &Path) -> Effect {
         match self.details.get(path) {
             Some(detail) => Effect::RefreshDetail {
@@ -251,10 +250,9 @@ impl App {
 
     /// Rebuild what is known about the templates and hand the tab its list.
     ///
-    /// One call, because the two used to drift: the strip was rebuilt from the
-    /// summary *and* the library's per-template counts, while the studio took
-    /// the summary alone — so a slug projects still named that no template
-    /// answered to was in one list and not the other.
+    /// One call, so the tab takes exactly the cards built from the summary
+    /// *and* the library's per-template counts: from the summary alone, a
+    /// slug projects still name that no template answers to is missing.
     pub(super) fn refresh_templates(&mut self) -> Vec<Effect> {
         self.templates
             .rebuild(self.summary.as_ref(), self.library.per_template());

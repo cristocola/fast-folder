@@ -14,8 +14,8 @@
 //! **Two kinds of word are never fuzzy at all** ([`Word::is_literal`]):
 //!
 //! - A word of **digits**. Every folder name carries a date, and a date is a
-//!   pile of digits in order: `45` found `2026-04-15` as a fuzzy hit — the `4`
-//!   of the month and the `5` of the day — which is not what anyone typing a
+//!   pile of digits in order: fuzzed, `45` finds `2026-04-15` — the `4` of
+//!   the month and the `5` of the day — which is not what anyone typing a
 //!   number means. A number means an ID, so `45` is a substring and finds
 //!   `ID0045` and `ID0450` and nothing else.
 //! - A word containing a **path separator**, which is what a hierarchical tag
@@ -233,7 +233,7 @@ mod tests {
         assert!(matches("45", "ID0450"));
         assert!(matches("248", "2026-09-01_Lullaby_Remix_ID0248"));
         // Not the 4 of a month and the 5 of a day, which is what fuzzing a
-        // number over a dated folder name used to find.
+        // number over a dated folder name finds.
         assert!(!matches("45", "2026-04-15_Spring_Campaign_ID0107"));
         assert!(!matches("45", "2026-04-05_Old_Shoot_ID0107"));
         assert!(Fuzzy::words("45")[0].is_literal());
@@ -244,7 +244,7 @@ mod tests {
     fn a_hierarchical_tag_is_matched_literally() {
         assert!(matches("client/Acme", "client/Acme"));
         assert!(matches("client/", "client/Acme"));
-        // Fuzzed, this reached every slashed tag there is.
+        // Fuzzed, this would reach every slashed tag there is.
         assert!(!matches("c/A", "client/Acme"));
         assert!(!matches("client/acm", "client-work/acme"));
         assert!(Fuzzy::words("client/Acme")[0].is_literal());

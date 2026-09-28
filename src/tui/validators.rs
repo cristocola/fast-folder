@@ -1,11 +1,10 @@
-//! The prompt texts and validation messages for the app's native text prompts,
-//! kept verbatim from the prompt-at-a-time flows they replace. Keeping the
-//! strings here means a message change is one edit, and the pty suite's anchors
-//! do not drift when a flow moves.
+//! The prompt texts and validation messages for the app's native text prompts.
+//! Keeping the strings here means a message change is one edit, and the pty
+//! suite's anchors do not drift when a flow moves.
 
 use crate::core::validated::{ProjectFolderName, Tag};
 
-/// `New folder name`, as the rename prompt always asked.
+/// `New folder name`, the rename prompt.
 pub const RENAME_PROMPT: &str = "New folder name";
 
 /// `Tag to add (e.g. draft  or  client/Acme)`.
@@ -108,8 +107,7 @@ pub fn discard_template_prompt(editing: bool) -> String {
     }
 }
 
-/// The first-run question, and what skipping it says. The words are the
-/// onboarding flow's own.
+/// The first-run question, and what skipping it says.
 pub const ONBOARDING_PROMPT: &str = "Where should your projects live?";
 pub const ONBOARDING_SKIPPED: &str = "Skipped — set it anytime in Settings → Base directory.";
 

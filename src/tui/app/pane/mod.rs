@@ -1,12 +1,10 @@
 //! The detail pane as a list of rows.
 //!
-//! The pane was one `Paragraph` — a run of lines the view built as it went,
-//! with `detail_scroll_max` hand-counting the same lines a second time to
-//! know how far it could scroll. It is an editor now: some of its rows are
-//! things you can change (the name, a tag, a variable, the notes), so *which*
-//! rows exist and *which* of them the cursor may rest on has to be one answer
-//! that `update` and `view` both read. `pane_rows` is that answer, and it is
-//! pure: a project and what has been read of it in, rows out.
+//! The pane is an editor: some of its rows are things you can change (the
+//! name, a tag, a variable, the notes), so *which* rows exist and *which* of
+//! them the cursor may rest on has to be one answer that `update` and `view`
+//! both read, never counted a second time. `pane_rows` is that answer, and it
+//! is pure: a project and what has been read of it in, rows out.
 //!
 //! **A row only says what it is**, and holds only what fits the pane, so an
 //! edit reads the text it changes from the detail, never from a row.
@@ -747,7 +745,8 @@ pub enum EditTarget {
 /// way the builder's `saving` and a settings row's edit already work.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneEdit {
-    /// One line: a variable's value or a tag's text.
+    /// One line: a variable's value, a tag's or a todo's text, or the line a
+    /// new todo or phase is typed on.
     Line {
         row: usize,
         target: EditTarget,
@@ -925,8 +924,8 @@ impl PaneEdit {
     /// The row this edit was opened on, as it still is in the file — where
     /// to find the edit again when the rows are rebuilt under it. Not
     /// `target`: a tag is named there by the text being typed, which is no
-    /// row at all until the write lands, and an edit re-anchored by it moved
-    /// to "add a tag" on every refresh.
+    /// row at all until the write lands, and an edit re-anchored by it would
+    /// move to "add a tag" on every refresh.
     pub fn anchor(&self) -> PaneTarget {
         match self {
             PaneEdit::Line {

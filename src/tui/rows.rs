@@ -1,9 +1,8 @@
 //! One project row, built once for every surface that shows a list of projects.
 //!
-//! Three copies of the column-width arithmetic used to live in `cli/recent.rs`
-//! (plain output, the picker, the paged browser), which is how the picker came
-//! to clamp its labels and the plain list did not. The widths are measured here,
-//! the row is formatted here, and `clamp_label` is applied by whoever draws it.
+//! The widths are measured here, so the plain list and the picker cannot
+//! disagree about them; the row is formatted here, and `clamp_label` is applied
+//! by whoever draws it.
 
 use std::path::Path;
 
@@ -14,8 +13,8 @@ use crate::util::human_bytes::human_bytes;
 use crate::util::size_scan::SizeCell;
 
 /// Width of the Size cell, fixed at the widest value it can hold
-/// (`unavailable`). Sizing it to the page's current widest value — which is what
-/// the old blocking scan did — reflows every row each time a snapshot lands.
+/// (`unavailable`). Sizing it to the page's current widest value reflows every
+/// row each time a snapshot lands.
 pub const SIZE_CELL: usize = 11;
 
 /// Shown until a row has been measured. Says what is happening, rather than
@@ -39,13 +38,12 @@ impl RowWidths {
         I: IntoIterator<Item = &'a Project> + Clone,
     {
         Self {
-            // **Display columns, not bytes, in every one of these.** Three of
-            // the four measured `.len()` while the comment on the fourth
-            // explained why that is wrong: a base folder called `Проекты` is
-            // seven columns and fourteen bytes, so the column reserved fourteen
-            // and left a gap nothing filled. A template slug or an id can carry
-            // the same characters. `LibraryState::recompute` measures the same
-            // base label with `width()`, so the two disagreed about one string.
+            // **Display columns, not bytes, in every one of these**: a base
+            // folder called `Проекты` is seven columns and fourteen bytes, and a
+            // column measured in bytes leaves a gap nothing fills. A template
+            // slug or an id can carry the same characters, and
+            // `LibraryState::recompute` measures the same base label with
+            // `width()`.
             id: projects
                 .clone()
                 .into_iter()
@@ -94,12 +92,12 @@ pub fn tag_cell(tags: &[String]) -> String {
     }
 }
 
-/// One list row, ANSI-free and single-line so `clamp_label` and `live_select`'s
-/// line-count redraw stay correct.
+/// One list row, ANSI-free and single-line so `clamp_label` and the inline
+/// picker's line-count redraw stay correct.
 ///
-/// `size` is `None` for the surfaces that show no Size column (`fastf recent`
-/// and `fastf search`) and the browser's current cell otherwise. `mark_missing`
-/// is for the surfaces that check the folder still exists.
+/// `size` is `None` where no Size column is shown (the project picker) and the
+/// row's current cell otherwise. `mark_missing` is for the surfaces that check
+/// the folder still exists.
 pub(crate) fn project_row(
     project: &Project,
     widths: &RowWidths,
@@ -109,8 +107,7 @@ pub(crate) fn project_row(
     // **The folder name comes second, right after the ID.** A row is clamped
     // from the right, so whatever sits last is what gets eaten — and the window
     // the launcher relaunch opens is often 80 columns, far narrower than the
-    // terminal anyone starts fastf in by hand. The name was last, so the one
-    // column the reader is actually looking for was the first to go.
+    // terminal anyone starts fastf in by hand.
     //
     // The date is last of the text columns because every bundled naming pattern
     // already carries it inside the folder name, so it is the cheapest thing to
@@ -285,9 +282,8 @@ mod tests {
         assert_eq!(size_label(None), "unavailable");
     }
 
-    /// The reason the Size cell is a fixed width. The old browser sized the
-    /// column to the page's widest value, so every row shifted sideways each time
-    /// a background snapshot landed — unreadable while a page fills in.
+    /// A landing size never moves a row: the Size cell is a fixed width, so
+    /// nothing shifts sideways while a page fills in.
     #[test]
     fn a_landing_size_does_not_reflow_the_row() {
         let projects = [project("ID0001", "Alpha"), project("ID0002", "Beta")];
@@ -319,11 +315,11 @@ mod tests {
         assert!(known[1].contains("unavailable"));
     }
 
-    /// The regression this ordering exists for. A relaunched terminal opens at
-    /// whatever size its emulator defaults to — commonly 80 columns — and the
-    /// row is clamped from the right. With the name last, an ambiguous
-    /// `fastf open lullaby` showed a picker whose rows had lost the only column
-    /// that tells the projects apart.
+    /// The folder name survives an 80-column window. A relaunched terminal
+    /// opens at whatever size its emulator defaults to — commonly 80 columns —
+    /// and the row is clamped from the right, so the picker an ambiguous
+    /// `fastf open lullaby` shows must keep the one column that tells the
+    /// projects apart.
     #[test]
     fn the_folder_name_survives_a_narrow_window() {
         // Realistic on every count: a template slug and a base label of the
@@ -391,8 +387,8 @@ mod tests {
         measure_text_width(&label[..at])
     }
 
-    /// The same widths feed the plain list, the picker and the browser, so a row
-    /// without a Size cell is the row with one minus that cell.
+    /// The same widths feed every surface, so a row without a Size cell is the
+    /// row with one minus that cell.
     #[test]
     fn the_size_cell_is_the_only_difference_between_surfaces() {
         let projects = [project("ID0001", "Alpha")];

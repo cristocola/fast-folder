@@ -1,8 +1,8 @@
 //! The terminal, the threads, and the loop.
 //!
 //! This is the one module that owns the screen: it puts the terminal into raw
-//! mode on the alternate screen (on **stderr**, the stream fastf has always
-//! drawn prompts on), reads keys on a thread, runs every `Effect` — on a worker
+//! mode on the alternate screen (on **stderr**, the stream fastf draws its
+//! prompts on), reads keys on a thread, runs every `Effect` — on a worker
 //! when it touches a disk — and draws a frame after each burst of messages.
 //! Nothing is polled: the loop blocks on the channel, and wakes on a timer only
 //! while `App::needs_tick` says something on screen is moving.
@@ -41,7 +41,7 @@ use crate::util::size_scan::{SizeCell, SizeScanner};
 use crate::util::{diag, interrupt, tty};
 
 // How often the app is woken while something is moving is the **app's**
-// answer now, not a constant here: a spinner wants five frames a second and a
+// answer, not a constant here: a spinner wants five frames a second and a
 // fade wants twenty, and `App::tick_interval` says which is due.
 /// How often an idle app looks for an external interrupt. A second: the
 /// signal is rare and the wake is not free on a laptop.
@@ -82,12 +82,12 @@ pub fn run(
 
 /// **Frames are buffered, and a frame is one write.** ratatui queues a cursor
 /// move, a colour and a symbol per changed cell, and `Stderr` is unbuffered, so
-/// each became its own write. On Windows every write is a round trip through
-/// the console host: a first frame took 45 ms and a fade's frames up to 117 ms
-/// in Windows Terminal — the lag, and the half-drawn frames, of the app on
-/// Windows. Buffered, the same frames take under 1 ms and 7 ms at worst.
-/// `Terminal::draw` flushes at the end of every frame and `execute!` after
-/// every command, so nothing waits in the buffer.
+/// each would be its own write. On Windows every write is a round trip through
+/// the console host: unbuffered, a first frame takes 45 ms and a fade's frames
+/// up to 117 ms in Windows Terminal, and frames show half-drawn; buffered, the
+/// same frames take under 1 ms and 7 ms at worst. `Terminal::draw` flushes at
+/// the end of every frame and `execute!` after every command, so nothing waits
+/// in the buffer.
 type Screen = Terminal<CrosstermBackend<BufWriter<Stderr>>>;
 
 /// A full frame of a large window, colours and all, fits with room to spare.
@@ -104,7 +104,7 @@ struct Runtime {
     detail: DetailWorker,
     /// **The one clock in the app.** `update` reads no environment and asks no
     /// clock; every duration on screen is measured against the milliseconds
-    /// this hands the app on each tick.
+    /// this hands the app with each message.
     started: Instant,
     /// When the next tick is due. A deadline rather than an interval, so a
     /// burst of messages cannot starve it.
@@ -134,17 +134,16 @@ impl Runtime {
         // sends one on close — exits from the handler, where nothing of
         // ratatui may run; this gives the screen back with raw system calls.
         interrupt::set_restore(restore_on_signal);
-        // **Before the screen**, which is what `InputThread::spawn`'s own doc
-        // comment has always claimed and what the order used to contradict: on
-        // a failure here `init` returned without ever reaching `shutdown`, so
-        // `SCREEN_OWNED` stayed set, the terminal was left in raw mode on the
-        // alternate screen, and the error printed onto a screen nobody would
-        // see again. Spawning touches no terminal state, so there is nothing to
-        // undo if it fails.
+        // **Before the screen**: a failure here returns from `init` without
+        // reaching `shutdown`, and after `take_screen` that would leave
+        // `SCREEN_OWNED` set, the terminal raw on the alternate screen, and the
+        // error printed onto a screen nobody sees again. Spawning touches no
+        // terminal state, so there is nothing to undo if it fails.
         let input = InputThread::spawn(tx.clone())?;
         let terminal = take_screen()?;
-        // The one choke point that replaces `live_select`'s: an interactive
-        // surface ran, so a relaunched window closes without a pause.
+        // One of the two choke points (the other is `require_tty`): an
+        // interactive surface ran, so a relaunched window closes without a
+        // pause.
         tty::mark_interactive_surface();
         let sink_tx = tx.clone();
         diag::set_sink(Box::new(move |level, message| {
@@ -241,9 +240,8 @@ impl Runtime {
     /// **The one place the clock is read.** Every message is stamped with the
     /// milliseconds since the app opened before `update` sees it, so `update`
     /// still asks no clock of its own and every duration on screen is measured
-    /// against the same one. Stamping only on the tick left it stale whenever
-    /// nothing was moving, and a status message set against a stale clock has
-    /// an expiry already in the past.
+    /// against the same one. A clock stamped only on the tick is stale whenever
+    /// nothing moves, and a status message set against it expires in the past.
     fn dispatch(&mut self, app: &mut App, msg: Msg) -> Vec<Effect> {
         app.elapsed_ms = self.started.elapsed().as_millis() as u64;
         let effects = app::update(app, msg);
@@ -294,14 +292,12 @@ impl Runtime {
 
     /// Block for the next message. `None` means a wake with nothing to do.
     ///
-    /// **A tick is due at a moment, not after a quiet interval.** It used to
-    /// be the `recv_timeout` expiry and nothing else, so every message
-    /// restarted the wait — and a stream of them (a batch of sizes, a paste, a
-    /// run of `MetaLoaded` chunks) starved the tick entirely. The spinner
-    /// stopped turning exactly when there was most to wait for, which is the
-    /// one moment it exists for. `next_tick` is the deadline; a burst is still
-    /// drained and drawn once, and the tick that came due during it is
-    /// delivered after.
+    /// **A tick is due at a moment, not after a quiet interval.** Were it the
+    /// `recv_timeout` expiry alone, every message would restart the wait, and a
+    /// stream of them (a batch of sizes, a paste, a run of `MetaLoaded` chunks)
+    /// would stop the spinner exactly when there is most to wait for.
+    /// `next_tick` is the deadline; a burst is still drained and drawn once,
+    /// and the tick that came due during it is delivered after.
     fn wait(&mut self, app: &App) -> Option<Msg> {
         self.watch_detail(app);
         self.watch_activity(app);
@@ -829,7 +825,6 @@ fn install_panic_hook() {
     }));
 }
 
-/// A worker whose panic becomes a warning rather than the end of the session.
 /// **The summary, a part at a time** (`SummaryPart`): the data directory's
 /// at once, then every base asked under one deadline, then what is
 /// unfinished over the bases that answered — so the templates never wait on
@@ -956,6 +951,7 @@ impl Drop for Claim {
     }
 }
 
+/// A worker whose panic becomes a warning rather than the end of the session.
 fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
     let spawned = std::thread::Builder::new()
         .name(name.to_string())
@@ -970,8 +966,6 @@ fn spawn_worker(name: &'static str, work: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// One mutation through `core::operations`, on a worker. `progress` and
-/// `cancel` are the move job's handles — ignored by every other verb.
 /// The engine's messages name the command line's verb; in the app a reconcile
 /// is what `!` lists and can run, and a person reading a dialog here should be
 /// told the key, not sent to a terminal.
@@ -979,6 +973,7 @@ fn for_the_app(text: &str) -> String {
     crate::tui::app::background::for_the_app(text)
 }
 
+/// One mutation through `core::operations`, on a worker.
 fn run_action(action: Action) -> Result<ActionOutcome> {
     use crate::util::paths::display_path;
 
@@ -1168,8 +1163,8 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
         }
         Action::Create(request) => {
             // The plan is recomputed under the data lock inside `create`: the
-            // ID the preview showed is advisory, and reusing it is exactly how
-            // duplicate IDs were minted.
+            // ID the preview showed is advisory, and reusing it is how
+            // duplicate IDs are minted.
             let mut created =
                 crate::core::operations::create(crate::core::operations::CreateOptions {
                     template_slug: request.template_slug.clone(),
@@ -1330,7 +1325,7 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
                 Ok(())
             })?;
             // A base, a default template or a date format changes what the
-            // header, the strip and the wizard are functions of; the projects
+            // header, the templates tab and the wizard are functions of; the projects
             // themselves only move when a base does, and a base change is a
             // different library.
             let change = if key == "base-dir" || key == "bases" {
@@ -1476,11 +1471,11 @@ impl InputThread {
         std::thread::Builder::new()
             .name("fastf-input".to_string())
             .spawn(move || {
-                // A panic in here, or a terminal that stops answering, used to
-                // end this loop with a bare `return`. The runtime holds its own
-                // `Sender`, so `recv_timeout` never sees a disconnect and the
-                // main loop goes on drawing a live-looking frame that answers
-                // nothing at all, with the only way out an external signal and
+                // A panic in here, or a terminal that stops answering, is
+                // reported, never a bare `return`: the runtime holds its own
+                // `Sender`, so `recv_timeout` never sees a disconnect, and the
+                // main loop would go on drawing a live-looking frame that
+                // answers nothing, with the only way out an external signal and
                 // nothing on screen to say so.
                 let end = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     input_loop(&thread_gate, &tx)
@@ -1695,11 +1690,11 @@ impl DetailWorker {
             .spawn(move || {
                 // Panics become a warning here for the same reason
                 // `spawn_worker` catches them: this thread is the only reader
-                // of the detail pane, so one panic inside `loaders::detail`
-                // silently stopped the pane updating for the rest of the
-                // session with nothing said anywhere. `spawn_worker` cannot be
-                // reused — that one runs a closure once, and this is a loop
-                // that outlives every request it serves.
+                // of the detail pane, so an unreported panic inside
+                // `loaders::detail` would stop the pane updating for the rest
+                // of the session with nothing said anywhere. `spawn_worker`
+                // cannot be reused — that one runs a closure once, and this is
+                // a loop that outlives every request it serves.
                 let report = tx.clone();
                 let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     loop {

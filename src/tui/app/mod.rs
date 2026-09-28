@@ -87,12 +87,9 @@ pub enum Focus {
 
 /// Which tab the app is on.
 ///
-/// **A tab, not a dialog.** Templates were an 84 %-wide modal over the library
-/// plus a three-row strip along the bottom that filtered by Enter and nothing
-/// else — two halves of one subject, neither of them a place you could work.
-/// The strip is gone (three rows back to the table) and the studio is the
-/// second tab, with the strip's counts, a filter box of its own, and the same
-/// verbs it always had.
+/// **A tab, not a dialog**: a tab keeps its place, and the templates are a
+/// place to work, with their counts, a filter box of their own and their
+/// verbs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
     #[default]
@@ -122,10 +119,10 @@ pub struct TemplatesState {
 }
 
 impl TemplatesState {
-    /// Cards from the summary — the templates on disk, busiest first — then a
-    /// bare card for any slug the projects still name that no template
-    /// answers to, so the tab can list it and say what it is. The first card
-    /// is always a real template, so the tab never opens on `(registered)`.
+    /// Cards from the summary — the templates on disk — then a bare card for
+    /// any slug the projects still name that no template answers to, so the
+    /// tab can list it and say what it is. The first card is always a real
+    /// template, so the tab never opens on `(registered)`.
     pub fn rebuild(&mut self, summary: Option<&Summary>, counts: HashMap<String, usize>) {
         let mut cards: Vec<TemplateCard> = summary.map(|s| s.templates.clone()).unwrap_or_default();
         for slug in counts.keys() {
@@ -142,10 +139,8 @@ impl TemplatesState {
             }
         }
         // Real templates first, then by slug. **Alphabetical, not busiest
-        // first**, which is what the horizontal strip used: a ribbon you read
-        // left to right wants the popular ones near the start, a list you scan
-        // and search wants to be in the same order tomorrow. Creating one
-        // project should not move a row.
+        // first**: a list you scan and search wants to be in the same order
+        // tomorrow. Creating one project should not move a row.
         // By the name the list shows, not the raw slug: `(registered)` is
         // displayed as `registered` and sorting it under `(` puts it in front
         // of every `d`, which reads as no order at all.
@@ -266,8 +261,6 @@ pub struct App {
     /// What the one running mutation is doing, for the status line.
     pub busy: Option<&'static str>,
     pub busy_id: Option<ActionId>,
-    /// The latest snapshot of the move job that is running, for the progress
-    /// modal; `None` when no move is in flight.
     /// Jobs — moves, copies, deletes, reconciles in processes of their own —
     /// and which one the progress dialog follows.
     pub background: background::Background,
@@ -320,14 +313,14 @@ pub struct App {
     /// looked at the tab and then pressed new, which is exactly the reader it
     /// is trying not to annoy.
     pub guide_seen: bool,
-    /// Milliseconds since the app opened, carried by every `Msg::Tick`.
+    /// Milliseconds since the app opened, stamped by the runtime before every
+    /// message.
     ///
-    /// **A clock rather than a count.** It was a tick counter, which made
-    /// every duration a multiple of whatever the wake interval happened to be
-    /// — and the interval is not one number any more, because a fade wants
-    /// twenty frames a second and a spinner wants five. A fixture's clock is
-    /// whatever the test sets, which is what makes a frame mid-pulse
-    /// assertable.
+    /// **A clock rather than a count**: a tick counter makes every duration a
+    /// multiple of the wake interval, and the interval is not one number — a
+    /// fade wants twenty frames a second and a spinner wants five. A
+    /// fixture's clock is whatever the test sets, which is what makes a frame
+    /// mid-pulse assertable.
     pub elapsed_ms: u64,
     /// Whether the app moves at all: the `motion` setting, resolved where the
     /// theme is so `update` still reads no environment.
@@ -345,8 +338,8 @@ pub struct App {
     ///
     /// Everything else is a page filling in — the first screenful at startup,
     /// the next screenful after a scroll — and a page filling in is not a
-    /// change. Pulsing there lit every visible row at once, twenty at a time,
-    /// which is a flash rather than a cue and reads as a fault.
+    /// change. Pulsing there lights every visible row at once, twenty at a
+    /// time, which is a flash rather than a cue and reads as a fault.
     rescanning: std::collections::BTreeSet<PathBuf>,
     /// When the focus last moved, for the pulse on the pane it moved to.
     /// `None` once that pulse has let go, so an idle app asks for no wake.
@@ -479,15 +472,14 @@ impl App {
     }
 }
 
-/// The state machine: the app and one message in, the effects out.
 /// Whether an action's warning or error is more than the status line can
-/// show: it has more than one line (a move's list of what it could not copy,
-/// a reconcile's report), or it is a paragraph. The status line shows one
-/// line, so either would arrive as its first few words.
+/// show: it has more than one line, or it is a paragraph. The status line
+/// shows one line, so either would arrive as its first few words.
 fn needs_a_dialog(text: &str) -> bool {
     text.contains('\n') || text.chars().count() > 160
 }
 
+/// The state machine: the app and one message in, the effects out.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
     app.handle(msg)
 }

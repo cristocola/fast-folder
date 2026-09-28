@@ -1,11 +1,5 @@
 //! The templates tab: every template on disk, what each one is, and how many
 //! projects were made from it.
-//!
-//! It replaces two things at once — an 84 %-wide studio modal over the library,
-//! and a three-row strip along the bottom of the library that showed the same
-//! counts and could be filtered by pressing Enter on a card and nothing else.
-//! Neither was a place you could work, and between them they cost the table
-//! three rows on every screen.
 
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
@@ -179,12 +173,10 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
         Some(_) if studio.lines.is_empty() => {
             vec![Line::from(Span::styled(" reading…", theme.dim()))]
         }
-        // Cut to the pane with the app's own ellipsis, like every other cell.
-        // These lines went in raw, so a description longer than the pane was
-        // hard-cut at the edge with nothing to say it had been — while `fastf
-        // template show` printed it in full. The pane scrolls now (Tab, then
-        // the arrows), so the tail of a long one is reachable; what a line
-        // cannot do is wrap, or the tree beside it would stop lining up.
+        // Cut to the pane with the app's own ellipsis, like every other cell,
+        // so a cut line says it was cut. A line never wraps, or the tree
+        // beside it would stop lining up; the pane scrolls, so the tail of a
+        // long one is reachable.
         Some(_) => studio
             .lines
             .iter()

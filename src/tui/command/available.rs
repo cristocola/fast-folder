@@ -93,11 +93,10 @@ pub(super) fn needs_selection(app: &App) -> Availability {
 
 /// **What every batching verb is available on.** Marks are kept by path and
 /// survive a filter change, so a marked row can be off screen while the verb is
-/// aimed at it — `targets()` intersects the two and comes back empty. Every one
-/// of these verbs then hit an early return with no picker, no dialog and no
-/// message, which is what "batch tagging does nothing" was. It is deliberately
-/// not part of `needs_selection`: `o`, `t` and `y` act on the row under the
-/// cursor and are none of a hidden mark's business.
+/// aimed at it — `targets()` intersects the two and comes back empty, and an
+/// empty intersection must say so here, or the verb does nothing in silence.
+/// It is deliberately not part of `needs_selection`: `o`, `t` and `y` act on
+/// the row under the cursor and are none of a hidden mark's business.
 pub(super) fn batch_target(app: &App) -> Availability {
     if !app.library.marks.is_empty() && app.library.targets().is_empty() {
         return Availability::Disabled(
@@ -259,8 +258,6 @@ pub(super) fn has_any_rows(app: &App) -> Availability {
     }
 }
 
-/// `v` reaches from the last row Space touched to the cursor, so it needs one
-/// — and needs it to still be on the list the filter is showing.
 /// A tag filter needs a tag to filter by.
 pub(super) fn has_any_tags(app: &App) -> Availability {
     if app.library.known_tags.is_empty() {
@@ -270,6 +267,8 @@ pub(super) fn has_any_tags(app: &App) -> Availability {
     }
 }
 
+/// `v` reaches from the last row Space touched to the cursor, so it needs one
+/// — and needs it to still be on the list the filter is showing.
 pub(super) fn has_anchor(app: &App) -> Availability {
     if app.library.has_anchor() {
         Availability::Enabled

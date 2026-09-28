@@ -48,8 +48,8 @@ const NOTE_EDITOR_ROWS: u16 = 4;
 ///
 /// **Election stops at the first column that does not fit**, rather than
 /// skipping it and trying the next. A narrower later column squeezing in past a
-/// wider earlier one produced a 60-column table with a BASE column and no SIZE,
-/// which reads as a bug rather than as a priority.
+/// wider earlier one makes a table with a BASE column and no SIZE, which reads
+/// as a bug rather than as a priority.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Columns {
     pub created: bool,
@@ -265,7 +265,7 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     ];
     if columns.size {
         // Right-aligned over right-aligned figures: a left-aligned SIZE header
-        // sat seven columns away from every number under it.
+        // sits seven columns away from every number under it.
         header.push(Cell::from(format!("{:>width$}", "SIZE", width = SIZE_CELL)));
         constraints.push(Constraint::Length(SIZE_CELL as u16));
     }
@@ -284,9 +284,9 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     if columns.tags {
         header.push(Cell::from("TAGS"));
         // Measured, like every other column, rather than whatever `Fill` leaves
-        // over: sharing the slack with the name meant one column of gutter cut
-        // the first tag's last letter, and a tag cut mid-word says the wrong
-        // tag. The name keeps all the slack, which is the column that needs it.
+        // over: sharing the slack with the name lets the gutter cut a tag's
+        // last letter, and a tag cut mid-word says the wrong tag. The name
+        // keeps all the slack, which is the column that needs it.
         constraints.push(Constraint::Length(tags_w as u16));
     }
 
@@ -923,8 +923,7 @@ mod tests {
     #[test]
     fn election_stops_at_the_first_column_that_does_not_fit() {
         // Room for the size and nothing more. The base is narrower than the
-        // date, and the greedy version let it slip in behind a date that had
-        // just been refused — a table with a BASE column and no SIZE.
+        // date, and must not slip in behind a date that was just refused.
         let columns = choose_columns(40 + super::SIZE_CELL + 1 + 6, 40, 4, 11, 12, false);
         assert!(columns.size, "{columns:?}");
         assert!(

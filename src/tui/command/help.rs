@@ -75,22 +75,17 @@ pub fn help_columns(
     (keys_width, title_width, description_width)
 }
 
-/// `? / F1`, `c / : / Ctrl-p`: a command's keys as the help prints them.
-/// The key a command is bound to, for a sentence that has to name one.
-///
-/// **Read the registry; never spell a key in prose.** Eight sentences did —
-/// three of them said "no templates yet" three different ways and one named `T`,
-/// the tab switch, where the registry says `n`. They all happened to be right
-/// the day they were written, which is exactly the drift the one registry
-/// exists to prevent: `command.rs` carried four copies of its key table in the
-/// prototype and they had already disagreed.
-///
-/// Empty when a command has no key of its own, which is a sentence that should
-/// not have been written.
 /// The one sentence for "there are no templates on disk", and the key it names
 /// is the key that makes one.
 pub const NO_TEMPLATES: &str = "no templates yet — n makes one";
 
+/// The key a command is bound to, for a sentence that has to name one.
+///
+/// **Read the registry; never spell a key in prose**: a key written into a
+/// sentence is right the day it is written and wrong after the next rebinding.
+///
+/// Empty when a command has no key of its own, which is a sentence that should
+/// not have been written.
 pub fn key_of(id: CommandId) -> String {
     find(id)
         .keys
@@ -109,6 +104,7 @@ pub fn key_of_in(id: CommandId, g: &crate::tui::theme::Glyphs) -> String {
         .unwrap_or_default()
 }
 
+/// `? / F1`, `c / : / Ctrl-p`: a command's keys as the help prints them.
 pub fn key_labels(ctx: Context, command: &Command, g: &crate::tui::theme::Glyphs) -> String {
     keys_in(ctx, command)
         .iter()

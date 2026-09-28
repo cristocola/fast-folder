@@ -6,7 +6,7 @@ use super::*;
 impl App {
     pub(super) fn on_key(&mut self, key: Key) -> Vec<Effect> {
         if layout::too_small(self.area()) {
-            // The guard takes only the two quit gestures — and a job that is
+            // The guard takes only the two quit gestures — and a batch that is
             // running still turns them into a cancel, exactly as it does on
             // a screen big enough to show it.
             if key != Key::ch('q') && key != Key::ctrl('c') {
@@ -25,7 +25,7 @@ impl App {
             // every key, and no availability state may swallow it.
             return self.run(CommandId::Interrupt);
         }
-        // A move that is running turns the other quit gestures — `q`, and Esc
+        // A batch that is running turns the other quit gestures — `q`, and Esc
         // once it has closed whatever was open — into cancels too (`run`); see
         // the Ctrl-C case above.
         if !self.modals.is_empty() {
@@ -130,11 +130,10 @@ impl App {
     ///
     /// **Asked of `targets()`, not of the mark set.** Marks are kept by path
     /// and survive a filter change; `targets()` intersects them with the rows
-    /// on screen. When those two disagreed, `batching()` said yes and
-    /// `targets()` came back empty, and every batch verb hit its
+    /// on screen. Asked of the marks alone, `batching()` says yes while
+    /// `targets()` is empty, and every batch verb returns at its
     /// `if targets.is_empty() { return Vec::new(); }` — no picker, no dialog,
-    /// no message. Marking three rows and then typing a query made `A` do
-    /// nothing at all, which is what "batch tagging doesn't work" was.
+    /// no message.
     pub(super) fn batching(&self) -> bool {
         !self.library.targets().is_empty() && !self.library.marks.is_empty()
     }
@@ -148,10 +147,8 @@ impl App {
             .collect()
     }
 
-    /// A screenful, for the pagers: the height of the list on screen.
     /// A screenful for the list or pane the keys go to: the pane pages by its
-    /// own height, which is not the table's once the two stop sitting side by
-    /// side, and was never the same number of rows anyway.
+    /// own height, never the table's.
     pub(super) fn page_rows(&self) -> usize {
         let rows = match (self.screen, self.focus) {
             (Screen::Library, Focus::Detail) => self.pane_rows_on_screen(),

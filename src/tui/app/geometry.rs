@@ -28,11 +28,10 @@ impl App {
     pub fn table_min_width(&self) -> u16 {
         let (id_w, name_w) = self.library.widths;
         // The base column joins the claim once the rows come from more than one
-        // base. It is elected right after the size there, and a table that did
-        // not ask for its width never got it: a library of ninety-character
-        // folder names left the split with room for the size and nothing else,
-        // so the one column saying which drive a project is on never appeared
-        // on the machine that had four of them.
+        // base. It is elected right after the size there, and a column the
+        // table does not claim never gets its width: long folder names leave
+        // the split room for the size and nothing else, and the one column
+        // saying which drive a project is on never appears.
         let base = if self.library.many_bases {
             self.library.base_width.min(BASE_CLAIM_MAX) + 1
         } else {
@@ -162,7 +161,7 @@ impl App {
         self.tick_interval().is_some()
     }
 
-    /// The size cell for `path`, as the browser drew it.
+    /// The size cell for `path`, as the table draws it.
     pub fn size_cell(&self, path: &std::path::Path) -> SizeCell {
         match self.library.sizes.get(path) {
             Some(size) => SizeCell::Known(*size),

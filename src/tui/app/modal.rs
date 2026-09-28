@@ -43,8 +43,8 @@ pub enum Then {
     /// The picked value is a base path to restrict the list to.
     BaseFilter,
     /// The picked value is a tag; it goes into the search bar as `tag:x`,
-    /// because that is what a tag filter *is* here — the grammar already had
-    /// it, and this is a way to find it without typing it.
+    /// because that is what a tag filter *is* here — the grammar has it, and
+    /// this is a way to find it without typing it.
     TagFilter,
     /// The picked value answers the named field of the open flow's form —
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
@@ -363,7 +363,6 @@ pub enum Modal {
     MultiPick(MultiPick),
     /// A flow that builds something: create, apply, register, from-folder.
     Flow(Box<Flow>),
-    /// Every template, with the selected one's details.
     /// A template being written.
     Builder(Box<Builder>),
     /// Every setting, the ID counter and maintenance.
@@ -378,7 +377,7 @@ pub enum Modal {
         level: MessageLevel,
         scroll: usize,
     },
-    /// `L`: messages and the log.
+    /// `L`: messages, jobs and the log.
     Activity(Box<Activity>),
 }
 
@@ -524,9 +523,7 @@ impl App {
                 // `batching()`, not `!marks.is_empty()`: marks are kept
                 // by path and survive a filter change, so a marked row
                 // can be off screen while the verb is aimed at it. Every
-                // other verb asks this question the same way — the raw
-                // mark set is what "batch tagging does nothing" was, and
-                // this was the last caller still asking it.
+                // other verb asks this question the same way.
                 if self.batching() {
                     let targets = self.library.targets();
                     self.start_background(crate::core::jobs::JobKind::Move, targets, Some(target))
@@ -656,7 +653,7 @@ impl App {
             Modal::Message { lines, scroll, .. } => (
                 scroll,
                 // Wrapped rows, not entries — the paragraph wraps, and
-                // `Modal::Help` above has always counted them the same way.
+                // `Modal::Help` above counts them the same way.
                 crate::tui::view::modals::message_rows(
                     lines,
                     crate::tui::view::modals::message_text_width(area),

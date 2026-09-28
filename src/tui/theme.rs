@@ -135,13 +135,6 @@ impl Env {
     }
 }
 
-/// Pick the palette and the alphabet. `preference` is the config's `theme`.
-///
-/// Precedence, highest first: `FASTF_THEME` (the per-session escape hatch);
-/// `NO_COLOR` and `TERM=dumb` (a promise the user made to every program);
-/// the config key; then what the terminal announces — `COLORTERM`, a `TERM`
-/// that names a truecolor emulator, a `TERM_PROGRAM` known to be one, or
-/// Windows Terminal — and the sixteen colours for everything else.
 /// Whether the app moves, resolved the way the palette is: the session's
 /// escape hatch first, then a theme with no colour (where a wash is a flicker
 /// rather than a cue), then the `motion` setting, else on.
@@ -166,6 +159,13 @@ pub fn choose_motion(
     preference.and_then(Motion::parse).unwrap_or(Motion::On)
 }
 
+/// Pick the palette and the alphabet. `preference` is the config's `theme`.
+///
+/// Precedence, highest first: `FASTF_THEME` (the per-session escape hatch);
+/// `NO_COLOR` and `TERM=dumb` (a promise the user made to every program);
+/// the config key; then what the terminal announces — `COLORTERM`, a `TERM`
+/// that names a truecolor emulator, a `TERM_PROGRAM` known to be one, or
+/// Windows Terminal — and the sixteen colours for everything else.
 pub fn choose(env: &Env, preference: Option<&str>) -> (ThemeKind, Glyphs) {
     let glyphs = if ascii_wanted(env) {
         Glyphs::ascii()
@@ -260,9 +260,7 @@ pub struct Glyphs {
     pub bar_full: &'static str,
     pub bar_empty: &'static str,
     /// The frames of the indicator that says something is still happening.
-    /// The one glyph in the app that used to live in a view module — a
-    /// `const SPINNER` in `view::dashboard`, outside the theme and therefore
-    /// outside the ASCII alphabet everything else answers to.
+    /// Here with every other glyph, so the ASCII alphabet holds for it too.
     pub spinner: &'static [&'static str],
 }
 
@@ -270,9 +268,8 @@ impl Glyphs {
     /// Whether this is the ASCII alphabet — what `widgets::tree` and anything
     /// else that draws its own box characters has to ask before it draws one.
     ///
-    /// A method rather than the `rule == "-"` comparison it replaces: that
-    /// spelling was written out where the folder tree is drawn, and a second
-    /// caller copying it is how one of the two comes to be wrong.
+    /// A method, so no caller spells the `rule == "-"` comparison itself: two
+    /// copies of it is how one of the two comes to be wrong.
     pub fn is_ascii(&self) -> bool {
         self.rule == "-"
     }
@@ -628,7 +625,7 @@ impl Theme {
     /// A stable colour for a tag, so `draft` is the same colour on every row.
     pub fn tag_color(&self, tag: &str) -> Color {
         // FNV-1a rather than a byte sum: a sum gives every anagram the same
-        // colour, which is how `draft` and `tfard` came to match.
+        // colour (`draft` and `tfard`).
         let mut hash: u32 = 0x811c_9dc5;
         for byte in tag.bytes() {
             hash ^= u32::from(byte);

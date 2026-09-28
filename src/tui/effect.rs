@@ -18,8 +18,8 @@ pub enum Effect {
     StartAutoReconcile,
     /// Read the messages and the log for the activity screen (`L`).
     LoadActivity,
-    /// `library::discover` on a worker. The generation tells a late answer
-    /// from a current one.
+    /// Discovery, a worker per base (`runtime::discover_by_base`). The
+    /// generation tells a late answer from a current one.
     Discover {
         generation: u64,
     },
@@ -104,8 +104,7 @@ pub enum Effect {
 
 /// What a flow wants previewed, and then committed. The same value serves
 /// both, so the screen cannot show a plan built one way and commit one built
-/// another — which is exactly how a rename prompt came to offer `ID0001` and
-/// write `ID0011`.
+/// another.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Create(CreateRequest),

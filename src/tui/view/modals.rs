@@ -89,18 +89,17 @@ fn bar<'a>(app: &App, width: usize, done: u64, total: u64) -> Line<'a> {
     ])
 }
 
-/// A long job's progress — a move, a copy out of the library, a reconcile —
-/// drawn over the dashboard while one runs. It is not a modal on the stack —
-/// it shares the lifetime of `App::busy` and disappears when the job answers.
-/// A batch job draws its own modal (`render_job`), which shows the current
-/// item's step, so this stays out of the way while `App::job` is up.
+/// A job's progress — a move, a copy out of the library, a delete, a
+/// reconcile — drawn over the dashboard. It is not a modal on the stack: it is
+/// drawn while a job is followed and not hidden (`App::shown_progress`), and
+/// Esc hides it while the job goes on. An in-app batch draws its own
+/// (`render_job`), so this stays out of the way while `App::job` is up.
 ///
 /// **One row per step**, when the job knows its steps: the finished ones
 /// ticked with what they counted, the current one with its count, its bar and
-/// the entry it is at, the rest dim. A move used to show one bar for its copy
-/// and then sit at "finalizing" with the bar full for as long as removing the
-/// old copy took — ten minutes on a cloud mount. A window too short for every
-/// row shows the current step alone.
+/// the entry it is at, the rest dim — so removing the old copy after a move,
+/// minutes on a cloud mount, is a step that moves, never a full bar that sits
+/// still. A window too short for every row shows the current step alone.
 pub fn render_move_progress(app: &App, frame: &mut Frame, area: Rect) {
     if app.job.is_some() {
         return;
@@ -290,10 +289,10 @@ fn indented(line: Line<'_>) -> Line<'_> {
     Line::from(spans)
 }
 
-/// A batch job's progress, drawn over the dashboard while one runs. Like
-/// `render_move_progress`, it is not a modal on the stack — it lives exactly
-/// as long as `App::job`. The modal names the item being acted on and counts
-/// the failures so far; a moving item's byte progress is folded in beneath.
+/// An in-app batch's progress (tag, note, unregister), drawn over the
+/// dashboard while one runs. Like `render_move_progress`, it is not a modal on
+/// the stack — it lives exactly as long as `App::job`. The modal names the
+/// item being acted on and counts the failures so far.
 pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
     let Some(job) = &app.job else {
         return;
@@ -310,8 +309,8 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
             format!(" {} ", job.progress_line()),
             theme.accent(),
         )),
-        // The items, always — a batch of deletes or tags has no bytes to
-        // report and its bar is the only thing that moves.
+        // The items — a batch of tags or notes has no bytes to report, and
+        // its bar is the only thing that moves.
         bar(app, track, job.finished() as u64, job.total() as u64),
         Line::from(Span::styled(
             format!(
@@ -337,8 +336,8 @@ pub fn render_job(app: &App, frame: &mut Frame, area: Rect) {
     )));
 
     // **Sized to what it holds**, like every other dialog here: a height
-    // guessed at the widest case left blank rows under a two-line batch and
-    // cut the cancel line off the tall one.
+    // guessed at the widest case leaves blank rows under a two-line batch and
+    // cuts the cancel line off a tall one.
     let area = centered_fixed(area, width, lines.len() as u16 + 2);
     super::clear(frame, area, &app.theme);
     let block = frame_block(app, format!(" {} ", job.kind.verb()), true);
@@ -757,21 +756,18 @@ fn render_note(
 
 /// The width a question's box will get, and how many rows its text takes there.
 ///
-/// **Measured at the width it will actually be drawn at.** Both dialogs asked
-/// `wrapped_rows` about a hardcoded 62 or 64 and then let `centered_fixed` clamp
-/// the box to the screen, so on a 60-column window — the app's minimum then —
-/// the text wrapped wider than had been reserved and the tail was cut.
+/// **Measured at the width it will actually be drawn at**: rows counted at a
+/// wanted width that `centered_fixed` then narrows to the screen are too few,
+/// and the tail of the question is cut.
 ///
 /// The row ceiling is the screen too, not a constant. `validators::delete_prompt`
 /// over six long folder names goes past eight wrapped rows easily, and a
-/// destructive confirmation that hides part of the list of what it is about is
-/// the one that must not: *"A confirmation is sized to its question and names
-/// every folder it is about."*
+/// destructive confirmation must never hide part of what it is about
+/// (`src/tui/CLAUDE.md` › Layout).
 fn question_size(area: Rect, question: &str, wanted: u16, chrome: u16) -> (u16, u16) {
     let width = wanted.min(area.width);
     let rows = wrapped_rows(question, usize::from(width).saturating_sub(3)) as u16;
-    // The screen is the only ceiling. It was a flat 6 or 8, which is fewer
-    // rows than six folder names take.
+    // The screen is the only ceiling.
     let ceiling = area.height.saturating_sub(chrome);
     (
         width,
@@ -852,12 +848,12 @@ fn render_multi_pick(
 /// A flow is one dialog with two faces: the questions, and what answering them
 /// would do. Both are drawn in the same frame at the same size, so committing
 /// and going back do not move the box under the reader.
+///
 /// The dialog's own rectangle, sized to what it holds.
 ///
-/// Split out so `update` can ask the same question `view` answers — the
-/// preview's scroll is clamped from this, and clamping it only at draw time is
-/// what let the flow's `scroll` run to 200 over a twelve-line preview and then
-/// take twenty PgUps to come back, reading as a frozen dialog the whole time.
+/// Split out so `update` can ask the same question `view` answers: the
+/// preview's scroll is clamped from this, and a scroll clamped only at draw
+/// time runs past the end of the preview and the dialog reads as frozen.
 fn flow_rect(area: Rect, flow: &Flow) -> Rect {
     // Sized to what it holds, so the footer sits under the last answer rather
     // than at the bottom of a mostly-empty box. The preview takes the room it
@@ -1364,8 +1360,8 @@ fn guide_text_width(box_: Rect) -> usize {
 /// How many rows a page takes once wrapped, at the width the view draws it.
 ///
 /// `update` clamps the scroll with exactly this — the same function and the
-/// same `Rect` — because a ceiling derived from anything else is how the end of
-/// a long body became unreachable once already (`message_rows`).
+/// same `Rect` — because a ceiling derived from anything else leaves the end
+/// of a long body unreachable.
 pub(crate) fn guide_rows(page: usize, box_: Rect) -> usize {
     crate::tui::guide::note_rows(&crate::tui::guide::page_notes(page), guide_text_width(box_))
 }
@@ -1419,10 +1415,10 @@ fn render_guide(
         theme.dim(),
     );
 
-    // Every key on this line is a declared command now — the guide has a
-    // `Context` of its own precisely so its pages could be — so every label
-    // is read rather than written. The way out comes first, because
-    // `key_line` drops from the end.
+    // Every key on this line is a declared command — the guide has a
+    // `Context` of its own for its pages — so every label is read rather
+    // than written. The way out comes first, because `key_line` drops from
+    // the end.
     let last = state.is_last();
     let pairs: Vec<(String, String)> = vec![
         (command::key_of(CommandId::Close), "close".to_string()),
@@ -1596,12 +1592,10 @@ pub(crate) fn activity_body_rows(area: Rect) -> usize {
 /// How many rows a message takes once it is wrapped, which is not how many
 /// entries it has.
 ///
-/// The journal and metadata views are drawn with `Wrap`, and the scroll limit
-/// counted `lines.len()` — so on the 70 %-wide message box every note longer
-/// than one line counted once and drew twice. Twenty wrapped notes let you
-/// scroll ten rows into a forty-row body and no further: the end of a long
-/// journal was simply unreachable. `Modal::Help` already counted the wrapped
-/// rows (`command::help_line_count`); this is the same sum for the other one.
+/// The journal and metadata views are drawn with `Wrap`, so a scroll limit
+/// counted in `lines.len()` counts a wrapped note once where it draws twice,
+/// and the end of a long journal is unreachable. This is the sum
+/// `command::help_line_count` makes for the help.
 pub(crate) fn message_rows(lines: &[String], width: usize) -> usize {
     lines.iter().map(|line| wrapped_rows(line, width)).sum()
 }

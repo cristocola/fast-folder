@@ -39,13 +39,13 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
     // and are therefore the ones a narrow window can afford to lose.
     //
     // The rule is stated on the category rather than on "is it global",
-    // because the palette stopped being a global command the day it stopped
-    // opening itself, and a bar that led with `c commands` on every screen was
-    // the whole of that change showing through.
+    // because the palette is declared over every context but its own rather
+    // than as `Global`, and a rule on "is it global" would lead every bar with
+    // `c commands`.
     //
     // **The pane's bar is what the pane does.** The verbs it shares with the
     // list — open, terminal, copy the path, mark, new, the tab switch — are on
-    // the list's bar and in the action menu, and in the pane they crowded out
+    // the list's bar and in the action menu; in the pane they would crowd out
     // the pane's own: its row actions, the way back, and help.
     let pane_keeps = |c: &Command| {
         ctx != Context::Detail
@@ -62,7 +62,7 @@ pub fn hints(ctx: Context, app: &App, width: usize) -> Vec<(String, &'static str
         .filter(|c| (c.available)(app) != Availability::Hidden)
         .collect();
     // A stable sort, so declaration order decides within each group — which
-    // is why `? help` still comes before `c commands`, as it always has.
+    // is why `? help` comes before `c commands`.
     //
     // **Except the doors.** Where the pane takes the list's place, whichever
     // of the two is out of sight is one key away and nothing on screen says
@@ -165,11 +165,8 @@ pub fn field_claims(key: &Key) -> bool {
     crate::tui::widgets::input::LineEdit::CLAIMED.contains(key)
 }
 
-/// **The one place the arrows are spelled.** Seven surfaces used to write
-/// `↑↓` into a key line by hand — the palette's, the picker's, the pager's,
-/// the search bar's, the preview's, the guide's and the one every list on a
-/// dialog shares — which is six copies more than a registry exists to allow,
-/// and the reason `Down` and `Up` are `hint = false`: a bar that led with the
+/// **The one place the arrows are spelled**: no key line writes `↑↓` by hand.
+/// It is also why `Down` and `Up` are `hint = false`: a bar that led with the
 /// arrows on every screen would spend its width saying what a highlighted row
 /// already says.
 ///

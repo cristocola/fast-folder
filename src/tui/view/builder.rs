@@ -2,8 +2,7 @@
 //!
 //! The builder is one dialog with several faces, drawn at one size so entering
 //! a section and coming back does not move the box under the reader — the same
-//! bargain `view::modals::render_flow` makes. (The studio it used to open from
-//! is a tab now: `view::templates`.)
+//! bargain `view::modals::render_flow` makes.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
@@ -97,12 +96,9 @@ pub(crate) fn footer_line(frame: &mut Frame, area: Rect, text: &str, style: rata
 
 /// A dialog's own key line, cut at a **whole pair**.
 ///
-/// `registry_keys` below has always fitted its list to the width it is drawn
-/// in; this one took every pair it was handed and let the terminal cut the
-/// last one wherever it landed — so a narrow settings dialog advertised
-/// `Esc leave i`, which is a key line saying something that is not a key. Half
-/// an entry is worse than none: the entries are ordered, so the ones that fit
-/// are the ones that matter most.
+/// Half an entry (`Esc leave i`) advertises something that is not a key, and
+/// is worse than none: the entries are ordered, so the ones that fit are the
+/// ones that matter most.
 pub(crate) fn key_line<K: AsRef<str>, V: AsRef<str>>(
     theme: &Theme,
     pairs: &[(K, V)],
@@ -161,9 +157,9 @@ pub fn render_builder(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    // Whether the panel is coming has to be settled before the box is sized,
-    // because a panel wants more rows than a seven-row list — and asking after
-    // the fact grew the dialog on every window too narrow to draw one.
+    // Whether the panel is coming is settled before the box is sized, because
+    // a panel wants more rows than a seven-row list; asked after the fact, the
+    // dialog grows on every window too narrow to draw one.
     let explaining = app.explain_open
         && crate::tui::layout::panel_fits_width(sized(area, 0).width.saturating_sub(2));
     let area = sized(area, body_height(explaining, builder));
@@ -191,9 +187,9 @@ pub fn render_builder(
     }
 
     // The explanation, beside what it explains. In a window too narrow for
-    // both, the list keeps the whole body and the footer carries the one-line
-    // hint it always did — which is the 80x24 path, and the reason the footer
-    // is still built below whether or not the panel is drawn.
+    // both, the list keeps the whole body and the footer carries the row's
+    // one-line hint — the 80x24 path, and the reason the footer is built
+    // below whether or not the panel is drawn.
     let (body, explaining) = match explaining
         .then(|| crate::tui::layout::builder_panel(body))
         .flatten()
@@ -209,27 +205,19 @@ pub fn render_builder(
     let (caret, hint, key_pairs) = match &builder.open {
         None => (
             render_sections(app, builder, frame, body),
-            // A refusal first; then whatever is wrong with the pattern; then
-            // what the highlighted row is for. The line was empty until a save
-            // was refused, which is a whole interface's worth of unused space
-            // over a list of five nouns.
             // A refusal, then a warning, then what the highlighted row is
             // for — and the last of those only when the panel is not already
             // saying it two columns across.
             //
-            // **The warning is always here and never there.** The panel
-            // explains; this line refuses and warns. Splitting them that way
-            // gives each one place — the rule the whole app is built on — and
-            // it is also the only one that cannot lose: the footer is a fixed
-            // row of the box, so a warning can never be pushed off the end of
-            // it the way it can off the bottom of a panel.
+            // **The warning is always here and never in the panel**: the
+            // footer is a fixed row of the box, so a warning can never be
+            // pushed off the end of it the way it can off the bottom of a
+            // panel (`src/tui/CLAUDE.md` › The panel, the guide).
             builder
                 .error
                 .clone()
                 .or_else(|| row_note(builder))
                 .or_else(|| (!explaining).then(|| builder.row().hint().to_string())),
-            // Esc asks before it discards now, so the registry's own word for
-            // the key — "close" — is the true one and the rewrite is gone.
             registry_keys(app, Context::Builder, width),
         ),
         Some(Open::Metadata(form)) | Some(Open::Id(form)) => (
@@ -268,9 +256,8 @@ pub fn render_builder(
         frame,
         footer,
         // The leading space is part of the line, so the text is fitted to what
-        // is left after it. Fitting to the whole width and then adding the
-        // space put the line one column over, and the column that fell off the
-        // end was the ellipsis — so a cut sentence did not look cut.
+        // is left after it: fitted to the whole width, the column that falls
+        // off the end is the ellipsis, and a cut sentence does not look cut.
         &format!(
             " {}",
             fit(
@@ -291,10 +278,8 @@ pub fn render_builder(
 /// The panel: what the highlighted row or field is, and — on the section list,
 /// where no editor is showing it — what this template would produce.
 ///
-/// It exists because the whole teaching budget of this editor used to be one
-/// footer line cut with an ellipsis, over a list of five nouns in the
-/// manifest's own vocabulary. Its words come from `guide`, which is the one
-/// place any of them are written.
+/// Its words come from `guide`, which is the one place any of them are
+/// written.
 fn render_panel(app: &App, builder: &Builder, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let block = Block::default()
@@ -358,7 +343,7 @@ fn section_of(open: &Open) -> &'static str {
 }
 
 /// The home list: the five sections with what each holds, then Save and
-/// Discard. The list *is* the summary the old builder printed after each step.
+/// Discard.
 fn render_sections(
     app: &App,
     builder: &Builder,
@@ -645,8 +630,7 @@ fn render_file_edit(
 // ---------------------------------------------------------------------------
 
 /// Every setting on one screen, grouped by heading, with what it is set to
-/// beside it. The menu this replaces was seven submenus deep, so seeing what
-/// fastf was configured to do meant walking the whole tree and remembering.
+/// beside it.
 pub fn render_settings(
     app: &App,
     state: &SettingsState,
@@ -679,12 +663,10 @@ pub fn render_settings(
     }
 
     let width = body.width as usize;
-    // **Measured from the rows, not fixed at 26.** `pad` does not truncate, so
-    // a label longer than the constant pushed its value right and past the box
-    // edge — and today's longest, "Ask to open after creating", is exactly 26,
-    // which is zero headroom for the next setting anybody adds. The rule
-    // everywhere else in this app is that a column is as wide as its content:
-    // a title can never run into its description.
+    // **Measured from the rows, never fixed**: `pad` does not truncate, so a
+    // label longer than a fixed width pushes its value right and past the box
+    // edge. A column is as wide as its content: a title can never run into
+    // its description.
     let label_width = state
         .rows
         .iter()
@@ -836,10 +818,9 @@ fn render_setting_editor(
         Editing::Bases { area, .. } => {
             // A list needs room, so it opens *over* its row in a frame of its
             // own — an editor with no edges looks like the screen went wrong.
-            // `box_at_row` slides it up when the row is near the bottom; this
-            // was a `clamp(4, body.height - row)`, and `Ord::clamp` panics when
-            // the room is smaller than the minimum, which every window between
-            // 16 and 23 rows tall made it.
+            // `box_at_row` slides it up when the row is near the bottom; never
+            // `Ord::clamp` here, which panics when the room is smaller than
+            // the minimum (`src/tui/CLAUDE.md` › Layout).
             let box_area =
                 crate::tui::layout::box_at_row(body, row, area.lines().len() as u16 + 2, 4);
             // The whole band, not just the box: half a label showing past the

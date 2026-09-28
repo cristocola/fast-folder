@@ -98,7 +98,7 @@ pub enum Entry {
 }
 
 impl Entry {
-    /// Whether leaving prints `Goodbye.` — only the menu ever did.
+    /// Whether leaving prints `Goodbye.` — only the menu does.
     pub fn is_menu(&self) -> bool {
         matches!(self, Entry::Menu)
     }

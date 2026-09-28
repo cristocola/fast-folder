@@ -180,7 +180,7 @@ impl App {
                 // an answer to a question nobody is asking any more — the same
                 // guard `on_template_loaded` and `TemplateViewLoaded` make. Esc
                 // out of one pending builder and open another, and on a slow
-                // disk the first read used to arrive and become the second's
+                // disk the first read would arrive and become the second's
                 // contents, wiping anything typed meanwhile.
                 if builder.pending.as_deref() != Some(slug.as_str()) {
                     return Vec::new();
@@ -354,10 +354,10 @@ impl App {
                 // which is the one row nobody who just changed a variable is
                 // looking at.
                 //
-                // **The add line stays open** — it took keys all along — and
+                // **The add line stays open** — it takes keys all along — and
                 // the todo it sent pulses where the writer says it put it
                 // (`todo_ordinal`), once the re-read shows it; a guess at that
-                // place was wrong wherever a phase's name repeats.
+                // place is wrong wherever a phase's name repeats.
                 let landed = if self
                     .pane_edit
                     .as_ref()
@@ -484,14 +484,14 @@ impl App {
     /// Pasted text goes into whichever field has the caret, and nowhere
     /// else. A single-line field takes the first line and says how many it
     /// dropped; a text area takes them all; with no field open the paste is
-    /// ignored and said so — it is never read as keystrokes, which is how a
-    /// pasted paragraph once ran a dozen commands.
+    /// ignored and said so — it is never read as keystrokes, or a pasted
+    /// paragraph would run a dozen commands.
     fn on_paste(&mut self, text: &str) -> Vec<Effect> {
         // **A line ends however the terminal ends it.** A bracketed paste
         // carries the clipboard's line breaks as the terminal sends them, and
         // many send a bare carriage return; `str::lines` splits on `\n`
-        // alone, so every multi-line paste arrived as one line with its breaks
-        // dropped — a note pasted whole, a list pasted as one todo.
+        // alone, so without this a multi-line paste arrives as one line with
+        // its breaks dropped — a note run together, a list as one todo.
         let text = &text.replace("\r\n", "\n").replace('\r', "\n");
         // A list pasted onto the add line is that many todos, at once.
         if self.modals.is_empty()

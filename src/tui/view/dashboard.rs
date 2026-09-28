@@ -223,8 +223,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
         ),
     )];
     // The first frame's counts come from the index; the spinner rides with the
-    // number it qualifies rather than sitting in a header that no longer has
-    // one.
+    // number it qualifies.
     if !app.library.loaded {
         parts.push((
             3,
@@ -460,13 +459,10 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let mut spans = vec![Span::raw(" ")];
     let width = area.width.saturating_sub(2) as usize;
-    // **Every pair on this bar is read, not written.** It used to hand-write
-    // six of them — the palette's, the prompt's, the multi-pick's, the
-    // picker's, the pager's and the search bar's — which is why four of those
-    // dialogs had a `Context` with no commands in it: nothing needed them,
-    // because the bar already knew. A key spelled here is a key that drifts.
+    // **Every pair on this bar is read, not written**: a key spelled here is
+    // a key that drifts.
     let pairs = match app.modals.top() {
-        // A flow, the studio, the builder, the guide, a note, a confirmation
+        // A flow, the builder, the settings, the guide, a note, a confirmation
         // and the welcome dialog each draw their own key line inside their
         // frame, beside what the keys act on; repeating it down here would say
         // it twice.
@@ -485,8 +481,8 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
                     .filter(|_| ctx.hints_movement())
                     .collect();
             // Only what the movement pair actually costs comes off the width
-            // the rest is measured against — a flat allowance dropped a verb
-            // from every bar that never showed the arrows at all.
+            // the rest is measured against: a flat allowance drops a verb from
+            // every bar that shows no arrows at all.
             let spent: usize = pairs
                 .iter()
                 .map(|(key, what)| key.chars().count() + 1 + what.chars().count() + 2)

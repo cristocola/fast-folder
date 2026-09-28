@@ -7,11 +7,11 @@
 //! marks carry the retry state: a row whose item failed or never ran keeps its
 //! mark, and one whose item succeeded loses it when its outcome lands.
 //!
-//! Every verb that means the same thing for each of several projects batches:
-//! delete, unregister and move, and the tags and the notes — select three,
-//! add a tag; select five, add the same note. Acting on a run of folders is
-//! what the marks are for. Rename stays single: every row would need its own
-//! name.
+//! Every verb that means the same thing for each of several projects batches
+//! — select three, add a tag; select five, add the same note. Acting on a run
+//! of folders is what the marks are for. This runner carries the quick verbs:
+//! unregister, the tags and the notes. Rename stays single: every row would
+//! need its own name.
 
 use std::path::PathBuf;
 
@@ -97,7 +97,7 @@ impl JobKind {
 #[derive(Debug)]
 pub struct Job {
     pub kind: JobKind,
-    /// The base every item moves to, for a `Move` job.
+    /// The folder every item goes to; no kind this runner carries has one.
     pub target: Option<PathBuf>,
     /// Items that have not run yet.
     pub pending: Vec<Project>,
@@ -107,8 +107,7 @@ pub struct Job {
     pub done: usize,
     /// Items that failed, in order: id, error.
     pub failed: Vec<(String, String)>,
-    /// Clean items that came back with a warning (e.g. a move whose source
-    /// cleanup is pending).
+    /// Clean items that came back with a warning.
     pub warnings: Vec<String>,
     /// The user asked to stop: the current item finishes, the rest stay marked.
     pub cancelled: bool,
@@ -176,7 +175,7 @@ impl Job {
         }
     }
 
-    /// The progress modal's line: "moving 2 of 4", plus a live failure count.
+    /// The progress modal's line: "tagging 2 of 4", plus a live failure count.
     pub fn progress_line(&self) -> String {
         let mut line = format!(
             "{} {} of {}",
@@ -200,9 +199,8 @@ impl Job {
                 lines.push(format!("  {id}: {error}"));
             }
         }
-        // A heading, like the failures above. A clean batch that reported
-        // source-cleanup warnings opened its dialog with an indented list
-        // under nothing at all.
+        // A heading, like the failures above, so the indented list never
+        // opens the dialog under nothing at all.
         if !self.warnings.is_empty() {
             if !lines.is_empty() {
                 lines.push(String::new());
@@ -289,20 +287,17 @@ impl App {
                 {
                     job.warnings.push(warning);
                 }
-                // **The effects a change asks for are the job's too.** They
-                // were dropped here, where the single-action path returns them,
-                // and `apply_change`'s `Reload` arm calls `discover`, which
-                // sets `library.inflight` *before* handing back the effect that
-                // would answer it. A dropped one left the app waiting on a
-                // generation nothing would ever send, after which every patch
-                // only set `dirty` and the list stopped changing: a batch
-                // re-derive of tags rewrote every file and showed nothing, and
-                // the list stayed frozen for the rest of the session.
+                // **The effects a change asks for are the job's too**, as the
+                // single-action path returns them: `apply_change`'s `Reload`
+                // arm calls `discover`, which sets `library.inflight` *before*
+                // handing back the effect that answers it. Dropped, it leaves
+                // the app waiting on a generation nothing sends, every later
+                // patch only sets `dirty`, and the list is frozen for the rest
+                // of the session.
                 effects.extend(self.apply_change(outcome.change));
-                // A mark is the retry list. An item that succeeded is not on
-                // it any more, so "3 tagged" and the ✓ glyphs left on screen
-                // cannot disagree — `jobs.rs` has always said so; nothing did
-                // it, because `patch` only drops a mark when the path moved.
+                // A mark is the retry list: an item that succeeded leaves it
+                // here, so "3 tagged" and the ✓ glyphs on screen cannot
+                // disagree. `patch` drops a mark only when the path moved.
                 if let Some(path) = &path {
                     self.library.marks.remove(path);
                 }

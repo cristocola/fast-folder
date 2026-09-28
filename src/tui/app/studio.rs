@@ -1,12 +1,10 @@
-//! The template studio, and the builder inside it.
+//! The templates tab (`Studio`), and the builder inside it.
 //!
 //! The studio is the list of templates with the selected one's details beside
 //! it, and the verbs on it: new, edit, generate from a folder, delete. The
-//! builder is what new and edit open — the six-step linear pass and the review
-//! menu it used to be, collapsed into **one list of sections you can enter in
-//! any order**, because that is what the review menu was already trying to be.
-//! A section returns to the list; the list saves, and says why it cannot when
-//! `Template::validate` refuses.
+//! builder is what new and edit open: **one list of sections you can enter in
+//! any order**. A section returns to the list; the list saves, and says why it
+//! cannot when `Template::validate` refuses.
 //!
 //! The scratch `Template` is only written by Save, so leaving a section — or
 //! the whole builder — writes nothing.
@@ -192,8 +190,8 @@ impl Section {
     /// What this part *is*, in the words of somebody who has not read
     /// `docs/templates.md`. The row labels are the on-disk vocabulary and have
     /// to stay — they are what the manifest calls these things — but a list of
-    /// five nouns is not an interface, and the footer was empty until a save
-    /// was refused. The settings screen already spends its footer this way.
+    /// five nouns is not an interface, so the footer says this, as the
+    /// settings screen's does.
     pub fn hint(self) -> &'static str {
         match self {
             Section::Metadata => "what the template is called, and how its projects are named",
@@ -296,11 +294,10 @@ pub struct Builder {
     /// The slug a worker is reading, while it is reading it.
     ///
     /// The slug and not a `bool`, because the answer has to be checked against
-    /// the question. `Msg::TemplateSourceLoaded` replaced whatever builder was
-    /// on top with whatever landed: Enter on one template, Esc, Enter on
-    /// another, and on a slow disk the first read arrived and silently became
-    /// the second's contents. `TemplateViewLoaded` and `on_template_loaded`
-    /// both check; this was the one that did not.
+    /// the question: Enter on one template, Esc, Enter on another, and on a
+    /// slow disk the first read lands while the second is awaited.
+    /// `Msg::TemplateSourceLoaded` drops a read for any other slug, as
+    /// `TemplateViewLoaded` and `on_template_loaded` drop theirs.
     pub pending: Option<String>,
     /// A save is in flight. The builder stays up until it lands: a refusal
     /// from under the data lock — an occupied slug, a lock timeout, a full
@@ -361,14 +358,13 @@ impl Builder {
         }
     }
 
-    /// What each row says on the right, so the list *is* the summary the old
-    /// builder printed after every step.
+    /// What each row says on the right, so the list *is* the template's
+    /// summary.
     ///
     /// Takes the alphabet because two of its rows draw one: the separator
     /// between a template's three names, and the "and so on" after the first
-    /// two IDs. Both were literals, and both are a replacement box on a console
-    /// that has no `·` or `…` — the same defect the theme's tick was rescued
-    /// from, one screen over.
+    /// two IDs. A literal `·` or `…` is a replacement box on a console that
+    /// has neither.
     pub fn summary(&self, section: Section, g: Glyphs) -> String {
         let t = &self.template;
         match section {
@@ -464,9 +460,9 @@ pub fn metadata_form(template: &Template) -> Form {
     // **On an edit the slug is already chosen, so it stops following the
     // name.** `suggest_slug` rewrites the slug of any field nobody has typed
     // in, and a form built from an existing template has touched nothing — so
-    // correcting a typo in the title of `music-video` silently retyped the
-    // slug, and Save renamed the template's directory on disk to match. The
-    // flag says "this value was chosen", which for a loaded template it was.
+    // without the flag, correcting a typo in the title retypes the slug, and
+    // Save renames the template's directory on disk to match. The flag says
+    // "this value was chosen", which for a loaded template it was.
     let mut slug = Field::text(
         "slug",
         "Slug",
@@ -519,7 +515,7 @@ pub fn id_form(template: &Template) -> Form {
     ])
 }
 
-/// The transform names, in the order the old picker listed them.
+/// The transform names, in the order the form cycles through them.
 pub const TRANSFORMS: [&str; 4] = [
     "none",
     "TitleUnderscore",
@@ -547,9 +543,9 @@ pub fn transform_label(transform: Transform) -> &'static str {
 
 /// One variable's form. `None` builds an empty one.
 ///
-/// A select's options are one comma-separated line rather than the old
-/// one-per-line loop: on a form the whole answer has to be visible and
-/// correctable, and a list of three words is a line.
+/// A select's options are one comma-separated line: on a form the whole
+/// answer has to be visible and correctable, and a list of three words is a
+/// line.
 pub fn variable_form(existing: Option<&Variable>) -> Form {
     let blank = Variable {
         slug: String::new(),
@@ -1016,9 +1012,7 @@ pub fn slugify(name: &str) -> String {
         .collect()
 }
 
-/// Keep the slug following the name until somebody types a slug of their own —
-/// what the old builder offered once, as the slug prompt's default, and then
-/// could not offer again.
+/// Keep the slug following the name until somebody types a slug of their own.
 pub fn suggest_slug(form: &mut Form) {
     let suggestion = slugify(&form.value("name"));
     if let Some(field) = form.field_mut("slug")
@@ -1058,7 +1052,6 @@ impl App {
         effects
     }
 
-    /// The templates tab's arrows, over the rows its own query keeps.
     /// The ends of the templates list. `Studio::jump` keeps the selection on
     /// a row the current filter shows, exactly as `step` does.
     pub(super) fn jump_templates(&mut self, first: bool) -> Vec<Effect> {
@@ -1071,6 +1064,7 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// The templates tab's arrows, over the rows its own query keeps.
     fn step_templates(&mut self, delta: isize) -> Vec<Effect> {
         let rows = self.studio.rows(self.search.input.text());
         self.studio.step(delta, &rows);
@@ -1177,9 +1171,8 @@ impl App {
         Vec::new()
     }
 
-    /// `K`/`J` on the variables list: reorder in place, which is what
-    /// `prompt::sort` was for. Moving a row is one keystroke and shows the
-    /// result immediately.
+    /// `K`/`J` on the variables list: reorder in place. Moving a row is one
+    /// keystroke and shows the result immediately.
     pub(super) fn builder_move(&mut self, up: bool) -> Vec<Effect> {
         let Some(Modal::Builder(builder)) = self.modals.top_mut() else {
             return Vec::new();
@@ -1255,17 +1248,13 @@ impl App {
         self.lookup_and_run(key)
     }
 
-    /// Save, or say what `Template::validate` refused — the check that used to
-    /// print `Cannot save:` and drop back into the same menu.
     /// Save, or say what refused it.
     ///
-    /// **The builder stays up until the write has actually landed.** It used
-    /// to be popped the moment the effect was handed over, so a refusal from
-    /// under the data lock — an occupied slug, a lock held by another
-    /// terminal, a full disk — arrived with nothing to land on: the template
-    /// was gone, and all that was left was one red line on the status bar.
-    /// Everything typed into it was unrecoverable. `Modal::Builder` is popped
-    /// in `on_action_done` now, on the success path only.
+    /// **The builder stays up until the write has actually landed**, so a
+    /// refusal from under the data lock — an occupied slug, a lock held by
+    /// another terminal, a full disk — lands on it with everything typed still
+    /// there. `Modal::Builder` is popped in `on_action_done`, on the success
+    /// path only.
     pub(super) fn save_template(&mut self) -> Vec<Effect> {
         // Read what the save needs first, so the borrow ends before the app
         // itself is needed.
@@ -1476,12 +1465,6 @@ impl App {
 
     /// Up/Down and the page keys on the templates tab: the card list, or the
     /// pane beside it when that is what Tab has the focus on.
-    ///
-    /// `Studio::scroll` existed, was clamped by the view, and was set to zero
-    /// in four places and raised in none — so a template whose `template show`
-    /// output was taller than the pane had its tail permanently unreachable,
-    /// which on an 80×24 window is anything past about fifteen lines. Most
-    /// real templates are longer than that.
     pub(super) fn step_templates_or_pane(&mut self, delta: isize) -> Vec<Effect> {
         if self.focus == Focus::Detail {
             self.studio.scroll = self
@@ -1497,10 +1480,9 @@ impl App {
     /// The last row the pane can be scrolled to, from the geometry `view`
     /// draws with — so the cursor cannot leave the drawn window.
     ///
-    /// **The templates tab's own split**, not the library's: it measured
-    /// `regions().detail` before, which is the library pane — somewhere else
-    /// entirely, or closed, while the template pane is always drawn — so on a
-    /// narrow window Tab could not reach a pane that was right there.
+    /// **The templates tab's own split**, not the library's: `regions().detail`
+    /// is the library pane — somewhere else entirely, or closed, while the
+    /// template pane is always drawn.
     pub(super) fn studio_scroll_max(&self) -> usize {
         let (_, pane, _) = self.template_panes();
         let rows = pane.height.saturating_sub(2) as usize;

@@ -17,9 +17,8 @@ impl App {
         match id {
             CommandId::Quit => self.quit(Exit::Normal),
             CommandId::Back => {
-                // Anything running is cancelled first: a batch job and a
-                // single move alike, before a keystroke can clear something
-                // the user was looking at.
+                // A running batch is cancelled first, before a keystroke can
+                // clear something the user was looking at.
                 if self.job.is_some() {
                     return self.request_cancel();
                 }
@@ -78,9 +77,8 @@ impl App {
             }
             CommandId::Close => self.close_top(),
             CommandId::Interrupt => {
-                // A job or a move is running: Ctrl-C cancels it rather than
-                // quitting under a worker that is still mutating the
-                // filesystem.
+                // A batch is running: Ctrl-C cancels it rather than quitting
+                // under a worker that is still mutating the filesystem.
                 if self.job.is_some() {
                     return self.request_cancel();
                 }
@@ -88,18 +86,16 @@ impl App {
                     return self.cancel_followed_job();
                 }
                 // Here Ctrl-C is a close, and a close may not throw away a
-                // template that has been worked on — the one gesture that
-                // reached past the question Esc and `q` now ask, and the
-                // quietest, since it did not even leave a status line behind.
+                // template that has been worked on: it asks what Esc and `q`
+                // ask.
                 //
                 // **A save in flight is deliberately not part of this.** Esc
                 // and `q` are ignored while one runs, because it is about to
                 // land and its refusal needs the list to land on. Ctrl-C is
                 // the opposite case: `DataLock::acquire` waits up to thirty
-                // seconds when another fastf holds it, so routing Ctrl-C into
-                // the same guard left the only way out of a half-minute wait
-                // doing nothing at all. It keeps its ordinary meaning instead
-                // — the write is a single atomic publish on a worker, and
+                // seconds when another fastf holds it, and Ctrl-C is the only
+                // way out of that wait. It keeps its ordinary meaning — the
+                // write is a single atomic publish on a worker, and
                 // interrupting the app over it is exactly what the interrupt
                 // key is for.
                 if matches!(
@@ -114,10 +110,6 @@ impl App {
                     vec![Effect::Quit(Exit::Interrupted)]
                 }
             }
-            // One rule, six lists: `→` runs whatever Enter runs where you are.
-            // Dispatched on the context rather than declared six times, so the
-            // help states the axis once instead of hanging two more keys off
-            // every opener's row.
             CommandId::GuideNext => self.turn_guide(1),
             CommandId::GuidePrevious => self.turn_guide(-1),
             CommandId::FocusList => {
@@ -688,8 +680,8 @@ impl App {
             CommandId::Reconcile => self.run_job(settings::Job::Reconcile),
             CommandId::Attention => self.open_attention(),
             // `f` on the templates tab: filter the library by this template
-            // **and go back to it**. The old strip set the filter and left you
-            // looking at the strip, which is the one place the answer is not.
+            // **and go back to it**, since the tab is the one place the answer
+            // is not.
             CommandId::StripFilter => {
                 let slug = self.studio.selected_slug();
                 let next = if slug == self.library.template_filter {
@@ -704,18 +696,12 @@ impl App {
         }
     }
 
-    /// Esc on a dialog: one level at a time. A builder section goes back to
-    /// the section list; the section list discards the template; everything
-    /// else simply closes.
     /// Leave, from whichever gesture asked to.
     ///
-    /// **Every quit goes through here**, because there are three of them and
-    /// they used to answer differently: `CommandId::Quit` ran `Effect::Quit`
-    /// on the spot, and it is reachable from the palette (`c`, "quit", Enter)
-    /// and from the too-small-window guard as well as from `q` — so a template
-    /// worked on for ten minutes could be thrown away with no question at all,
-    /// while Esc on the same screen asked. `close_top` owns the question;
-    /// this owns who has to ask it.
+    /// **Every quit goes through here** — `q`, the palette's entry and the
+    /// too-small-window guard — so each asks what Esc on the same screen
+    /// asks before a worked-on template is lost. `close_top` owns the
+    /// question; this owns who has to ask it.
     pub(super) fn quit(&mut self, exit: Exit) -> Vec<Effect> {
         // Quitting under a running batch would abandon it between items.
         // A move, a copy, a delete or a reconcile is a job of its own and
@@ -743,6 +729,9 @@ impl App {
         vec![Effect::Quit(exit)]
     }
 
+    /// Esc on a dialog: one level at a time. A builder section goes back to
+    /// the section list; the section list closes the builder, asking first
+    /// when the template has been worked on; everything else simply closes.
     pub(super) fn close_top(&mut self) -> Vec<Effect> {
         match self.modals.top_mut() {
             Some(Modal::Builder(builder)) => {
@@ -755,10 +744,8 @@ impl App {
                     builder.open = None;
                 } else if builder.is_dirty() {
                     // **A template that has been worked on is not thrown away
-                    // on one keystroke.** Esc and `q` popped the builder and
-                    // said so afterwards, on the status line, by which time
-                    // every answer was gone — and `q` is the key this app
-                    // teaches you to close things with everywhere else.
+                    // on one keystroke**, and `q` is the key this app teaches
+                    // you to close things with everywhere else.
                     let prompt =
                         validators::discard_template_prompt(builder.original_slug.is_some());
                     self.modals.push(Modal::Confirm(Confirm {

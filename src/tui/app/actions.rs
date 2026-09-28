@@ -384,19 +384,20 @@ impl App {
     fn copy_to_typed(&mut self, targets: Targets, text: String) -> Vec<Effect> {
         let typed = text.trim().to_string();
         if typed.is_empty() {
+            self.modals.pop();
             return Vec::new();
         }
-        self.modals.pop();
         // Expanded here, refused in the engine: `~/backups` has to mean
         // the same thing it means in `config set bases`, and the rule
         // about bases is stated once, in `copy_engine`.
         let destination = match crate::core::config::expand_base_path(&typed) {
             Ok(path) => path,
             Err(error) => {
-                self.warn(format!("{error:#}"));
+                self.refuse_under_the_line(format!("{error:#}"));
                 return Vec::new();
             }
         };
+        self.modals.pop();
         let projects = self.still_here(&targets);
         if projects.is_empty() {
             return self.gone_from_the_library();
@@ -409,16 +410,26 @@ impl App {
     }
 
     fn raise_counter_to(&mut self, text: String) -> Vec<Effect> {
-        self.modals.pop();
         match text.trim().parse::<u64>() {
-            Ok(value) => self.run_action(
-                settings::Job::RaiseCounter.busy(),
-                Action::RaiseCounter(value),
-            ),
+            Ok(value) => {
+                self.modals.pop();
+                self.run_action(
+                    settings::Job::RaiseCounter.busy(),
+                    Action::RaiseCounter(value),
+                )
+            }
             Err(_) => {
-                self.warn(format!("expected a number, got '{}'", text.trim()));
+                self.refuse_under_the_line(format!("expected a number, got '{}'", text.trim()));
                 Vec::new()
             }
+        }
+    }
+
+    /// A refusal of what was typed: under the prompt's line, with the text
+    /// still there to correct.
+    fn refuse_under_the_line(&mut self, error: String) {
+        if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+            prompt.error = Some(error);
         }
     }
 

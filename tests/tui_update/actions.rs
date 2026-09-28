@@ -336,6 +336,31 @@ fn a_copy_and_a_reconcile_are_jobs_with_the_dialog_up() {
     );
 }
 
+/// A folder the copy cannot take is refused under the line, with the text
+/// still there; an empty answer closes the prompt, as it does every other.
+#[test]
+fn a_copy_folder_that_is_refused_keeps_what_was_typed() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('C'));
+    type_text(&mut app, "backups/2026");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => {
+            assert_eq!(prompt.input.text(), "backups/2026", "the text is kept");
+            let error = prompt.error.as_deref().unwrap_or_default();
+            assert!(error.contains("absolute path"), "{error:?}");
+        }
+        other => panic!("the prompt stays up, got {other:?}"),
+    }
+
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('C'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(app.modals.is_empty(), "an empty answer closes the prompt");
+}
+
 /// A job that ends is reported: its summary on the status line, its
 /// warning in a dialog, the list reloaded, and the job marked seen.
 #[test]

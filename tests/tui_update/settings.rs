@@ -241,6 +241,32 @@ fn the_counter_is_raised_through_a_prompt_that_names_the_floor() {
     assert!(matches!(action_of(&effects), Action::RaiseCounter(2489)));
 }
 
+/// **Typed input is never thrown away by a refusal.** A counter that is not a
+/// number is said under the line, with what was typed still there to correct.
+#[test]
+fn a_counter_that_is_no_number_is_refused_under_the_line() {
+    let mut app = fixture(6, 120, 40);
+    open(&mut app);
+    go_to(&mut app, "Counter");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    type_text(&mut app, "a");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => {
+            assert_eq!(prompt.input.text(), "248a", "the text is kept");
+            let error = prompt.error.as_deref().unwrap_or_default();
+            assert!(error.contains("expected a number"), "{error:?}");
+        }
+        other => panic!("the prompt stays up, got {other:?}"),
+    }
+    // One Backspace fixes it.
+    press(&mut app, Key::plain(KeyCode::Backspace));
+    type_text(&mut app, "9");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(action_of(&effects), Action::RaiseCounter(2489)));
+}
+
 /// **`!` lists what is unfinished**, what needs you first, each with its
 /// reason; Enter on an item that needs you offers what settles it, and
 /// discarding asks for the word before anything is sent.

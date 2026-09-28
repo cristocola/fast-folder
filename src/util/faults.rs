@@ -394,6 +394,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // fails (`remove:unlink:enotconn-3`, `copy:write:eio-1`).
     "remove:unlink",
     "copy:write",
+    // A folder asked to go again after a pause, once its listing had not
+    // caught up (`remove:again:enotempty-4`).
+    "remove:again",
     // Taking back the probe a copy makes to ask whether its target ignores
     // case, failed the way a mount fails (`copy:case-probe:eacces`).
     "copy:case-probe",

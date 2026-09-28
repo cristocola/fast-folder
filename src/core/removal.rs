@@ -572,11 +572,14 @@ impl Removing<'_> {
     /// again after a moment, a few times.
     ///
     /// Not `fs_retry`'s loop: between two asks the folder is listed and what
-    /// it holds judged, and the last pause comes before giving up, not after.
-    /// The pauses are its `schedule::LISTING_LAG`.
+    /// it holds judged. The pauses are its `schedule::LISTING_LAG`, each
+    /// followed by a try.
     fn empty_again(&self, folder: &Path) -> std::io::Result<()> {
         let mut last = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
-        for pause in crate::util::fs_retry::schedule::LISTING_LAG {
+        let pauses = crate::util::fs_retry::schedule::LISTING_LAG;
+        // Once, and once more after each pause: the last pause too is
+        // followed by a try.
+        for attempt in 0..=pauses.len() {
             let entries = crate::util::fs_retry::list_dir(folder, || Ok(()))?;
             for path in entries {
                 let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -603,7 +606,9 @@ impl Removing<'_> {
             if self.is_holding(folder) {
                 return Err(last);
             }
-            match crate::util::fs_retry::remove_dir(folder) {
+            let asked = crate::util::faults::check_io("remove:again")
+                .and_then(|()| crate::util::fs_retry::remove_dir(folder));
+            match asked {
                 Ok(()) => return Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(error)
@@ -611,7 +616,9 @@ impl Removing<'_> {
                         == crate::util::fs_retry::ErrorClass::NotEmpty =>
                 {
                     last = error;
-                    std::thread::sleep(std::time::Duration::from_millis(*pause));
+                    if let Some(pause) = pauses.get(attempt) {
+                        std::thread::sleep(std::time::Duration::from_millis(*pause));
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -692,6 +699,29 @@ mod tests {
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("a.txt"), "a").unwrap();
         fs::write(root.join("sub/b.txt"), "b").unwrap();
+    }
+
+    /// **The last pause is followed by a last try.** A folder a cloud mount
+    /// still lists as holding something is asked again after each pause of
+    /// the schedule, the last one included: a wait nothing follows is time
+    /// spent for nothing, and the folder that would have gone stays.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_folder_is_asked_once_more_after_the_last_pause() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".fastf-deleted-1-9");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let pauses = crate::util::fs_retry::schedule::LISTING_LAG.len();
+
+        // The folder's first removal and every one that follows a pause but
+        // the last say "not empty", as a listing that lags does.
+        let fault =
+            format!("pool:serial,remove:unlink:enotempty-1,remove:again:enotempty-{pauses}");
+        let removal = crate::util::faults::with_thread_fault(&fault, || {
+            remove_tree(&root, None, Purpose::Delete, Ticker::none())
+        });
+        assert_eq!(removal, Removal::Removed);
+        assert!(!root.exists());
     }
 
     /// Removal never steps through a link: the link goes, what it points at

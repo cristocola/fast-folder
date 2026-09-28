@@ -139,7 +139,16 @@ fn no_verb_reaches_a_project_its_question_was_not_about() {
             press(app, Key::plain(KeyCode::Enter))
         }),
         ("copy", Key::ch('C'), |app| {
-            type_text(app, "/mnt/backups");
+            // An absolute path where the test runs, or the prompt refuses the
+            // folder before it looks for the projects.
+            type_text(
+                app,
+                if cfg!(windows) {
+                    r"C:\backups"
+                } else {
+                    "/mnt/backups"
+                },
+            );
             press(app, Key::plain(KeyCode::Enter))
         }),
         ("add a tag", Key::ch('A'), |app| {

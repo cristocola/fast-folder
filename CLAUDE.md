@@ -21,6 +21,14 @@ tag and the package bump, in that order, and nothing short of that is an answer
 to give. The same goes for work left uncommitted "for now": either the tree is
 clean and the release is out, or the job is not done.
 
+## How work is planned
+
+Plan in plan mode, have the plan approved, then carry the work through to its
+PR. **No plan file is committed**, and nothing in the repository describes work
+in phases. Open work lives in `ROADMAP.md`; a decision lives in the CLAUDE.md
+beside the code it constrains; what happened lives in the release notes and
+the git history.
+
 ## Build commands
 
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows

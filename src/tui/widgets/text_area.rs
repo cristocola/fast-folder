@@ -1,12 +1,10 @@
 //! A multi-line editor: the template builder's folder list and file contents.
 //!
-//! Written here rather than taken from `tui-textarea`, which the plan named as
-//! a candidate. Its current release pins `ratatui 0.29`, and a widget built
-//! against a different ratatui does not implement *our* `Widget` trait at all —
-//! adding it pulls a second copy of ratatui into the tree, or fails to resolve,
-//! which is what it does here. The plan's own condition for a widget crate is
-//! that it build against the ratatui in `Cargo.toml`; this one does not, so the
-//! piece is ours.
+//! Written here rather than taken from `tui-textarea`: a widget crate has to
+//! build against the ratatui in `Cargo.toml`, and that one pins `ratatui 0.29`.
+//! A widget built against a different ratatui does not implement *our*
+//! `Widget` trait at all: adding it pulls a second copy of ratatui into the
+//! tree, or fails to resolve.
 //!
 //! It is [`LineEdit`](super::input::LineEdit) with a second dimension, and the
 //! same rule holds: **the cursor is a char index, never a byte offset**, on

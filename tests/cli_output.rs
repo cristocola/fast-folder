@@ -1350,8 +1350,7 @@ fn path_and_copy_refuse_a_stale_project() {
 }
 
 /// Piped, an ambiguous query is an error listing the candidates — the same text
-/// `open` has always printed. A terminal gets a picker instead; a script must
-/// not, and this pins the contract from the phase before the picker exists.
+/// `open` prints. A terminal gets a picker instead; a script must not.
 #[test]
 fn an_ambiguous_copy_errors_with_candidates_when_piped() {
     let sb = Sandbox::new();

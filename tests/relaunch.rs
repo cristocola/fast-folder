@@ -195,9 +195,9 @@ fn path_headless_gui_copies_and_notifies_but_still_prints() {
     );
 }
 
-/// An ambiguous query from a launcher is the case that produced this phase: the
-/// candidate list went to the journal and the command looked like it did
-/// nothing at all. It must hand off, so the picker can be shown in a window.
+/// An ambiguous query from a launcher must hand off, so the picker can be shown
+/// in a window: a candidate list printed there goes to the journal, and the
+/// command looks like it did nothing at all.
 #[test]
 fn an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring() {
     let (sb, rec) = sandbox_with_recorder();

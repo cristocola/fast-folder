@@ -86,8 +86,8 @@ still spell the characters out:
 
 Each is a function that builds a display string with no theme in reach, so the
 fix is the one `Builder::summary` and `transform_example` took: hand it the
-`Glyphs`. Worth one phase, with the guard test `guide.rs` already has extended
-over `src/tui/`.
+`Glyphs`. One change, with the guard test `guide.rs` already has extended over
+`src/tui/`.
 
 ### Smaller findings
 

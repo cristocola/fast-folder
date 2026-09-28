@@ -598,8 +598,8 @@ in it open (`describe_rename_error`).
 ## Jobs, and the lock split
 
 **A long operation is a job: a process of its own, described by files in the
-data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` — and,
-from Phase 4 of the plan, the app — write `jobs/<id>/request.json` and start
+data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` and the
+app write `jobs/<id>/request.json` and start
 this binary as `fastf --fastf-job <id>` (`core::jobs::WORKER_FLAG`, taken off
 argv in `main` before clap), detached: `setsid` on unix, `DETACHED_PROCESS |
 CREATE_NEW_PROCESS_GROUP` plus a breakaway attempt on Windows, reaped on a

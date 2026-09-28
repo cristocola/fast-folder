@@ -195,7 +195,7 @@ fn init_base_dir_shared_onboarding_core() {
 ///
 /// The unquoted `year: 2026` is not decoration. It is the value shape that a
 /// `#[serde(flatten)]` catch-all would have started rejecting, which would have
-/// made the project invisible to discovery — the exact failure this phase closes.
+/// made the project invisible to discovery.
 #[test]
 fn unknown_frontmatter_keys_survive_every_mutation() {
     sandboxed(|install| {
@@ -442,8 +442,7 @@ show_frame = false
 #[test]
 fn a_panicking_test_body_still_restores_the_environment() {
     // This binary's own `SERIAL`, not a private one. A second mutex over the
-    // same process-global variables is exactly the defect this phase removes:
-    // it looks like isolation and provides none.
+    // same process-global variables looks like isolation and provides none.
     let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
     // Read under the lock: another test in this binary has its own sandbox

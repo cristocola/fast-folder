@@ -363,28 +363,7 @@ fn create_inner(
     config: &Config,
     run_post: bool,
 ) -> Result<ProjectPlan> {
-    // Defense in depth, before a single directory is created: the folder must
-    // land directly in the base the plan was made against.
-    //
-    // `plan` builds `root_path` as `base.join(folder_name)`, so this holds by
-    // construction — until `folder_name` is something `join` treats specially.
-    // `base.join("")` is `base` itself, and its parent is the base's *parent*,
-    // so a claim would land one level above the library. `ProjectFolderName`
-    // refuses those names at the plan, and this refuses a plan that carries
-    // one anyway.
-    let base = config.resolve_base_dir();
-    let parent = plan.root_path.parent().unwrap_or(Path::new(""));
-    if parent != base.as_path() {
-        anyhow::bail!(
-            "refusing to create '{}': it would land in {} rather than in the base {}",
-            plan.folder_name,
-            crate::util::paths::display_path(parent),
-            crate::util::paths::display_path(&base)
-        );
-    }
-    let parent = parent.to_path_buf();
-    fs::create_dir_all(&parent)
-        .with_context(|| format!("creating {}", crate::util::paths::display_path(&parent)))?;
+    let parent = parent_for_claim(plan, config)?;
 
     // Claim the project folder with a single atomic operation.
     //
@@ -462,22 +441,55 @@ fn create_inner(
     match provision_project(&realized, template, counters, config, run_post) {
         Ok(()) => Ok(realized),
         Err(err) => {
-            match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
-                // Said *here* — this is the only code that knows a folder was
-                // removed; said on every interrupt, it would claim a rollback
-                // for a Ctrl-C with nothing in flight.
-                Ok(()) => crate::util::diag::note(format!(
-                    "rolled back — removed the partial project at {}",
-                    crate::util::paths::display_path(&realized.root_path)
-                )),
-                Err(cleanup) => crate::util::diag::warn(format!(
-                    "could not remove the partial project at {} ({cleanup}) — \
-                     inspect it and remove it manually when safe",
-                    crate::util::paths::display_path(&realized.root_path)
-                )),
-            }
+            roll_back_create(&realized);
             Err(err)
         }
+    }
+}
+
+/// The base the claim goes into, made if it is missing.
+///
+/// Defense in depth, before a single directory is created: the folder must
+/// land directly in the base the plan was made against.
+///
+/// `plan` builds `root_path` as `base.join(folder_name)`, so this holds by
+/// construction — until `folder_name` is something `join` treats specially.
+/// `base.join("")` is `base` itself, and its parent is the base's *parent*,
+/// so a claim would land one level above the library. `ProjectFolderName`
+/// refuses those names at the plan, and this refuses a plan that carries
+/// one anyway.
+fn parent_for_claim(plan: &ProjectPlan, config: &Config) -> Result<PathBuf> {
+    let base = config.resolve_base_dir();
+    let parent = plan.root_path.parent().unwrap_or(Path::new(""));
+    if parent != base.as_path() {
+        anyhow::bail!(
+            "refusing to create '{}': it would land in {} rather than in the base {}",
+            plan.folder_name,
+            crate::util::paths::display_path(parent),
+            crate::util::paths::display_path(&base)
+        );
+    }
+    let parent = parent.to_path_buf();
+    fs::create_dir_all(&parent)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&parent)))?;
+    Ok(parent)
+}
+
+/// Remove the folder a failed create claimed, and say how that went.
+fn roll_back_create(realized: &ProjectPlan) {
+    match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
+        // Said *here* — this is the only code that knows a folder was
+        // removed; said on every interrupt, it would claim a rollback
+        // for a Ctrl-C with nothing in flight.
+        Ok(()) => crate::util::diag::note(format!(
+            "rolled back — removed the partial project at {}",
+            crate::util::paths::display_path(&realized.root_path)
+        )),
+        Err(cleanup) => crate::util::diag::warn(format!(
+            "could not remove the partial project at {} ({cleanup}) — \
+             inspect it and remove it manually when safe",
+            crate::util::paths::display_path(&realized.root_path)
+        )),
     }
 }
 

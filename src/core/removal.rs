@@ -174,28 +174,40 @@ pub(crate) fn remove_tree_judged(
     // would read as removed. What it was on at the start is what it must
     // still be on at the end for a removal to count.
     let mount = crate::util::fs_kind::mount_identity(root);
-    let removing = Removing {
-        root,
-        judge,
-        device: transactions::RootDevice::recorded(
-            root,
-            transactions::current_device(root),
-            transactions::current_device,
-        ),
-        purpose,
-        ticker,
-        guard,
-        removed: AtomicUsize::new(0),
-        first: AtomicBool::new(true),
-        stop: AtomicBool::new(false),
-        stopped: Mutex::new(None),
-        kept_on_purpose: AtomicBool::new(false),
-        notes: Mutex::new(Vec::new()),
-        folders: Mutex::new(Vec::new()),
-        holding: Mutex::new(HashSet::new()),
-        first_failure: Mutex::new(None),
-    };
+    let removing = Removing::new(root, judge, purpose, ticker, guard);
     let width = crate::util::pool::width_for(root);
+    take_entries(&removing, root, width);
+    remove_folders(&removing, width);
+    if !removing.stop.load(Ordering::Relaxed) && !removing.is_holding(root) {
+        match crate::util::fs_retry::remove_dir(root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => removing.note(root, &error.to_string()),
+        }
+    }
+    let unmounted = mount.is_some() && crate::util::fs_kind::mount_identity(root) != mount;
+    if unmounted {
+        removing.note(
+            root,
+            "the filesystem it is on is not mounted any more, so what is left there cannot be told",
+        );
+    }
+    match crate::util::paths::presence(root) {
+        crate::util::paths::Presence::Absent if !unmounted => return Removal::Removed,
+        crate::util::paths::Presence::Absent => {}
+        // Not "removed": the mount did not say so. What is left, if anything,
+        // is for the next pass once it answers.
+        crate::util::paths::Presence::Unknown(error) => {
+            removing.note(root, &format!("it does not answer ({error})"));
+        }
+        crate::util::paths::Presence::Present(_) => {}
+    }
+    let remaining = count(root);
+    leftover(removing, remaining)
+}
+
+/// List every folder from `root` down and take what each holds, on the pool.
+fn take_entries(removing: &Removing<'_>, root: &Path, width: usize) {
     let _ = crate::util::pool::expand(
         width,
         vec![Step::List(root.to_path_buf(), 0)],
@@ -210,8 +222,11 @@ pub(crate) fn remove_tree_judged(
             Ok(())
         },
     );
-    // The folders, emptied, deepest first: a level at a time, each on the
-    // pool. A folder something was left in is not asked at all.
+}
+
+/// The folders, emptied, deepest first: a level at a time, each on the
+/// pool. A folder something was left in is not asked at all.
+fn remove_folders(removing: &Removing<'_>, width: usize) {
     let mut levels: Vec<Vec<PathBuf>> = Vec::new();
     for (depth, folder) in removing
         .folders
@@ -238,31 +253,10 @@ pub(crate) fn remove_tree_judged(
             Ok(())
         });
     }
-    if !removing.stop.load(Ordering::Relaxed) && !removing.is_holding(root) {
-        match crate::util::fs_retry::remove_dir(root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => removing.note(root, &error.to_string()),
-        }
-    }
-    let unmounted = mount.is_some() && crate::util::fs_kind::mount_identity(root) != mount;
-    if unmounted {
-        removing.note(
-            root,
-            "the filesystem it is on is not mounted any more, so what is left there cannot be told",
-        );
-    }
-    match crate::util::paths::presence(root) {
-        crate::util::paths::Presence::Absent if !unmounted => return Removal::Removed,
-        crate::util::paths::Presence::Absent => {}
-        // Not "removed": the mount did not say so. What is left, if anything,
-        // is for the next pass once it answers.
-        crate::util::paths::Presence::Unknown(error) => {
-            removing.note(root, &format!("it does not answer ({error})"));
-        }
-        crate::util::paths::Presence::Present(_) => {}
-    }
-    let remaining = count(root);
+}
+
+/// What a removal that left something says: `remaining` entries, and why.
+fn leftover(removing: Removing<'_>, remaining: usize) -> Removal {
     let stopped = removing
         .stopped
         .into_inner()
@@ -333,6 +327,39 @@ struct Removing<'a> {
     /// What kind of error the first entry that could not be removed met:
     /// what the leftover's reason opens with, in one sentence.
     first_failure: Mutex<Option<crate::util::fs_retry::ErrorClass>>,
+}
+
+impl<'a> Removing<'a> {
+    /// A removal of `root` about to start, its device read now.
+    fn new(
+        root: &'a Path,
+        judge: &'a dyn Judge,
+        purpose: Purpose,
+        ticker: Ticker<'a>,
+        guard: Option<(&'a Path, &'a str)>,
+    ) -> Self {
+        Removing {
+            root,
+            judge,
+            device: transactions::RootDevice::recorded(
+                root,
+                transactions::current_device(root),
+                transactions::current_device,
+            ),
+            purpose,
+            ticker,
+            guard,
+            removed: AtomicUsize::new(0),
+            first: AtomicBool::new(true),
+            stop: AtomicBool::new(false),
+            stopped: Mutex::new(None),
+            kept_on_purpose: AtomicBool::new(false),
+            notes: Mutex::new(Vec::new()),
+            folders: Mutex::new(Vec::new()),
+            holding: Mutex::new(HashSet::new()),
+            first_failure: Mutex::new(None),
+        }
+    }
 }
 
 impl Removing<'_> {

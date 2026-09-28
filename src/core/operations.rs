@@ -156,67 +156,15 @@ pub struct RegisterOutcome {
 }
 
 pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
-    crate::util::paths::require_answer(&options.path)?;
-    let original_metadata = fs::symlink_metadata(&options.path).with_context(|| {
-        format!(
-            "path does not exist or is not accessible: {}",
-            crate::util::paths::display_path(&options.path)
-        )
-    })?;
-    if original_metadata.file_type().is_symlink() || !original_metadata.file_type().is_dir() {
-        bail!(
-            "path is not a directory (or is a link): {}",
-            crate::util::paths::display_path(&options.path)
-        );
-    }
-    let canonical = crate::util::paths::canonical(&options.path).with_context(|| {
-        format!(
-            "path does not exist or is not accessible: {}",
-            crate::util::paths::display_path(&options.path)
-        )
-    })?;
+    let canonical = registration_target(&options.path)?;
 
     let (registered, template, desired_rename) = {
         let _mutation_lock = DataLock::acquire()?;
         let config = Config::load()?;
         let base = configured_parent(&config, &canonical)?;
-        let pinfo = project_info::pinfo_path(&canonical);
-        let pinfo_exists = assets::entry_exists(&pinfo)?;
-        if pinfo_exists {
-            match options.on_pinfo_conflict {
-                PinfoConflict::Abort => bail!(
-                    "{} already exists — this folder is already a project (confirm overwrite to re-register)",
-                    crate::util::paths::display_path(&pinfo)
-                ),
-                PinfoConflict::Skip => {
-                    let project = library::scan_base(&base)
-                        .into_iter()
-                        .find(|project| project.path == canonical)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "{} exists but has no readable project identity",
-                                crate::util::paths::display_path(&pinfo)
-                            )
-                        })?;
-                    return Ok(RegisterOutcome {
-                        project,
-                        renamed_to: None,
-                        pinfo_written: false,
-                        applied: false,
-                        rename_error: None,
-                        apply_error: None,
-                    });
-                }
-                PinfoConflict::Overwrite => {
-                    let metadata = fs::symlink_metadata(&pinfo)?;
-                    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                        bail!(
-                            "{} is not a real PROJECT_INFO.md file",
-                            crate::util::paths::display_path(&pinfo)
-                        );
-                    }
-                }
-            }
+        if let Some(skipped) = existing_registration(options.on_pinfo_conflict, &base, &canonical)?
+        {
+            return Ok(skipped);
         }
 
         if options.apply_structure && options.template_slug.is_none() {
@@ -226,50 +174,16 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             bail!("--use-today and --created are mutually exclusive");
         }
         let counters = Counters::load()?;
-        let template = match &options.template_slug {
-            Some(slug) => template::find_by_slug(slug)?,
-            None => registered_stub_template(),
-        };
-        let raw_values = if options.template_slug.is_some() {
-            crate::core::vars::validated_raw_values(&template, &options.vars)?
-        } else {
-            HashMap::new()
-        };
+        let (template, raw_values) = registration_template(&options)?;
 
         let folder_name = canonical
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "registered".to_string());
-        let id_value = match parse_id_token(&folder_name, &template.id.prefix) {
-            Some(recovered) => recovered,
-            None => Counters::next_value(&config, &counters)?,
-        };
-        let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
+        let (id_value, id) =
+            registration_id(&config, &counters, &template, &folder_name, &canonical)?;
 
-        for configured in config.answering_bases() {
-            let Ok(configured) = crate::util::paths::canonical(&configured) else {
-                continue;
-            };
-            for existing in library::scan_base(&configured) {
-                if existing.id == id && existing.path != canonical {
-                    bail!(
-                        "project ID {} is already used by {}; refusing duplicate registration",
-                        id,
-                        crate::util::paths::display_path(&existing.path)
-                    );
-                }
-            }
-        }
-
-        let mut plan_vars = if options.template_slug.is_some() {
-            crate::core::vars::rendered_values(&template, &raw_values)?
-        } else {
-            HashMap::new()
-        };
-        plan_vars.insert("id".to_string(), id.clone());
-        if options.template_slug.is_none() {
-            plan_vars.insert("name".to_string(), slugify_folder_name(&folder_name));
-        }
+        let plan_vars = registration_vars(&options, &template, &raw_values, &id, &folder_name)?;
         let plan = ProjectPlan {
             folder_name,
             root_path: canonical.clone(),
@@ -303,20 +217,188 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             exists: true,
         };
         library::cache_upsert(&project.base, &project);
-        let desired = if options.rename {
-            desired_registration_name(
-                &template,
-                options.template_slug.is_some(),
-                &plan.vars,
-                &config,
-            )?
-            .filter(|name| name != &plan.folder_name)
-        } else {
-            None
-        };
+        let desired = registration_rename(&options, &template, &plan, &config)?;
         (project, template, desired)
     };
 
+    Ok(registration_follow_ups(
+        &options,
+        registered,
+        &template,
+        desired_rename,
+    ))
+}
+
+/// The folder a register is about, canonical: a real directory, not a link.
+fn registration_target(path: &Path) -> Result<PathBuf> {
+    crate::util::paths::require_answer(path)?;
+    let original_metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "path does not exist or is not accessible: {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
+    if original_metadata.file_type().is_symlink() || !original_metadata.file_type().is_dir() {
+        bail!(
+            "path is not a directory (or is a link): {}",
+            crate::util::paths::display_path(path)
+        );
+    }
+    let canonical = crate::util::paths::canonical(path).with_context(|| {
+        format!(
+            "path does not exist or is not accessible: {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
+    Ok(canonical)
+}
+
+/// A folder that already holds a `PROJECT_INFO.md`, as `conflict` says:
+/// `Abort` refuses, `Skip` answers with the project there, and `Overwrite`
+/// goes on over a real file only.
+fn existing_registration(
+    conflict: PinfoConflict,
+    base: &Path,
+    canonical: &Path,
+) -> Result<Option<RegisterOutcome>> {
+    let pinfo = project_info::pinfo_path(canonical);
+    let pinfo_exists = assets::entry_exists(&pinfo)?;
+    if pinfo_exists {
+        match conflict {
+            PinfoConflict::Abort => bail!(
+                "{} already exists — this folder is already a project (confirm overwrite to re-register)",
+                crate::util::paths::display_path(&pinfo)
+            ),
+            PinfoConflict::Skip => {
+                let project = library::scan_base(base)
+                    .into_iter()
+                    .find(|project| project.path == canonical)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{} exists but has no readable project identity",
+                            crate::util::paths::display_path(&pinfo)
+                        )
+                    })?;
+                return Ok(Some(RegisterOutcome {
+                    project,
+                    renamed_to: None,
+                    pinfo_written: false,
+                    applied: false,
+                    rename_error: None,
+                    apply_error: None,
+                }));
+            }
+            PinfoConflict::Overwrite => {
+                let metadata = fs::symlink_metadata(&pinfo)?;
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    bail!(
+                        "{} is not a real PROJECT_INFO.md file",
+                        crate::util::paths::display_path(&pinfo)
+                    );
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The template a register uses — the stub without `--template` — and the
+/// values checked against it.
+fn registration_template(options: &RegisterOptions) -> Result<(Template, HashMap<String, String>)> {
+    let template = match &options.template_slug {
+        Some(slug) => template::find_by_slug(slug)?,
+        None => registered_stub_template(),
+    };
+    let raw_values = if options.template_slug.is_some() {
+        crate::core::vars::validated_raw_values(&template, &options.vars)?
+    } else {
+        HashMap::new()
+    };
+    Ok((template, raw_values))
+}
+
+/// The id a register takes — the folder name's `ID####` token, or the next
+/// from the floor — refused when another project already holds it.
+fn registration_id(
+    config: &Config,
+    counters: &Counters,
+    template: &Template,
+    folder_name: &str,
+    canonical: &Path,
+) -> Result<(u64, String)> {
+    let id_value = match parse_id_token(folder_name, &template.id.prefix) {
+        Some(recovered) => recovered,
+        None => Counters::next_value(config, counters)?,
+    };
+    let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
+
+    for configured in config.answering_bases() {
+        let Ok(configured) = crate::util::paths::canonical(&configured) else {
+            continue;
+        };
+        for existing in library::scan_base(&configured) {
+            if existing.id == id && existing.path != canonical {
+                bail!(
+                    "project ID {} is already used by {}; refusing duplicate registration",
+                    id,
+                    crate::util::paths::display_path(&existing.path)
+                );
+            }
+        }
+    }
+    Ok((id_value, id))
+}
+
+/// The plan's variables: the template's rendered values — or, without one,
+/// the folder name as `{name}` — and the id.
+fn registration_vars(
+    options: &RegisterOptions,
+    template: &Template,
+    raw_values: &HashMap<String, String>,
+    id: &str,
+    folder_name: &str,
+) -> Result<HashMap<String, String>> {
+    let mut plan_vars = if options.template_slug.is_some() {
+        crate::core::vars::rendered_values(template, raw_values)?
+    } else {
+        HashMap::new()
+    };
+    plan_vars.insert("id".to_string(), id.to_string());
+    if options.template_slug.is_none() {
+        plan_vars.insert("name".to_string(), slugify_folder_name(folder_name));
+    }
+    Ok(plan_vars)
+}
+
+/// The name `--rename` asks for, when it differs from the folder's own.
+fn registration_rename(
+    options: &RegisterOptions,
+    template: &Template,
+    plan: &ProjectPlan,
+    config: &Config,
+) -> Result<Option<String>> {
+    let desired = if options.rename {
+        desired_registration_name(
+            template,
+            options.template_slug.is_some(),
+            &plan.vars,
+            config,
+        )?
+        .filter(|name| name != &plan.folder_name)
+    } else {
+        None
+    };
+    Ok(desired)
+}
+
+/// The rename and the apply, after the lock: each keeps its failure in the
+/// outcome, since the registration is already committed.
+fn registration_follow_ups(
+    options: &RegisterOptions,
+    registered: Project,
+    template: &Template,
+    desired_rename: Option<String>,
+) -> RegisterOutcome {
     let mut outcome = RegisterOutcome {
         project: registered,
         renamed_to: None,
@@ -340,7 +422,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             Err(error) => outcome.apply_error = Some(format!("{error:#}")),
         }
     }
-    Ok(outcome)
+    outcome
 }
 
 fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {

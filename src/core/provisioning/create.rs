@@ -114,35 +114,9 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
             return;
         }
     };
-    // Identity gate only: the journal may not resume a folder whose metadata
-    // says it belongs to a different template or is no longer provisioning.
-    match crate::core::project_info::read_metadata(root) {
-        Ok(Some(metadata))
-            if metadata.provisioning && metadata.template == journal.template_slug => {}
-        Ok(Some(metadata)) => {
-            report.unrecoverable.push(format!(
-                "{}: create journal identity mismatch (metadata template '{}', journal '{}')",
-                crate::util::paths::display_path(root),
-                metadata.template,
-                journal.template_slug
-            ));
-            return;
-        }
-        Ok(None) => {
-            report.unrecoverable.push(format!(
-                "{}: create journal has no readable project identity",
-                crate::util::paths::display_path(root)
-            ));
-            return;
-        }
-        Err(error) => {
-            report.unrecoverable.push(format!(
-                "{}: could not verify create identity ({error:#})",
-                crate::util::paths::display_path(root)
-            ));
-            return;
-        }
-    };
+    if !create_identity_holds(root, &journal, report) {
+        return;
+    }
     let template = match template::find_by_slug(&journal.template_slug) {
         Ok(template) => template,
         Err(error) => {
@@ -166,93 +140,156 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
 
     let mut all_done = true;
     for entry in &journal.jobs {
-        let source = template.files_dir().join(&entry.source);
-        // Lexically validated when the journal was read; checked against the
-        // filesystem here, immediately before the copy, so a link planted in
-        // the half-built project since the crash stops the resume.
-        let destination = match crate::util::paths::contained_destination(root, &entry.destination)
-        {
-            Ok(destination) => destination,
-            Err(error) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: {error:#}",
-                    crate::util::paths::display_path(root)
-                ));
-                continue;
-            }
-        };
-        match fs::symlink_metadata(&destination) {
-            Ok(metadata)
-                if !metadata.file_type().is_symlink()
-                    && metadata.file_type().is_file()
-                    && metadata.len() == entry.bytes =>
-            {
-                continue;
-            }
-            Ok(_) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: destination is occupied with unexpected type/size; left untouched",
-                    crate::util::paths::display_path(&destination)
-                ));
-                continue;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: could not inspect destination ({error})",
-                    crate::util::paths::display_path(&destination)
-                ));
-                continue;
-            }
-        }
-        let source_metadata = match fs::symlink_metadata(&source) {
-            Ok(metadata)
-                if !metadata.file_type().is_symlink()
-                    && metadata.file_type().is_file()
-                    && metadata.len() == entry.bytes =>
-            {
-                metadata
-            }
-            Ok(_) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: create source changed or is unsupported",
-                    crate::util::paths::display_path(&source)
-                ));
-                continue;
-            }
-            Err(error) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: create source is unavailable ({error})",
-                    crate::util::paths::display_path(&source)
-                ));
-                continue;
-            }
-        };
-        let copy = CopyJob {
-            src: source,
-            dest: destination.clone(),
-            bytes: source_metadata.len(),
-        };
-        let progress = Mutex::new(Progress::new(std::slice::from_ref(&copy)));
-        match assets::copy_job(&copy, &progress, &AtomicBool::new(false)) {
-            Ok(()) => report.resumed += 1,
-            Err(error) => {
-                all_done = false;
-                report.unrecoverable.push(format!(
-                    "{}: could not resume create copy ({error:#})",
-                    crate::util::paths::display_path(&destination)
-                ));
-            }
+        if !resume_create_copy(root, &template, entry, report) {
+            all_done = false;
         }
     }
     if !all_done {
         return;
     }
+    finish_resumed_create(root, report);
+}
+
+/// Identity gate only: the journal may not resume a folder whose metadata
+/// says it belongs to a different template or is no longer provisioning.
+fn create_identity_holds(
+    root: &Path,
+    journal: &CreateJournal,
+    report: &mut ReconcileReport,
+) -> bool {
+    match crate::core::project_info::read_metadata(root) {
+        Ok(Some(metadata))
+            if metadata.provisioning && metadata.template == journal.template_slug => {}
+        Ok(Some(metadata)) => {
+            report.unrecoverable.push(format!(
+                "{}: create journal identity mismatch (metadata template '{}', journal '{}')",
+                crate::util::paths::display_path(root),
+                metadata.template,
+                journal.template_slug
+            ));
+            return false;
+        }
+        Ok(None) => {
+            report.unrecoverable.push(format!(
+                "{}: create journal has no readable project identity",
+                crate::util::paths::display_path(root)
+            ));
+            return false;
+        }
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: could not verify create identity ({error:#})",
+                crate::util::paths::display_path(root)
+            ));
+            return false;
+        }
+    };
+    true
+}
+
+/// Resume one copy the journal lists, and say whether it is done — already,
+/// or now.
+fn resume_create_copy(
+    root: &Path,
+    template: &template::Template,
+    entry: &CreateCopy,
+    report: &mut ReconcileReport,
+) -> bool {
+    let source = template.files_dir().join(&entry.source);
+    // Lexically validated when the journal was read; checked against the
+    // filesystem here, immediately before the copy, so a link planted in
+    // the half-built project since the crash stops the resume.
+    let destination = match crate::util::paths::contained_destination(root, &entry.destination) {
+        Ok(destination) => destination,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: {error:#}",
+                crate::util::paths::display_path(root)
+            ));
+            return false;
+        }
+    };
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata)
+            if !metadata.file_type().is_symlink()
+                && metadata.file_type().is_file()
+                && metadata.len() == entry.bytes =>
+        {
+            return true;
+        }
+        Ok(_) => {
+            report.unrecoverable.push(format!(
+                "{}: destination is occupied with unexpected type/size; left untouched",
+                crate::util::paths::display_path(&destination)
+            ));
+            return false;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: could not inspect destination ({error})",
+                crate::util::paths::display_path(&destination)
+            ));
+            return false;
+        }
+    }
+    let Some(source_metadata) = create_source_metadata(&source, entry, report) else {
+        return false;
+    };
+    let copy = CopyJob {
+        src: source,
+        dest: destination.clone(),
+        bytes: source_metadata.len(),
+    };
+    let progress = Mutex::new(Progress::new(std::slice::from_ref(&copy)));
+    match assets::copy_job(&copy, &progress, &AtomicBool::new(false)) {
+        Ok(()) => report.resumed += 1,
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: could not resume create copy ({error:#})",
+                crate::util::paths::display_path(&destination)
+            ));
+            return false;
+        }
+    }
+    true
+}
+
+/// The template file a resumed copy reads, while it is still a real file of
+/// the size the journal recorded.
+fn create_source_metadata(
+    source: &Path,
+    entry: &CreateCopy,
+    report: &mut ReconcileReport,
+) -> Option<fs::Metadata> {
+    match fs::symlink_metadata(source) {
+        Ok(metadata)
+            if !metadata.file_type().is_symlink()
+                && metadata.file_type().is_file()
+                && metadata.len() == entry.bytes =>
+        {
+            Some(metadata)
+        }
+        Ok(_) => {
+            report.unrecoverable.push(format!(
+                "{}: create source changed or is unsupported",
+                crate::util::paths::display_path(source)
+            ));
+            None
+        }
+        Err(error) => {
+            report.unrecoverable.push(format!(
+                "{}: create source is unavailable ({error})",
+                crate::util::paths::display_path(source)
+            ));
+            None
+        }
+    }
+}
+
+/// Every copy has landed: clear the provisioning flag, then the journal, and
+/// refresh the base's index.
+fn finish_resumed_create(root: &Path, report: &mut ReconcileReport) {
     if let Err(error) = crate::core::project_info::clear_provisioning(root) {
         report.unrecoverable.push(format!(
             "{}: copies complete but provisioning flag could not be cleared ({error:#})",

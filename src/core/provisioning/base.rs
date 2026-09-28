@@ -152,7 +152,7 @@ fn reconcile_deleted_in_place(
             if move_cleanup::settling(operation, &folder) {
                 return;
             }
-            if fs::remove_file(record_path).is_ok() {
+            if crate::util::fs_retry::remove_file(record_path).is_ok() {
                 crate::core::records::remove(operation);
                 report.cleared += 1;
             }
@@ -169,7 +169,7 @@ fn reconcile_deleted_in_place(
             .map(|metadata| metadata.id);
         if owner.as_deref() != Some(record.project_id.as_str()) {
             // Another project took the name: the delete has nothing left.
-            if fs::remove_file(record_path).is_ok() {
+            if crate::util::fs_retry::remove_file(record_path).is_ok() {
                 crate::core::records::remove(operation);
                 report.cleared += 1;
             }

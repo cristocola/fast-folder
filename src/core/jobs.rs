@@ -778,7 +778,7 @@ pub fn prune() {
             && let Ok(dir) = dir(&job.id)
         {
             total = total.saturating_sub(job_bytes(&job.id));
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = crate::util::fs_retry::remove_dir_all(&dir);
         } else {
             kept.push(job.id);
         }
@@ -791,7 +791,7 @@ pub fn prune() {
         }
         if let Ok(dir) = dir(id) {
             total = total.saturating_sub(job_bytes(id));
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = crate::util::fs_retry::remove_dir_all(&dir);
         }
     }
 }

@@ -317,7 +317,7 @@ pub(crate) fn merge_remove(merge: &Merge) -> Removal {
         .unwrap_or_else(|e| e.into_inner());
     for (marker, relative) in markers {
         if crate::util::paths::presence(&merge.old.join(&relative)).is_absent() {
-            let _ = fs::remove_file(marker);
+            let _ = crate::util::fs_retry::remove_file(&marker);
         }
     }
     removal

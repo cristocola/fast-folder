@@ -146,7 +146,7 @@ pub fn clear_target(path: &Path) -> Result<()> {
         }
         Presence::Present(metadata) if metadata.file_type().is_dir() => {
             let empty = fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none());
-            if empty && fs::remove_dir(path).is_ok() {
+            if empty && crate::util::fs_retry::remove_dir(path).is_ok() {
                 return Ok(());
             }
         }

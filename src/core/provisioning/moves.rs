@@ -94,7 +94,7 @@ pub(super) fn reconcile_record(
                 .and_then(|name| name.to_str())
                 .unwrap_or_default()
                 .to_string();
-            match fs::remove_dir_all(operation_dir) {
+            match crate::util::fs_retry::remove_dir_all(operation_dir) {
                 Ok(()) => {
                     crate::core::records::remove(&name);
                     report.cleared += 1;

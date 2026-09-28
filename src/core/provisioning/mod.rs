@@ -53,7 +53,8 @@ const CREATE_VERSION: u32 = 2;
 fn remove_owned_file(path: &Path, label: &str) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if !metadata.file_type().is_symlink() && metadata.file_type().is_file() => {
-            fs::remove_file(path).with_context(|| format!("removing {label} {}", path.display()))
+            crate::util::fs_retry::remove_file(path)
+                .with_context(|| format!("removing {label} {}", path.display()))
         }
         Ok(_) => bail!("refusing to remove replaced {label}: {}", path.display()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

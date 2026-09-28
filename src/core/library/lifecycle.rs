@@ -281,7 +281,7 @@ fn delete_in_place(
     if let Err(error) = crate::util::fs_retry::remove_file(&pinfo)
         && !crate::util::paths::presence(&pinfo).is_absent()
     {
-        let _ = std::fs::remove_file(&record_path);
+        let _ = crate::util::fs_retry::remove_file(&record_path);
         crate::core::records::remove(&operation);
         anyhow::bail!("could not delete {shown}: {error}. Nothing was removed.");
     }

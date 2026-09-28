@@ -30,7 +30,7 @@ pub(super) fn reconcile_recordless(
         ) {
             crate::core::removal::Removal::Removed => {
                 if let Some(pointer) = &pointer {
-                    let _ = fs::remove_file(pointer);
+                    let _ = crate::util::fs_retry::remove_file(pointer);
                 }
                 report.cleared += 1;
             }

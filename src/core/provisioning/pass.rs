@@ -170,7 +170,7 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
         let folder = base.join(&pointer.folder);
         match crate::util::paths::presence(&folder) {
             crate::util::paths::Presence::Absent => {
-                if fs::remove_file(&pointer_path).is_ok() {
+                if crate::util::fs_retry::remove_file(&pointer_path).is_ok() {
                     report.cleared += 1;
                 }
             }
@@ -179,7 +179,7 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
             {
                 // The retire never took its `PROJECT_INFO.md`: it is still a
                 // project, and the pointer names nothing to remove.
-                if fs::remove_file(&pointer_path).is_ok() {
+                if crate::util::fs_retry::remove_file(&pointer_path).is_ok() {
                     report.cleared += 1;
                 }
             }

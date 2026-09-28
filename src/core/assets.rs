@@ -409,23 +409,23 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
             match entry_exists(&job.dest) {
                 Ok(false) => {}
                 Ok(true) => {
-                    let _ = fs::remove_file(&tmp);
+                    let _ = crate::util::fs_retry::remove_file(&tmp);
                     anyhow::bail!("copy destination became occupied: {}", job.dest.display());
                 }
                 Err(error) => {
-                    let _ = fs::remove_file(&tmp);
+                    let _ = crate::util::fs_retry::remove_file(&tmp);
                     return Err(error);
                 }
             }
             crate::util::fs_retry::rename(&tmp, &job.dest)
                 .with_context(|| format!("finalizing {}", job.dest.display()))
                 .inspect_err(|_| {
-                    let _ = fs::remove_file(&tmp);
+                    let _ = crate::util::fs_retry::remove_file(&tmp);
                 })?;
             Ok(())
         }
         Err(e) => {
-            let _ = fs::remove_file(&tmp);
+            let _ = crate::util::fs_retry::remove_file(&tmp);
             Err(e)
         }
     }

@@ -141,7 +141,7 @@ pub fn get(operation: &str) -> Option<Entry> {
 /// Forget a record whose transaction is gone.
 pub fn remove(operation: &str) {
     if let Some(path) = path_of(operation) {
-        let _ = std::fs::remove_file(path);
+        let _ = crate::util::fs_retry::remove_file(&path);
     }
 }
 

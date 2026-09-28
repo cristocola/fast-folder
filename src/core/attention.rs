@@ -694,7 +694,7 @@ fn put_back(cfg: &Config, old_copy: &Path) -> anyhow::Result<String> {
         let transaction = transactions::transaction_from_journal(&target_base, &record, journal);
         let pointer = transaction.pointer_path();
         transaction.remove()?;
-        let _ = std::fs::remove_file(pointer);
+        let _ = crate::util::fs_retry::remove_file(&pointer);
     }
     Ok(format!(
         "put it back at {}, as the project",

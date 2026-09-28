@@ -529,6 +529,67 @@ fn core_renames_a_folder_through_rename_dir() {
     );
 }
 
+/// **Core removes through `util::fs_retry`**, which on Windows waits out the
+/// handle an indexer or a scanner holds on what was just written and sets
+/// the read-only attribute aside, and is the call itself everywhere else. A
+/// bare `fs::remove_*` fails there on what a moment would have let go. The
+/// ones that are meant to fail at once are named here.
+#[test]
+fn core_removes_through_fs_retry() {
+    const AT_ONCE: [(&str, usize, &str); 1] = [(
+        "transaction.rs",
+        2,
+        "a staging folder that may still hold something, which is then meant to stay",
+    )];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut found = Vec::new();
+        let mut gated = false;
+        for (number, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if gated && trimmed.starts_with("mod ") {
+                break;
+            }
+            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if ["fs::remove_file(", "fs::remove_dir(", "fs::remove_dir_all("]
+                .iter()
+                .any(|call| trimmed.contains(call))
+            {
+                found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+            }
+        }
+        let allowed = AT_ONCE
+            .iter()
+            .find(|(file, ..)| *file == name)
+            .map_or(0, |(_, count, _)| *count);
+        if found.len() != allowed {
+            offenders.push(format!(
+                "{name}: {} bare removal(s) where {allowed} are accounted for\n    {}",
+                found.len(),
+                found.join("\n    ")
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "remove through `util::fs_retry`, or name in this test why this one fails at \
+         once:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same

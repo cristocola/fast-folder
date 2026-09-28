@@ -868,36 +868,64 @@ structure:
     });
 }
 
+/// fastf writes `PROJECT_INFO.md` itself, so no template it ships holds one at
+/// the root of its `files/`: neither of the two a first run writes, nor any in
+/// the gallery. Read from the folder, since the loader strips a root-level
+/// declaration from what it hands back.
 #[test]
 fn bundled_templates_do_not_emit_duplicate_project_info() {
-    // Auto-gen owns PROJECT_INFO.md — a shipped template must not also
-    // declare it as a content file (would conflict / overwrite).
-    use fastf::core::template::Template;
-    let bundled_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join("templates");
-    // Every template the `examples/templates/` gallery ships.
-    for entry in fs::read_dir(&bundled_dir).unwrap() {
-        let entry = entry.unwrap();
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let manifest = dir.join("template.yaml");
-        if !manifest.exists() {
-            continue;
-        }
-        let tmpl = Template::load_from_file(&manifest)
-            .unwrap_or_else(|e| panic!("parse {}: {}", manifest.display(), e));
-        for f in &tmpl.files {
-            assert_ne!(
-                f.path,
-                "PROJECT_INFO.md",
-                "{} declares PROJECT_INFO.md but auto-gen now owns it",
-                manifest.display()
-            );
-        }
+    fn roots_of(templates: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = fs::read_dir(templates)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|dir| dir.join("template.yaml").is_file())
+            .collect();
+        found.sort();
+        found
     }
+    fn holds_the_reserved_file(template: &Path) -> bool {
+        fs::read_dir(template.join("files")).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("PROJECT_INFO.md")
+            })
+        })
+    }
+
+    let gallery = roots_of(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("templates"),
+    );
+    assert!(gallery.len() > 2, "the gallery was found: {gallery:?}");
+    let first_run = sandboxed(|install| {
+        fastf::bootstrap::ensure_bootstrapped().unwrap();
+        let written = roots_of(&install.join("templates"));
+        assert_eq!(written.len(), 2, "a first run writes two: {written:?}");
+        written
+            .iter()
+            .map(|template| (template.clone(), holds_the_reserved_file(template)))
+            .collect::<Vec<_>>()
+    });
+    for (template, holds) in first_run {
+        assert!(!holds, "{} ships a PROJECT_INFO.md", template.display());
+    }
+    for template in gallery {
+        assert!(
+            !holds_the_reserved_file(&template),
+            "{} ships a PROJECT_INFO.md",
+            template.display()
+        );
+    }
+
+    // And the check sees one when it is there.
+    let planted = tempfile::tempdir().unwrap();
+    fs::create_dir_all(planted.path().join("files")).unwrap();
+    fs::write(planted.path().join("files/project_info.md"), "x").unwrap();
+    assert!(holds_the_reserved_file(planted.path()));
 }
 
 // ---------------------------------------------------------------------------

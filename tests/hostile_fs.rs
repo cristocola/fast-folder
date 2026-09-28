@@ -646,12 +646,13 @@ fn template_ingestion_refuses_a_pre_planted_link_before_writing_a_byte() {
 // A cache entry is a hint, and never authorizes a path outside its base
 // ---------------------------------------------------------------------------
 
-/// Write a cache file whose entries name arbitrary directories, then make it
-/// look **fresh**: the staleness gate compares the base's mtime to the cache
-/// file's, and overwriting a file in place does not bump the directory's mtime,
-/// so a planted cache is trusted without a rescan. This is the delivery route —
-/// caches travel with the projects by design, so a synced folder or an unpacked
-/// archive brings one along.
+/// Write a cache file whose entries name arbitrary directories, and make it
+/// read as **current**: it records the names the base holds (`seen`), which is
+/// what the freshness check compares, and it is written in place a second
+/// time, so it is no older than the base it sits in. Without both the cache
+/// is rescanned and its entries are never read. This is the delivery route —
+/// caches travel with the projects by design, so a synced folder or an
+/// unpacked archive brings one along.
 fn plant_cache(base: &Path, dirs: &[&str]) {
     let entries: Vec<String> = dirs
         .iter()
@@ -665,11 +666,39 @@ fn plant_cache(base: &Path, dirs: &[&str]) {
             )
         })
         .collect();
-    fs::write(
-        base.join(library::CACHE_FILENAME),
-        format!("{{\"version\":1,\"entries\":[{}]}}", entries.join(",")),
-    )
-    .unwrap();
+    let mut seen: Vec<String> = fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .map(|name| format!("\"{name}\""))
+        .collect();
+    seen.sort();
+    let cache = format!(
+        "{{\"version\":1,\"entries\":[{}],\"seen\":[{}]}}",
+        entries.join(","),
+        seen.join(",")
+    );
+    let path = base.join(library::CACHE_FILENAME);
+    fs::write(&path, &cache).unwrap();
+    fs::write(&path, &cache).unwrap();
+}
+
+/// The planted cache is one the library reads: a forged entry that names a
+/// real folder of the base is believed. Every test below is about what
+/// happens when one of its entries is not.
+#[test]
+fn a_planted_cache_is_read() {
+    sandbox(|_install, base| {
+        write_project(base, "real", &valid_frontmatter("ID0001", "real"));
+        plant_cache(base, &["real"]);
+        assert_eq!(
+            library::max_id(&config_for(base)),
+            9000,
+            "the floor reads the cache it is handed, so the tests that plant a \
+             bad one are about the cache and not about a rescan"
+        );
+    });
 }
 
 /// The counter floor reads through a *different* function from discovery, and

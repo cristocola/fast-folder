@@ -355,6 +355,17 @@ fn the_builder_refuses_to_save_a_template_that_would_not_load() {
     // The guide offers itself the first time templates come up; this test
     // is about the editor, not the offer.
     sb.guide_seen();
+    let templates = || {
+        let mut names: Vec<String> = fs::read_dir(sb.install.join("templates"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = templates();
+    assert!(!before.is_empty(), "the bundled templates are there");
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
@@ -372,10 +383,7 @@ fn the_builder_refuses_to_save_a_template_that_would_not_load() {
         screen.contains("Cannot save:"),
         "an invalid template must be refused, not written:\n{screen}"
     );
-    assert!(
-        !sb.install.join("templates/template.yaml").exists(),
-        "nothing was written"
-    );
+    assert_eq!(templates(), before, "nothing was written");
 }
 
 /// The builder declares a marker file: a path and no contents at all.
@@ -659,7 +667,7 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
         DEADLINE,
     );
 
-    assert_eq!(code, 0, "leaving the browser is not a failure:\n{out}");
+    assert_eq!(code, 0, "leaving the app is not a failure:\n{out}");
     assert!(
         !out.contains("press Enter to close"),
         "a window that already waited for the user must not wait again:\n{out}"

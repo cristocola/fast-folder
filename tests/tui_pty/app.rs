@@ -483,8 +483,13 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
         pty::plain(&out)
     );
     let shown = sb.ok(&["config", "show"]);
-    assert!(
-        shown.contains('7'),
+    let limit = shown
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("recent_limit:"))
+        .map(str::trim);
+    assert_eq!(
+        limit,
+        Some("7"),
         "the setting must be untouched by a cancelled edit:\n{shown}"
     );
 }

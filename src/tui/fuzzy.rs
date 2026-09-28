@@ -5,8 +5,10 @@
 //! has the letters somewhere in order, and over a project name that is almost
 //! every row: `lrmx` finds `Lullaby_Remix` and a dozen others. So a word is
 //! first tried as a **substring** (case and accents folded), and only then as a
-//! fuzzy match whose hit characters sit **close together** — a missing or
-//! doubled letter, not letters picked from across the name. Every word of a
+//! fuzzy match whose hit characters sit **close together** — a letter left out
+//! of the word typed (`lulaby`), not letters picked from across the name. A
+//! fuzzy match is still a subsequence: a letter typed that the name does not
+//! have (`lulllaby`) matches nothing. Every word of a
 //! query must match, each on its own, inside the one text it is matched
 //! against; the callers keep fields apart so a word cannot match half in the
 //! id and half in a tag.
@@ -45,7 +47,7 @@ pub struct Word {
 
 impl Word {
     /// How far apart a fuzzy hit's characters may sit: the word's own length
-    /// plus a third of it, at least one — a dropped or doubled letter, and no
+    /// plus a third of it, at least one — a letter or two left out, and no
     /// more.
     fn max_span(&self) -> usize {
         self.chars + (self.chars / 3).max(1)
@@ -211,10 +213,11 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_or_doubled_letter_still_finds_the_name() {
+    fn a_letter_left_out_still_finds_the_name_and_one_too_many_does_not() {
         assert!(matches("lulaby", "Lullaby_Remix"));
-        assert!(matches("lulllaby", "Lullaby_Remix") || !matches("lulllaby", "Lullaby_Remix"));
         assert!(matches("onbording", "Client_Onboarding_Acme"));
+        // A third `l` is a letter the name does not have.
+        assert!(!matches("lulllaby", "Lullaby_Remix"));
     }
 
     #[test]

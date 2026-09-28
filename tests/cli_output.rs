@@ -24,7 +24,7 @@ fn refuses_without_a_terminal(sb: &Sandbox, args: &[&str], escape: &str) {
     let cmd = args.join(" ");
     assert!(
         err.contains("no terminal"),
-        "`fastf {cmd}` must say there is no terminal, not leak dialoguer's error:\n{err}"
+        "`fastf {cmd}` must say there is no terminal, not leak a prompt's error:\n{err}"
     );
     assert!(
         err.contains(escape),

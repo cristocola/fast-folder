@@ -149,18 +149,16 @@ None is a wrong result today; each is where the next one would come from.
 29. `tests/properties.rs` names the YAML crate; `docs/projects.md` narrates
     release numbers.
 
-### The ASCII alphabet on four more screens
+### The ASCII alphabet on three more screens
 
 A console with no `·`, `…` or `→` draws a replacement box. The theme's glyphs
-already answer for the tick, the template editor and the guide; four screens
+already answer for the tick, the template editor and the guide; three screens
 still spell the characters out:
 
 - `app/jobs.rs` — `busy()`'s eight `…` labels and the report's `·` separator.
 - `runtime.rs` — the session lines (`renamed X → Y`, `moved`, `applied`) and
   `run_action`'s `·`-joined warning.
 - `app/actions.rs` — `NEW_TAG` (`"New tag…"`), a picker row.
-- `rows.rs` — `PENDING_LABEL`, which duplicates `Glyphs::pending` rather than
-  reading it; `view::projects` already asks the theme, so the two can disagree.
 
 Each is a function that builds a display string with no theme in reach, so the
 fix is the one `Builder::summary` and `transform_example` took: hand it the

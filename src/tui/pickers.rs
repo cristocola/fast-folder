@@ -113,7 +113,7 @@ pub fn pick_project(prompt: &str, candidates: &[Project], how: &str) -> Result<O
     let widths = RowWidths::measure(candidates);
     let labels: Vec<String> = candidates
         .iter()
-        .map(|p| clamp_label(&project_row(p, &widths, None, true), columns, ellipsis))
+        .map(|p| clamp_label(&project_row(p, &widths, true), columns, ellipsis))
         .collect();
 
     // One picker, one look: the selected row is highlighted whole in the

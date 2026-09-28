@@ -10,16 +10,11 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::core::library::{self, Project};
 use crate::util::human_bytes::human_bytes;
-use crate::util::size_scan::SizeCell;
 
 /// Width of the Size cell, fixed at the widest value it can hold
 /// (`unavailable`). Sizing it to the page's current widest value reflows every
 /// row each time a snapshot lands.
 pub const SIZE_CELL: usize = 11;
-
-/// Shown until a row has been measured. Says what is happening, rather than
-/// leaving a gap that reads as "empty folder".
-pub const PENDING_LABEL: &str = "scanning…";
 
 /// The column widths a page of projects needs, measured from the projects alone.
 ///
@@ -93,17 +88,9 @@ pub fn tag_cell(tags: &[String]) -> String {
 }
 
 /// One list row, ANSI-free and single-line so `clamp_label` and the inline
-/// picker's line-count redraw stay correct.
-///
-/// `size` is `None` where no Size column is shown (the project picker) and the
-/// row's current cell otherwise. `mark_missing` is for the surfaces that check
-/// the folder still exists.
-pub(crate) fn project_row(
-    project: &Project,
-    widths: &RowWidths,
-    size: Option<SizeCell>,
-    mark_missing: bool,
-) -> String {
+/// picker's line-count redraw stay correct. `mark_missing` is for the
+/// surfaces that check the folder still exists.
+pub(crate) fn project_row(project: &Project, widths: &RowWidths, mark_missing: bool) -> String {
     // **The folder name comes second, right after the ID.** A row is clamped
     // from the right, so whatever sits last is what gets eaten — and the window
     // the launcher relaunch opens is often 80 columns, far narrower than the
@@ -111,8 +98,7 @@ pub(crate) fn project_row(
     //
     // The date is last of the text columns because every bundled naming pattern
     // already carries it inside the folder name, so it is the cheapest thing to
-    // lose. Size, when there is one, follows: it is a fixed-width cell and must
-    // not move when a background snapshot lands.
+    // lose.
     let mut name = project.name.clone();
     if mark_missing && !project.path.exists() {
         name.push_str("  (missing)");
@@ -129,13 +115,6 @@ pub(crate) fn project_row(
         pad_to(&project.template, widths.template),
         date_cell(&project.created),
     );
-    if let Some(cell) = size {
-        row.push_str(&format!(
-            "  Size {:>size_w$}",
-            cell_label(cell),
-            size_w = SIZE_CELL
-        ));
-    }
     row.push_str(&tag_cell(&project.tags));
     row
 }
@@ -146,15 +125,6 @@ pub(crate) fn project_row(
 /// thing the row exists to show.
 fn pad_to(text: &str, width: usize) -> String {
     crate::tui::view::pad(text, width)
-}
-
-/// The Size cell for one row. Its fixed width belongs to the caller's format
-/// string, not here.
-pub(crate) fn cell_label(cell: SizeCell) -> String {
-    match cell {
-        SizeCell::Pending => PENDING_LABEL.to_string(),
-        SizeCell::Known(bytes) => size_label(bytes),
-    }
 }
 
 /// A measured size, or the word for a walk that could not finish.
@@ -202,7 +172,7 @@ pub fn terminal_columns() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{PENDING_LABEL, RowWidths, SizeCell, clamp_label, project_row, size_label};
+    use super::{RowWidths, clamp_label, project_row, size_label};
     use crate::core::library::Project;
     use std::path::PathBuf;
     use unicode_width::UnicodeWidthStr;
@@ -227,17 +197,6 @@ mod tests {
         }
     }
 
-    fn page_labels(projects: &[Project], sizes: &[SizeCell]) -> Vec<String> {
-        let widths = RowWidths::measure(projects.iter());
-        projects
-            .iter()
-            .enumerate()
-            .map(|(idx, p)| {
-                clamp_label(&project_row(p, &widths, Some(sizes[idx]), false), 200, "…")
-            })
-            .collect()
-    }
-
     /// Every column is padded in the unit it is measured in, display columns,
     /// so a base whose name is written in double-width characters leaves the
     /// columns after it where they are on every other row.
@@ -252,7 +211,7 @@ mod tests {
         let date_at: Vec<usize> = projects
             .iter()
             .map(|p| {
-                let row = project_row(p, &widths, None, false);
+                let row = project_row(p, &widths, false);
                 let before = row.split("2026-08-18").next().unwrap().to_string();
                 measure_text_width(&before)
             })
@@ -302,39 +261,6 @@ mod tests {
         assert_eq!(size_label(None), "unavailable");
     }
 
-    /// A landing size never moves a row: the Size cell is a fixed width, so
-    /// nothing shifts sideways while a page fills in.
-    #[test]
-    fn a_landing_size_does_not_reflow_the_row() {
-        let projects = [project("ID0001", "Alpha"), project("ID0002", "Beta")];
-        let pending = page_labels(&projects, &[SizeCell::Pending; 2]);
-        let known = page_labels(
-            &projects,
-            &[
-                SizeCell::Known(Some(2048)),
-                // The widest cell there is, and the one most likely to stretch a
-                // column that was measured from its contents.
-                SizeCell::Known(None),
-            ],
-        );
-
-        // Compared in display columns, not bytes: the pending cell's "…" is three
-        // bytes wide and one column wide, and it is the column that has to line
-        // up. (Rust pads to a char count, which equals the column count for every
-        // character these cells can hold.)
-        for (before, after) in pending.iter().zip(known.iter()) {
-            assert_eq!(
-                name_column(before),
-                name_column(after),
-                "the name column moved when a size landed:\n{before}\n{after}"
-            );
-            assert_eq!(measure_text_width(before), measure_text_width(after));
-        }
-        assert!(pending[0].contains(PENDING_LABEL));
-        assert!(known[0].contains("2.0 KB"));
-        assert!(known[1].contains("unavailable"));
-    }
-
     /// The folder name survives an 80-column window. A relaunched terminal
     /// opens at whatever size its emulator defaults to — commonly 80 columns —
     /// and the row is clamped from the right, so the picker an ambiguous
@@ -358,7 +284,7 @@ mod tests {
         let widths = RowWidths::measure(projects.iter());
 
         for p in &projects {
-            let row = clamp_label(&project_row(p, &widths, None, true), 80, "…");
+            let row = clamp_label(&project_row(p, &widths, true), 80, "…");
             assert!(
                 row.contains(&p.name),
                 "the folder name must survive an 80-column window:\n{row}"
@@ -373,12 +299,7 @@ mod tests {
     fn the_columns_run_from_most_to_least_worth_keeping() {
         let projects = [project("ID0047", "Lullaby")];
         let widths = RowWidths::measure(projects.iter());
-        let row = project_row(
-            &projects[0],
-            &widths,
-            Some(SizeCell::Known(Some(2048))),
-            false,
-        );
+        let row = project_row(&projects[0], &widths, false);
 
         let at = |needle: &str| {
             row.find(needle)
@@ -390,40 +311,10 @@ mod tests {
             at("base"),       // the base label
             at("general"),    // the template slug
             at("2026-08-18"), // the date
-            at("Size"),
         ];
         assert!(
             order.windows(2).all(|w| w[0] < w[1]),
             "columns are out of order in: {row}"
-        );
-    }
-
-    /// Which terminal column a row's project name starts at.
-    fn name_column(label: &str) -> usize {
-        let at = label
-            .find("Alpha")
-            .or_else(|| label.find("Beta"))
-            .expect("label carries a project name");
-        measure_text_width(&label[..at])
-    }
-
-    /// The same widths feed every surface, so a row without a Size cell is the
-    /// row with one minus that cell.
-    #[test]
-    fn the_size_cell_is_the_only_difference_between_surfaces() {
-        let projects = [project("ID0001", "Alpha")];
-        let widths = RowWidths::measure(projects.iter());
-        let without = project_row(&projects[0], &widths, None, false);
-        let with = project_row(
-            &projects[0],
-            &widths,
-            Some(SizeCell::Known(Some(2048))),
-            false,
-        );
-        assert!(!without.contains("Size"));
-        assert_eq!(
-            measure_text_width(&with) - measure_text_width(&without),
-            "Size ".len() + super::SIZE_CELL + 2
         );
     }
 }

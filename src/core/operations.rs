@@ -386,7 +386,9 @@ fn desired_registration_name(
     Ok(Some(desired))
 }
 
-fn registered_stub_template() -> Template {
+/// The template a register without one uses: the basics
+/// `Metadata::from_plan_at` and `project_info::render` need, and nothing else.
+pub fn registered_stub_template() -> Template {
     Template {
         name: "Registered project".to_string(),
         slug: REGISTERED_SLUG.to_string(),

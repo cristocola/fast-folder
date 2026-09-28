@@ -30,6 +30,7 @@ use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::Project;
 use crate::core::naming::{interpolate_name, parse_id_token};
+use crate::core::operations::registered_stub_template;
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::tui::vars::collect_vars;
@@ -627,20 +628,6 @@ fn desired_rename(
         );
     }
     Ok(Some(desired))
-}
-
-/// Stub Template for the no-`--template` register path. Empty everything
-/// except the basics needed by `Metadata::from_plan_at` / `project_info::render`.
-fn registered_stub_template() -> Template {
-    Template {
-        name: "Registered project".to_string(),
-        slug: REGISTERED_SLUG.to_string(),
-        description: "Registered (not created) from an existing folder".to_string(),
-        version: "1".to_string(),
-        naming_pattern: "{id}".to_string(),
-        id: IdConfig::default(),
-        ..Template::default()
-    }
 }
 
 /// Resolve the `created` timestamp for a registered folder.

@@ -139,7 +139,7 @@ pub fn describe(t: &Template) -> Vec<String> {
         lines.push(String::new());
         lines.push(format!(
             "Starter todos: {tasks} task{}",
-            if tasks == 1 { "" } else { "s" }
+            crate::util::plural::s(tasks)
         ));
         for block in &t.todo {
             if let Some(phase) = &block.phase {
@@ -307,7 +307,7 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
                 &format!(
                     "Bundle {} asset{} ({}) into template '{}'?",
                     scan.assets.len(),
-                    if scan.assets.len() == 1 { "" } else { "s" },
+                    crate::util::plural::s(scan.assets.len()),
                     crate::util::human_bytes::human_bytes(total),
                     slug
                 ),
@@ -368,15 +368,15 @@ fn print_from_folder_preview(
         "  {} {} folder{}, {} text file{}",
         "Summary:".bold(),
         scan.folders,
-        if scan.folders == 1 { "" } else { "s" },
+        crate::util::plural::s(scan.folders),
         scan.text_files.len(),
-        if scan.text_files.len() == 1 { "" } else { "s" },
+        crate::util::plural::s(scan.text_files.len()),
     );
     if bundle_assets {
         summary.push_str(&format!(
             ", {} asset{} ({})",
             scan.assets.len(),
-            if scan.assets.len() == 1 { "" } else { "s" },
+            crate::util::plural::s(scan.assets.len()),
             crate::util::human_bytes::human_bytes(scan.bundle_bytes)
         ));
     }
@@ -387,7 +387,7 @@ fn print_from_folder_preview(
             format!(
                 "{} binary/large file{} would be skipped — add --bundle-assets to include them.",
                 scan.skipped,
-                if scan.skipped == 1 { "" } else { "s" }
+                crate::util::plural::s(scan.skipped)
             )
             .dimmed()
         );
@@ -426,15 +426,15 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
     let mut detail = format!(
         "{} folder{}, {} text file{}",
         report.folders,
-        if report.folders == 1 { "" } else { "s" },
+        crate::util::plural::s(report.folders),
         report.text_files,
-        if report.text_files == 1 { "" } else { "s" },
+        crate::util::plural::s(report.text_files),
     );
     if report.bundled > 0 {
         detail.push_str(&format!(
             ", {} bundled asset{} ({})",
             report.bundled,
-            if report.bundled == 1 { "" } else { "s" },
+            crate::util::plural::s(report.bundled),
             crate::util::human_bytes::human_bytes(report.bundled_bytes)
         ));
     }
@@ -450,7 +450,7 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
             format!(
                 "{} binary/large file{} skipped — re-run with --bundle-assets to include them.",
                 report.skipped,
-                if report.skipped == 1 { "" } else { "s" }
+                crate::util::plural::s(report.skipped)
             )
             .dimmed()
         );

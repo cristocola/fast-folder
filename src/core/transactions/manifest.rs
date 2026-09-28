@@ -412,7 +412,7 @@ impl MoveManifest {
 
 /// What a staged copy carried, in words: "1473 files and 3 links, 60.2 MB".
 pub fn copied_summary(files: usize, links: usize, bytes: u64) -> String {
-    let files = format!("{files} file{}", if files == 1 { "" } else { "s" });
+    let files = format!("{files} file{}", crate::util::plural::s(files));
     let links = match links {
         0 => String::new(),
         1 => " and 1 link".to_string(),

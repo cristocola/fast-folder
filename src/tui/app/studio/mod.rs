@@ -400,7 +400,7 @@ impl Builder {
                 if count == 0 {
                     "(none)".to_string()
                 } else {
-                    format!("{count} folder{}", if count == 1 { "" } else { "s" })
+                    format!("{count} folder{}", crate::util::plural::s(count))
                 }
             }
             Section::Files => {

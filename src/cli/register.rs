@@ -527,7 +527,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
             "  {} {} folder{} would be registered",
             "Summary:".bold(),
             targets.len(),
-            if targets.len() == 1 { "" } else { "s" }
+            crate::util::plural::s(targets.len())
         );
         return Ok(());
     }
@@ -578,7 +578,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
             "✓".green().bold()
         },
         registered,
-        if registered == 1 { "" } else { "s" },
+        crate::util::plural::s(registered),
         match skipped {
             0 => String::new(),
             n => format!(", skipped {n}"),

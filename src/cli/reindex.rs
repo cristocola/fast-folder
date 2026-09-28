@@ -16,9 +16,9 @@ pub fn run() -> Result<()> {
         "{}  Reindexed {} project{} across {} base{}.",
         "✓".green().bold(),
         total,
-        if total == 1 { "" } else { "s" },
+        crate::util::plural::s(total),
         indexed,
-        if indexed == 1 { "" } else { "s" }
+        crate::util::plural::s(indexed)
     );
     Ok(())
 }

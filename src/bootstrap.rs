@@ -145,7 +145,7 @@ pub fn ensure_bootstrapped() -> Result<()> {
             "fastf: initialized in {} — {}\n       {written} default template{} written to templates/",
             crate::util::paths::display_path(&install),
             mode.label(),
-            if written == 1 { "" } else { "s" }
+            crate::util::plural::s(written)
         );
     }
 

@@ -180,7 +180,7 @@ pub fn show() -> Result<()> {
         "    {:<24} {} command{}",
         "commands".dimmed(),
         cmd_count,
-        if cmd_count == 1 { "" } else { "s" }
+        crate::util::plural::s(cmd_count)
     );
 
     Ok(())

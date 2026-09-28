@@ -79,9 +79,9 @@ pub fn run(args: ShowArgs) -> Result<()> {
         format!(
             "{} note{}   ·   {done}/{} todo{} done",
             notes.len(),
-            if notes.len() == 1 { "" } else { "s" },
+            crate::util::plural::s(notes.len()),
             todos.len(),
-            if todos.len() == 1 { "" } else { "s" }
+            crate::util::plural::s(todos.len())
         )
         .dimmed()
     );

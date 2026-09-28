@@ -55,7 +55,7 @@ pub fn sync() -> Result<()> {
             "{}  Synced {} base{} up to {}.",
             "✓".green().bold(),
             raised,
-            if raised == 1 { "" } else { "s" },
+            crate::util::plural::s(raised),
             floor.to_string().green().bold()
         );
     }

@@ -514,7 +514,7 @@ impl Housekeeping {
                         path: old.path,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -563,7 +563,7 @@ impl Housekeeping {
                         path: deleted.folder,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -582,7 +582,7 @@ impl Housekeeping {
                         path,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -632,7 +632,7 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                     path: old,
                     reason: format!(
                         "{remaining} {} left: {reason}",
-                        if remaining == 1 { "entry" } else { "entries" }
+                        crate::util::plural::of(remaining, "entry", "entries")
                     ),
                     redundant: !kept_on_purpose,
                 };
@@ -664,8 +664,8 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                     "{moved} file{} the mount had put in the move's old staging folder \
                      late {} moved into place, and {} left there that fastf will not \
                      remove: {}",
-                    if moved == 1 { "" } else { "s" },
-                    if moved == 1 { "was" } else { "were" },
+                    crate::util::plural::s(moved),
+                    crate::util::plural::of(moved, "was", "were"),
                     left.len(),
                     left.iter()
                         .take(LISTED)
@@ -776,7 +776,7 @@ fn remove_split_residue(transaction: &MoveTransaction, cleanup: &Cleanup) -> Opt
             path: source,
             reason: format!(
                 "part of the original is still there: {remaining} {} left: {reason}",
-                if remaining == 1 { "entry" } else { "entries" }
+                crate::util::plural::of(remaining, "entry", "entries")
             ),
             redundant: !kept_on_purpose,
         }),

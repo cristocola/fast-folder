@@ -45,7 +45,7 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
         "{}  Added {} tag{} to {}",
         "✓".green().bold(),
         n,
-        if n == 1 { "" } else { "s" },
+        crate::util::plural::s(n),
         candidate.id.green().bold()
     );
     Ok(())
@@ -72,7 +72,7 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
             "{}  Removed {} tag{} from {}",
             "✓".green().bold(),
             removed_count,
-            if removed_count == 1 { "" } else { "s" },
+            crate::util::plural::s(removed_count),
             candidate.id.green().bold()
         );
     }
@@ -138,7 +138,7 @@ pub fn reauto(query: &str) -> Result<()> {
         "{}  Re-derived {} auto-tag{} for {}",
         "✓".green().bold(),
         new_derived.len(),
-        if new_derived.len() == 1 { "" } else { "s" },
+        crate::util::plural::s(new_derived.len()),
         project.id.green().bold()
     );
     Ok(())

@@ -33,11 +33,7 @@ pub fn copy_to_staging(
             let mut message = format!(
                 "the filesystem where the project is going ignores case, and the project \
                  holds {count} {} that differ only in case:",
-                if count == 1 {
-                    "pair of names"
-                } else {
-                    "pairs of names"
-                }
+                crate::util::plural::of(count, "pair of names", "pairs of names")
             );
             for (one, other) in clashes.iter().take(LISTED) {
                 message.push_str(&format!(

@@ -203,7 +203,7 @@ impl Job {
             lines.push(format!(
                 "{} warning{}:",
                 self.warnings.len(),
-                if self.warnings.len() == 1 { "" } else { "s" }
+                crate::util::plural::s(self.warnings.len())
             ));
             for warning in &self.warnings {
                 lines.push(format!("  {warning}"));
@@ -214,11 +214,7 @@ impl Job {
             if left > 0 {
                 lines.push(format!(
                     "cancelled — {left} {} left marked",
-                    if left == 1 {
-                        "project is"
-                    } else {
-                        "projects are"
-                    }
+                    crate::util::plural::of(left, "project is", "projects are")
                 ));
             }
         }

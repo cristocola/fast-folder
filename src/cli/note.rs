@@ -162,7 +162,7 @@ pub fn notes(args: NotesArgs) -> Result<()> {
         format!(
             "{} note{}",
             filtered.len(),
-            if filtered.len() == 1 { "" } else { "s" }
+            crate::util::plural::s(filtered.len())
         )
         .dimmed()
     );

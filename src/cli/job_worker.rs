@@ -393,7 +393,7 @@ impl Job<'_> {
         if paused > 0 {
             summary.push_str(&format!(
                 ", {paused} paused until {} mount answers",
-                if paused == 1 { "its" } else { "their" }
+                crate::util::plural::of(paused, "its", "their")
             ));
         }
         self.summarise(summary);

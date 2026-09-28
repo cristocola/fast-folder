@@ -169,7 +169,7 @@ impl Walk {
         let mut message = format!(
             "{} holds {count} {} that cannot be copied to another drive:",
             crate::util::paths::display_path(root),
-            if count == 1 { "entry" } else { "entries" }
+            crate::util::plural::of(count, "entry", "entries")
         );
         for problem in self.problems.iter().take(LISTED) {
             message.push_str(&format!(

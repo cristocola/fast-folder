@@ -141,7 +141,7 @@ fn print_file_previews(report: &DryRunReport) {
                 format!(
                     "… {} more line{} hidden",
                     preview.hidden,
-                    if preview.hidden == 1 { "" } else { "s" }
+                    crate::util::plural::s(preview.hidden)
                 )
                 .dimmed()
             );

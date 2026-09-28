@@ -207,14 +207,14 @@ impl App {
                 let n = report.verdicts.len();
                 self.warn(format!(
                     "{n} unfinished thing{} need{} you — {key} shows {}",
-                    if n == 1 { "" } else { "s" },
-                    if n == 1 { "s" } else { "" },
-                    if n == 1 { "it" } else { "them" }
+                    crate::util::plural::s(n),
+                    crate::util::plural::of(n, "s", ""),
+                    crate::util::plural::of(n, "it", "them")
                 ));
             } else if finished > 0 {
                 self.info(format!(
                     "finished {finished} leftover{} of earlier moves and deletes",
-                    if finished == 1 { "" } else { "s" }
+                    crate::util::plural::s(finished)
                 ));
             }
         }

@@ -667,7 +667,7 @@ fn take_old(cfg: &Config, old_copy: &Path) -> anyhow::Result<String> {
     let report = provisioning::reconcile_one_record(cfg, &base, &record);
     Ok(format!(
         "took {taken} {} from the old copy into the moved one; the old copy is removed ({})",
-        if taken == 1 { "entry" } else { "entries" },
+        crate::util::plural::of(taken, "entry", "entries"),
         report.summary()
     ))
 }

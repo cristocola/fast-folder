@@ -62,8 +62,8 @@ pub(super) fn finish_record(
                     report.repaired.push(format!(
                         "{subject}: {moved} file{} the mount had put in the move's old staging \
                          folder after it was renamed away {} moved into place.",
-                        if moved == 1 { "" } else { "s" },
-                        if moved == 1 { "was" } else { "were" }
+                        crate::util::plural::s(moved),
+                        crate::util::plural::of(moved, "was", "were")
                     ));
                 }
             }

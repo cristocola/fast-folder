@@ -159,7 +159,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
                 format!(
                     "{} {needs_you} need{} you  {key} ",
                     g.warn,
-                    if needs_you == 1 { "s" } else { "" }
+                    crate::util::plural::of(needs_you, "s", "")
                 ),
                 theme.warn(),
             )],
@@ -383,7 +383,7 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
                 " {} {} warning{} arrived while a dialog was open   {}   {} messages",
                 g.warn,
                 app.unseen_warnings,
-                if app.unseen_warnings == 1 { "" } else { "s" },
+                crate::util::plural::s(app.unseen_warnings),
                 g.sep,
                 crate::tui::command::key_of(crate::tui::command::CommandId::ShowLog)
             ),
@@ -428,7 +428,7 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
                 n => format!(
                     "{n} marked {} a verb acts on {} instead of the row under the cursor",
                     g.sep,
-                    if n == 1 { "it" } else { "them" }
+                    crate::util::plural::of(n, "it", "them")
                 ),
             }
         };

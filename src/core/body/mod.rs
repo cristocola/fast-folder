@@ -796,11 +796,7 @@ pub fn add_todos_at(path: &Path, texts: &[String], place: &TodoPlace) -> Result<
     };
     let content = read_document(
         path,
-        if lines.len() == 1 {
-            "add a todo"
-        } else {
-            "add todos"
-        },
+        crate::util::plural::of(lines.len(), "add a todo", "add todos"),
     )?;
     let block: String = lines.iter().map(|text| format!("- [ ] {text}\n")).collect();
     let mut first = 0;

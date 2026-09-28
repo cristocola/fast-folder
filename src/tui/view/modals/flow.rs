@@ -379,9 +379,9 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
                     format!(
                         " {} folder{}, {} text file{}",
                         scan.folders,
-                        if scan.folders == 1 { "" } else { "s" },
+                        crate::util::plural::s(scan.folders),
                         scan.files.len(),
-                        if scan.files.len() == 1 { "" } else { "s" }
+                        crate::util::plural::s(scan.files.len())
                     ),
                     theme.good(),
                 ),
@@ -433,7 +433,7 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
                 format!(
                     " {} folder{} would be registered",
                     recursive.rows.len(),
-                    if recursive.rows.len() == 1 { "" } else { "s" }
+                    crate::util::plural::s(recursive.rows.len())
                 ),
                 theme.good(),
             )));

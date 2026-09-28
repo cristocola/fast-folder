@@ -163,8 +163,8 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
                 Line::from(Span::styled(
                     format!(
                         " {uses} project{} name{} it",
-                        if uses == 1 { "" } else { "s" },
-                        if uses == 1 { "s" } else { "" }
+                        crate::util::plural::s(uses),
+                        crate::util::plural::of(uses, "s", "")
                     ),
                     theme.text(),
                 )),

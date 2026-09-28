@@ -118,18 +118,16 @@ pub(crate) fn project_row(
         name.push_str("  (missing)");
     }
 
+    // Every cell padded by display width, the unit `RowWidths` measures in:
+    // `{:<w$}` counts characters, and a name in double-width characters then
+    // pushes the columns after it out of line.
     let mut row = format!(
-        "{:<id_w$}  {}  {:<base_w$}  {:<tmpl_w$}  {}",
-        project.id,
-        // Padded by display width, unlike the slug columns beside it, because
-        // this is the cell that can hold anything.
+        "{}  {}  {}  {}  {}",
+        pad_to(&project.id, widths.id),
         pad_to(&name, widths.name),
-        library::base_label(&project.base),
-        project.template,
+        pad_to(&library::base_label(&project.base), widths.base),
+        pad_to(&project.template, widths.template),
         date_cell(&project.created),
-        id_w = widths.id,
-        base_w = widths.base,
-        tmpl_w = widths.template,
     );
     if let Some(cell) = size {
         row.push_str(&format!(
@@ -238,6 +236,28 @@ mod tests {
                 clamp_label(&project_row(p, &widths, Some(sizes[idx]), false), 200, "…")
             })
             .collect()
+    }
+
+    /// Every column is padded in the unit it is measured in, display columns,
+    /// so a base whose name is written in double-width characters leaves the
+    /// columns after it where they are on every other row.
+    #[test]
+    fn a_base_in_wide_characters_leaves_the_columns_aligned() {
+        let mut wide = project("ID0001", "Shoot");
+        wide.base = PathBuf::from("/mnt/projects/映像");
+        let mut plain = project("ID0002", "Other");
+        plain.base = PathBuf::from("/mnt/projects/video");
+        let projects = [wide, plain];
+        let widths = RowWidths::measure(projects.iter());
+        let date_at: Vec<usize> = projects
+            .iter()
+            .map(|p| {
+                let row = project_row(p, &widths, None, false);
+                let before = row.split("2026-08-18").next().unwrap().to_string();
+                measure_text_width(&before)
+            })
+            .collect();
+        assert_eq!(date_at[0], date_at[1], "the date starts in one column");
     }
 
     #[test]

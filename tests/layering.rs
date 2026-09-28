@@ -475,7 +475,7 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
 /// Seven surfaces used to write `↑↓` into a key line by hand — the palette's,
 /// the picker's, the pager's, the search bar's, the preview's, the guide's and
 /// the one every list on a dialog shares. They were all correct on the day
-/// they were written, which is the drift `command.rs` exists to prevent, and a
+/// they were written, which is the drift the registry exists to prevent, and a
 /// runtime test cannot see a string literal.
 ///
 /// Two rules, and they differ because the surfaces do:
@@ -526,7 +526,7 @@ fn no_key_line_is_written_by_hand() {
     }
     assert!(
         offenders.is_empty(),
-        "a key line is written by hand — read it from `command.rs` instead:\n  {}",
+        "a key line is written by hand — read it from `tui::command` instead:\n  {}",
         offenders.join("\n  ")
     );
 }

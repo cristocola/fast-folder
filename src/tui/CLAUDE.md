@@ -272,7 +272,7 @@ into when it would be over.
 
 ## One registry
 
-**Every command is declared once, in `command.rs`** — title, description, contexts,
+**Every command is declared once, in `command::table`** — title, description, contexts,
 default keys, category, palette and hint visibility — and the keymap (`lookup`),
 the palette (`palette_entries`), help (`help_lines`), the hint bar (`hints`) and
 every dialog's key line read it, so none can drift. `tests/tui_commands.rs` holds
@@ -561,7 +561,7 @@ rung and the bar keeps saying what filters the list.
 ## The single-project actions, marks and batches
 
 The verbs on a project are native modals (`app/actions.rs`: `ActionsState`,
-`TextPrompt`, `Confirm`, `MultiPick`). `command.rs` binds `Enter`/`a` to the
+`TextPrompt`, `Confirm`, `MultiPick`). The registry binds `Enter`/`a` to the
 action menu, `A`/`Ctrl-T` to add/remove tags, `N`/`Ctrl-N` to the editor and
 inline notes, `r m u D` to rename/move/unregister/delete, and `M`/`J` to the
 read-only metadata and notes views. Menu rows come from the registry in display
@@ -739,7 +739,7 @@ re-derived every frame jumps.
 
 ## The panel, the guide, and where the words live
 
-**`guide.rs` is to explanations what `command.rs` is to keys**: the builder's
+**`guide.rs` is to explanations what `command` is to keys**: the builder's
 panel, the seven-page guide and the coach all read it, so each explanation exists
 once. It is pure — no I/O, clock or `Config` — and takes only the scratch
 `Template`, so `update` can call it. It holds itself to two rules: **no key is

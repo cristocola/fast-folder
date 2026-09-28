@@ -140,8 +140,9 @@ tell you.
   and, for the pane, `pane_edit` / `pane_add` / `pane_cursor`; and a module per
   flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`), `view/` (renderers only, `&App`
-  in), `command.rs` (**the one registry** every key, palette entry, help line,
-  key line and hint comes from), `guide.rs` (**the one place** an explanation is
+  in), `command/` (**the one registry** every key, palette entry, help line,
+  key line and hint comes from: `table` declares, `read` and `help` read),
+  `guide.rs` (**the one place** an explanation is
   written: the builder's panel, the guide, the coach), `motion.rs` (pure motion
   arithmetic over milliseconds it is handed), `msg.rs`/`effect.rs`, `theme.rs`
   (the palette, a pure function of an `Env`), `session.rs` (what a run leaves for

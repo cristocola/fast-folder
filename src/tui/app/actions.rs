@@ -1,7 +1,7 @@
 //! The single-project actions as native dialogs: the action-menu modal,
 //! the text prompt, the yes/no confirm, the multi-pick for tags, and the pure
 //! lookups that feed them. The verbs themselves are declared once in
-//! `command.rs`; this module holds the modal state a verb opens and the lists
+//! `tui::command`; this module holds the modal state a verb opens and the lists
 //! its pickers show, so `update` stays a function of data and not of closures.
 
 use std::path::PathBuf;

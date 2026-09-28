@@ -18,7 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::assets::{FinishedStep, JobPhase, JobStatus, Progress};
 
-/// The message a job stopped by its cancel flag ends with.
+/// The message a step stopped by the cancel flag ends with, whichever job it
+/// is a step of: the walk, the copy and the removal serve a move, a copy and a
+/// delete alike. **A cancel is known by the flag** ([`Ticker::cancelled`]),
+/// never by this text; the job that was cancelled says so in its own words.
 pub const CANCELLED: &str = "cancelled";
 
 /// A job's progress and cancel flag, borrowed. Copy, so it is passed by value

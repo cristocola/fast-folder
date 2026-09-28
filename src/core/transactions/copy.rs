@@ -23,7 +23,7 @@ pub(super) fn copy_contents(
     let copied = Mutex::new(Vec::with_capacity(files.len()));
     crate::util::pool::run(width, files, |entry| {
         if cancel.load(Ordering::Relaxed) {
-            bail!("move cancelled");
+            bail!("{}", crate::core::progress::CANCELLED);
         }
         if let Some(as_copied) = copy_file_again(entry, source, staging, progress, cancel)? {
             copied
@@ -132,7 +132,7 @@ fn copy_file(
     let mut copied: u64 = 0;
     loop {
         if cancel.load(Ordering::Relaxed) {
-            bail!("move cancelled");
+            bail!("{}", crate::core::progress::CANCELLED);
         }
         crate::util::faults::check("move:mid-copy")?;
         let count = reader.read(&mut buffer).with_context(|| {

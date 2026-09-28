@@ -405,7 +405,7 @@ fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) ->
     let refused: Mutex<Vec<(PathBuf, String)>> = Mutex::new(Vec::new());
     let make = |entry: &ManifestEntry| -> Result<()> {
         if cancel.load(Ordering::Relaxed) {
-            bail!("move cancelled");
+            bail!("{}", crate::core::progress::CANCELLED);
         }
         // Beneath a folder that could not be made, nothing can be; its own
         // refusal says why.

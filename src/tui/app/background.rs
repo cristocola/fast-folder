@@ -465,39 +465,88 @@ pub(crate) fn reconcile_notes(report: &crate::core::provisioning::ReconcileRepor
     }
     if !report.incomplete.is_empty() {
         notes.push(format!(
-            "{} project(s) were never finished being created and cannot be rebuilt \
+            "{} {} never finished being created and cannot be rebuilt \
              automatically: {}",
             report.incomplete.len(),
+            crate::util::plural::of(report.incomplete.len(), "project was", "projects were"),
             report.incomplete.join(", ")
         ));
     }
     if !report.leftovers.is_empty() {
         notes.push(format!(
-            "{} old folder(s) not removed yet:\n{}",
+            "{} old folder{} not removed yet:\n{}",
             report.leftovers.len(),
+            crate::util::plural::s(report.leftovers.len()),
             report.leftovers.join("\n")
         ));
     }
     if !report.unrecoverable.is_empty() {
         notes.push(format!(
-            "{} need a look:\n{}",
+            "{} {} a look:\n{}",
             report.unrecoverable.len(),
+            crate::util::plural::of(report.unrecoverable.len(), "needs", "need"),
             report.unrecoverable.join("\n")
         ));
     }
     if !report.waiting.is_empty() {
         notes.push(format!(
-            "{} waiting for a base to answer — fastf finishes them once it does:\n{}",
+            "{} waiting for a base to answer — fastf finishes {} once it does:\n{}",
             report.waiting.len(),
+            crate::util::plural::of(report.waiting.len(), "it", "them"),
             report.waiting.join("\n")
         ));
     }
     if !report.obsolete.is_empty() {
         notes.push(format!(
-            "{} obsolete v1 marker(s) left alone for manual inspection: {}",
+            "{} obsolete v1 marker{} left alone for manual inspection: {}",
             report.obsolete.len(),
+            crate::util::plural::s(report.obsolete.len()),
             report.obsolete.join(", ")
         ));
     }
     notes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconcile_notes;
+    use crate::core::provisioning::ReconcileReport;
+
+    /// A count reads `1 project`, and the verb after it agrees.
+    #[test]
+    fn a_report_of_one_is_written_in_the_singular() {
+        let one = ReconcileReport {
+            incomplete: vec!["Alpha".to_string()],
+            leftovers: vec!["a".to_string()],
+            unrecoverable: vec!["b".to_string()],
+            waiting: vec!["c".to_string()],
+            obsolete: vec!["d".to_string()],
+            ..ReconcileReport::default()
+        };
+        let said = reconcile_notes(&one).join("\n");
+        for sentence in [
+            "1 project was never finished",
+            "1 old folder not removed yet",
+            "1 needs a look",
+            "fastf finishes it once it does",
+            "1 obsolete v1 marker left alone",
+        ] {
+            assert!(said.contains(sentence), "{sentence:?} in:\n{said}");
+        }
+
+        let two = ReconcileReport {
+            incomplete: vec!["Alpha".to_string(), "Beta".to_string()],
+            unrecoverable: vec!["a".to_string(), "b".to_string()],
+            waiting: vec!["c".to_string(), "d".to_string()],
+            ..ReconcileReport::default()
+        };
+        let said = reconcile_notes(&two).join("\n");
+        for sentence in [
+            "2 projects were never finished",
+            "2 need a look",
+            "fastf finishes them once it does",
+        ] {
+            assert!(said.contains(sentence), "{sentence:?} in:\n{said}");
+        }
+    }
 }

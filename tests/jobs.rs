@@ -536,7 +536,7 @@ fn a_second_reconcile_leaves_the_first_ones_removals_alone() {
     let out = first.wait_with_output().unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{out:?}");
-    assert!(said.contains("1 move(s) finished"), "{said}");
+    assert!(said.contains("1 move finished"), "{said}");
     assert!(hidden_folders(&sb.base).is_empty());
 }
 

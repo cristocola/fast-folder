@@ -55,8 +55,8 @@ impl fmt::Display for TemplateSlug {
 /// This type has that opinion:
 ///
 /// - **Empty** cannot be joined onto a base. `base.join("")` is `base` itself,
-///   which `exists()` answers yes to — that is how `--name=..` came to claim a
-///   folder named `_2` beside the base rather than inside it.
+///   which `exists()` answers yes to, so a collision suffix would claim a
+///   folder beside the base rather than inside it.
 /// - **Dot-prefixed** would be invisible: discovery skips dot-prefixed
 ///   directories (they are fastf's own staging), so the project would show up
 ///   once from the write-through cache and then vanish at the next rescan.
@@ -116,10 +116,9 @@ impl fmt::Display for ProjectFolderName {
 ///
 /// **The one validator for what a tag may be**, at the one door every tag
 /// comes through (`operations::add_tags`, and so the CLI, the app's prompt
-/// and the pane alike). Tags were "arbitrary strings you add yourself", which
-/// admitted a paragraph, a newline — which is a second YAML list item on the
-/// way back in — and a tag that was only spaces. A tag is something you filter
-/// by and something `tag:x` has to be able to spell in the search bar, so:
+/// and the pane alike). A newline in a tag is a second YAML list item on the
+/// way back in, and a tag is something you filter by and something `tag:x`
+/// has to be able to spell in the search bar, so:
 /// trimmed, non-empty, one line, no whitespace, at most [`Tag::MAX_LEN`]
 /// characters, letters and digits and `- _ . /`, and a `/` only *between*
 /// parts — `client/Acme` is the convention `tag_from` writes, and a bare
@@ -279,7 +278,7 @@ mod tests {
         for (raw, expected) in [
             ("Spring Campaign", "Spring Campaign"),
             ("  padded  ", "padded"),
-            // Sanitizing still happens; it just no longer has the last word.
+            // Sanitizing still happens; it just does not have the last word.
             ("a/b", "a_b"),
             ("a\\b", "a_b"),
             ("Draft .", "Draft"),
@@ -293,9 +292,9 @@ mod tests {
         }
     }
 
-    /// The two shapes that used to reach `create_dir` and should not.
+    /// Empty and hidden names are refused before they reach `create_dir`.
     ///
-    /// Note what is *not* here: a name of purely illegal characters. `?*|`
+    /// A name of purely illegal characters is *not* among them: `?*|`
     /// sanitizes to `___`, which is a real, visible, findable folder — silly,
     /// but not a defect. Only names that sanitize away to nothing are refused.
     #[test]

@@ -40,9 +40,8 @@ pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> 
 ///
 /// `fastf open` and the TUI's Reveal spawn the system file manager on a path
 /// that came from a cache, and a cache is a file that travels with the projects
-/// — a synced folder or an unpacked archive can bring one along. The write paths
-/// have always revalidated; these read paths did not, so a forged entry named
-/// the directory that got opened.
+/// — a synced folder or an unpacked archive can bring one along, and a forged
+/// entry would name the directory that gets opened.
 ///
 /// Deliberately *not* the full guard: no canonicalize, no config reload, no id
 /// comparison. Those exist to protect a mutation. Opening a folder needs three

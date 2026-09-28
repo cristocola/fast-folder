@@ -66,10 +66,10 @@ fn on_a_cloud_mount_the_original_is_emptied_in_place() {
 }
 
 /// **A cloud mount can put the original's `PROJECT_INFO.md` back** after the
-/// move removed it — an upload still queued; the lab's edit-then-move on R2
-/// got the pre-edit file back. An older version holds nothing the moved copy
-/// lacks and goes; one edited after the copy is a choice between two
-/// versions, and needs a person. Neither is ever listed as the project twice.
+/// move removed it, from an upload still queued. An older version holds
+/// nothing the moved copy lacks and goes; one edited after the copy is a
+/// choice between two versions, and needs a person. Neither is ever listed
+/// as the project twice.
 #[cfg(debug_assertions)]
 #[test]
 fn a_project_info_put_back_goes_when_older_and_is_asked_about_when_newer() {

@@ -4,9 +4,8 @@ use super::*;
 
 /// What kind of unfinished work a marker or journal represents.
 ///
-/// Was six magic strings written by literal at eleven sites. The serialized
-/// names are unchanged: they sit in journals on disk that an older or newer
-/// binary has to read.
+/// The serialized names never change: they sit in journals on disk that an
+/// older or newer binary has to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IncompleteKind {

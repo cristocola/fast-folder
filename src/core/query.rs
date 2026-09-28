@@ -44,11 +44,9 @@ pub enum Predicate {
 
 /// What a `key=` or `tag:` value matches, once its `*`s have been read.
 ///
-/// `*` was accepted at the end only, so `key=*value*` became the prefix
-/// `*value` and matched nothing at all — while `--help` and `docs/cli.md` both
-/// called it a glob. Reading the wildcard at either end is a dozen lines over
-/// the same comparison and makes those sentences true, rather than making the
-/// documentation smaller to fit the code.
+/// `*` is read at either end, because `--help` and `docs/cli.md` both call the
+/// value a glob: `key=*value*` is a substring match, never the prefix
+/// `*value`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Exact(String),

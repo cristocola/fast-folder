@@ -11,7 +11,7 @@ use crate::core::config::Config;
 /// Resolution order (mirrors `default_template`):
 ///   1. If the template defines a `post_create` block, it is used verbatim.
 ///   2. Otherwise, the global `config.toml` `post_create` block is used.
-///   3. If neither is set, nothing happens (current behavior).
+///   3. If neither is set, nothing happens.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PostCreate {
     /// Run `git init` inside the new project folder.
@@ -185,9 +185,9 @@ fn project_command(program: &str, project_path: &Path) -> Command {
 pub fn reveal_folder(path: &Path) -> Result<()> {
     // Not `cmd /c start "" <path>`. std quotes the argument correctly, but
     // `cmd.exe` expands `%VAR%` inside the command line it reconstructs, so a
-    // folder named `%USERPROFILE%` opened somewhere else entirely.
+    // folder named `%USERPROFILE%` would open somewhere else entirely.
     // `ShellExecuteW` takes the path as an argument, with no command line to
-    // expand, and honours the same default handler `start` did.
+    // expand, and honours the same default handler `start` does.
     crate::util::shell_open::open(path)
 }
 
@@ -205,11 +205,11 @@ pub fn reveal_folder(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// `xdg-open`, with three things a headless host taught: no display means
-/// no file manager, so say so before trying; the handler gets no terminal
-/// of its own, so a text-mode handler cannot draw into ours; and its exit
+/// `xdg-open`, with three rules for a headless host: no display means no
+/// file manager, so say so before trying; the handler gets no terminal of
+/// its own, so a text-mode handler cannot draw into ours; and its exit
 /// status is the answer — exit 3 or 4 is "no application could open it",
-/// which was once reported as a success.
+/// never a success.
 #[cfg(all(unix, not(target_os = "macos")))]
 pub fn reveal_folder(path: &Path) -> Result<()> {
     use anyhow::Context as _;
@@ -234,12 +234,10 @@ pub fn reveal_folder(path: &Path) -> Result<()> {
 
 /// Start the editor, and say so only if it started.
 ///
-/// The `ExitStatus` used to be dropped on both platforms, so `run` pushed
-/// `opened in <editor>` whatever happened — and on Windows `cmd /c start`
-/// succeeds for an editor that does not exist, so a typo in the `editor` key
-/// printed `✓ opened in <typo>` over nothing at all. The two neighbouring
-/// actions in the same function, `git_init` and a template's `commands`, have
-/// always checked.
+/// **The exit status is the answer, not the spawn**: on Windows `cmd /c start`
+/// spawns for an editor that does not exist, and a typo in the `editor` key
+/// must not read `✓ opened in <typo>`. `git_init` and a template's `commands`
+/// check theirs the same way.
 #[cfg(windows)]
 fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
     // Editors like `code` on Windows ship as .cmd shims that only cmd.exe can

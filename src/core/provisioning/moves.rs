@@ -57,8 +57,6 @@ pub(super) fn reconcile_transactions(
     }
 }
 
-/// One transaction directory: its journal read, or — when it holds nothing a
-/// move ever gets past its first write to — removed.
 /// Reconcile one move record, now, in this process — what a person's
 /// decision about it ends with (`core::attention::resolve`).
 pub(crate) fn reconcile_one_record(
@@ -76,6 +74,8 @@ pub(crate) fn reconcile_one_record(
     report
 }
 
+/// One transaction directory: its journal read, or — when it holds nothing a
+/// move ever gets past its first write to — removed.
 pub(super) fn reconcile_record(
     cfg: &Config,
     target_base: &Path,
@@ -86,8 +86,8 @@ pub(super) fn reconcile_record(
     let journal = match transactions::read_journal(operation_dir) {
         Ok(journal) => journal,
         // Killed between making the folder and finishing `move.json`: a move
-        // writes its manifest next and only then makes its copy, so without
-        // one nothing else of it exists. 3.13 called this "invalid" for ever.
+        // finishes its journal before it copies anything, so without one
+        // nothing else of it exists.
         Err(_) if transactions::is_bare_record(operation_dir) => {
             let name = operation_dir
                 .file_name()
@@ -198,8 +198,8 @@ impl<'a> Found<'a> {
 
         // **A path that does not answer is not a path that is gone.** Every
         // decision below reads what is on disk, and one read through a mount that
-        // has just dropped would decide on nothing: 3.13 took an `EIO` for "gone"
-        // and cleared the record of an old copy that was still there. The record
+        // has just dropped would decide on nothing: an `EIO` taken for "gone"
+        // clears the record of an old copy that is still there. The record
         // waits, untouched, until every path it names answers.
         let staging_is = crate::util::paths::presence(&staging);
         let final_is = crate::util::paths::presence(&final_path);
@@ -246,10 +246,9 @@ fn shown(path: &Path) -> String {
 /// One transaction, by the table in `src/core/CLAUDE.md` › Recovery: what is
 /// on disk is looked at once ([`Found`]), and the phase picks the row.
 ///
-/// **Every message says what is on disk.** "Left source untouched" was about
-/// this pass, and it was printed about a source 3.11 had already removed most
-/// of; what a reader needs is where the project is, what the original holds,
-/// and that fastf removed nothing.
+/// **Every message says what is on disk**: where the project is, what the
+/// original holds, and that fastf removed nothing. "Left untouched" about a
+/// pass says nothing about the disk.
 fn reconcile_transaction(
     cfg: &Config,
     target_base: &Path,

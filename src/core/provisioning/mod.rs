@@ -1,6 +1,6 @@
 //! Provisioning journals and recovery.
 //!
-//! Version-1 create/move markers contained arbitrary absolute paths. They are
+//! Version-1 create/move markers hold arbitrary absolute paths. They are
 //! discovered by filename only, reported as obsolete, and never parsed or
 //! mutated. Version 2 uses validated relative create paths and private move
 //! transactions whose target/staging locations are derived from their owned

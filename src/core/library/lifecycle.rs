@@ -200,10 +200,10 @@ pub(crate) fn delete_project_inner(
 
 /// Refuse a project with another filesystem mounted inside it: the removal
 /// keeps what is on another filesystem, so its folder would stay for good.
-/// On Linux the mount table answers without a walk — 3.13 walked the whole
-/// project under the data lock for this, minutes on a cloud mount — and only
-/// a local disk, where a btrfs subvolume is a filesystem that mounts
-/// nothing, is still walked, which is quick there.
+/// On Linux the mount table answers without a walk — a walk runs under the
+/// data lock and takes minutes on a cloud mount — and only a local disk,
+/// where a btrfs subvolume is a filesystem that mounts nothing, is walked,
+/// which is quick there.
 fn refuse_mounts_inside(path: &Path) -> Result<()> {
     let shown = crate::util::paths::display_path(path);
     let walk_for_devices = match crate::util::fs_kind::mounts_inside(path) {
@@ -320,8 +320,8 @@ pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<
 /// The staging name is `.<target>.fastf-case[n]`: dot-prefixed so nothing can
 /// mistake it for a project while it is there, and carrying the **target** name
 /// so the operation can still be finished by anything that finds it later.
-/// `provisioning::reconcile` is that anything — this is spelled here, beside the
-/// only writer, and read there.
+/// Reconcile (`provisioning::base`) is that anything — this is spelled here,
+/// beside the only writer, and read there.
 pub(crate) const CASE_STAGING_SUFFIX: &str = ".fastf-case";
 
 /// The staging folder name for a case-only rename to `target`, attempt `n`.
@@ -392,20 +392,18 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
     // target "already exists": it is the source. Detect that and go through a
     // temporary name, which is the only way the OS will apply the new casing.
     //
-    // **Folded over the whole string, not just its ASCII.** This was
-    // `eq_ignore_ascii_case`, which sees no difference to fold in `проект` →
-    // `ПРОЕКТ`: the rename was classified as an ordinary one, `entry_exists`
-    // answered `true` because NTFS *is* case-insensitive over Cyrillic, and
-    // the verb bailed with `rename target already exists` — the file it was
-    // being asked to rename. The identical ASCII rename worked, so the bug
-    // was invisible to a test suite written in English.
+    // **Folded over the whole string, not just its ASCII.**
+    // `eq_ignore_ascii_case` sees no difference to fold in `проект` →
+    // `ПРОЕКТ`, so the rename would be classified as an ordinary one,
+    // `entry_exists` would answer `true` because NTFS *is* case-insensitive
+    // over Cyrillic, and the verb would bail with `rename target already
+    // exists` — the folder it was asked to rename.
     //
     // `to_lowercase` is full Unicode simple lowercasing rather than NTFS's own
     // uppercase table, so the two can still disagree at the margins (`ß`
     // against `SS`, say). They disagree safely: a name this calls case-only
     // that NTFS thinks is distinct merely takes the staging path and arrives
-    // correctly anyway, and the reverse — the case that failed — is what this
-    // fixes.
+    // correctly anyway; only the reverse would refuse the rename.
     let case_only_change = sanitized.to_lowercase() == project.name.to_lowercase();
     if case_only_change {
         let mut attempt = 0;

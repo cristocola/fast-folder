@@ -5,9 +5,7 @@
 //! that stops the walk part of the way — a folder it may not write, a file a
 //! program holds open, a network drop, an entry the filesystem lists but will
 //! not let it examine — leaves a tree that still holds its `PROJECT_INFO.md`,
-//! so the library lists a husk as the project. That is how 3.11 left 13 of
-//! 1473 files of a moved project behind on an sshfs mount and then called the
-//! source untouched.
+//! so the library lists a husk as the project.
 //!
 //! So a source is **retired** first, in one step that either happens or does
 //! not, and only then emptied:
@@ -203,10 +201,10 @@ pub(crate) enum SetAside {
 /// no data lock — the copy is hidden, and a record whose job is alive is left
 /// alone by every reconcile.
 ///
-/// Nothing is walked here: the merge that follows proves every removal entry
-/// by entry, and absorbs what changed in the original meanwhile. 3.13 walked
-/// the original and the moved copy first and kept the original whole on a
-/// single difference — a dev server's log line — for ever.
+/// Nothing is walked here: a check of the whole tree would keep the original
+/// whole over a single difference — a dev server's log line — while the merge
+/// that follows proves every removal entry by entry, and absorbs what changed
+/// in the original meanwhile.
 pub(crate) fn set_aside(
     mut transaction: MoveTransaction,
     cleanup: &Cleanup,
@@ -251,8 +249,8 @@ pub(crate) fn set_aside(
     let outcome = match transaction.journal.retire {
         RetireStrategy::Rename => {
             // One rename, which fastf cannot count into: on an S3-style mount
-            // it is a copy and a delete per object inside rclone, and took
-            // minutes on a real R2 bucket. Say what it is waiting on.
+            // it is a copy and a delete per object inside rclone, minutes on
+            // an R2 bucket. Say what it is waiting on.
             cleanup.ticker.update(|state| {
                 state.current_file = "renaming it aside in one step — on a network mount this \
                                       can take a while"
@@ -319,8 +317,7 @@ pub(crate) fn retire_in_place(transaction: &MoveTransaction, cleanup: &Cleanup) 
         (Ok(Some(found)), Some(recorded)) if transactions::agrees(recorded, &found) => {}
         // Older than what the move copied: a version from before it, which
         // a cloud mount put back from an upload still on its way — nothing
-        // in it the moved copy lacks. The lab's edit-then-move on R2 got the
-        // pre-edit file back after the move had removed the edited one.
+        // in it the moved copy lacks.
         (Ok(Some(found)), Some(recorded))
             if found.source_modified.nanos() < recorded.source_modified.nanos() => {}
         // Only its time moved, or the moved copy's was rewritten since: the
@@ -696,9 +693,9 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
 
 /// Whether the record of `operation`, whose old copy is gone from beside
 /// `source`, waits out the settle: on a mount that uploads in the background
-/// a removed folder can come back minutes later (rclone did, on R2, after a
-/// move reported its old copy removed), and only a record can remove it then.
-/// A record the data dir's index does not know is cleared at once, as before.
+/// (rclone) a removed folder can come back minutes later, and only a record
+/// can remove it then. A record the data dir's index does not know is
+/// cleared at once.
 pub(crate) fn settling(operation: &str, source: &Path) -> bool {
     let Some(source_base) = source.parent() else {
         return false;

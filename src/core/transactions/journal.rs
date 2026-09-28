@@ -363,8 +363,8 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
 
 /// A transaction directory that holds nothing a move writes after its
 /// journal: no manifest, no marker, nothing but at most a `move.json` that did
-/// not finish. A move makes its copy only after its manifest, so one killed
-/// this early left nothing anywhere else either.
+/// not finish. A move makes its copy only once its journal is written, so one
+/// killed this early left nothing anywhere else either.
 pub fn is_bare_record(operation_dir: &Path) -> bool {
     // fastf names its records; anything else is somebody's, and a journal
     // that reads as JSON but not as a valid record is reported, never removed.

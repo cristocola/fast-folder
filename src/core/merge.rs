@@ -2,14 +2,12 @@
 //! entry, each removed only once the moved copy provably holds it** — or holds
 //! it because this put it there.
 //!
-//! 3.13 asked one question of the whole old copy — is every entry exactly what
-//! the move recorded? — and on a single "no" kept all of it, for a person, for
-//! ever. A dev server that wrote one log line into the original between the
-//! scan and the retire was enough, and so was a cloud mount whose rename moved
-//! one file's time. The merge asks per entry instead ([`decide`]), and what is
-//! left afterwards is exactly what needs a person: an entry changed both in
-//! the old copy and in the moved one, or one the moved copy holds as something
-//! else.
+//! The merge asks per entry ([`decide`]), never once of the whole old copy:
+//! one log line a dev server wrote into the original between the scan and the
+//! retire, or one file time a cloud mount's rename moved, would otherwise keep
+//! all of it for a person. What is left afterwards is exactly what needs a
+//! person: an entry changed both in the old copy and in the moved one, or one
+//! the moved copy holds as something else.
 //!
 //! **Two policies**, because what may be written into the moved copy depends
 //! on how sure fastf is of what the old copy is:

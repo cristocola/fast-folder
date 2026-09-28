@@ -406,9 +406,8 @@ fn write_registration_metadata(
     tags: &[String],
     created: &str,
 ) -> Result<()> {
-    // One write. This used to write the file with `now` and then rewrite the
-    // frontmatter to patch `created`, which meant a registered project's
-    // identity file existed briefly with the wrong date in it.
+    // One write, `created` already in it: a second write to patch the date
+    // would leave the identity file briefly holding the wrong one.
     project_info::write_at(plan, template, tags, created.to_string())
         .context("writing project metadata")
 }
@@ -526,11 +525,10 @@ fn mutate_tags(project: &Project, mutate: impl FnOnce(&mut Vec<String>)) -> Resu
 /// Re-derive this project's auto-tags, replacing **only** the tags fastf
 /// derived last time.
 ///
-/// It used to remove every tag under a `tag_from` slug's namespace, which is a
-/// wider set than the one it wrote: a template declaring `tags: ["tier/legacy"]`
-/// lost that tag, and so did anyone who typed `fastf tag add ID0001
-/// tier/manual`. Re-deriving is a refresh, not a reset — nothing it did not
-/// write is its to delete.
+/// Every tag under a `tag_from` slug's namespace is a wider set than the one it
+/// wrote: it holds a template's literal `tier/legacy` and a hand-typed
+/// `tier/manual` too. Re-deriving is a refresh, not a reset — nothing it did
+/// not write is its to delete.
 ///
 /// A derived tag that has not changed keeps its place in the list, so a reauto
 /// that changes nothing rewrites nothing.
@@ -786,9 +784,8 @@ pub fn copy_project(
 /// bases get walked is the whole question, and answering it with defaults would
 /// report a clean library because it looked in the wrong place.
 pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
-    // Loaded here only to fail loudly on an unreadable config: reporting a
-    // clean library because the pass looked in the wrong place would be worse
-    // than an error. The pass itself reloads it beneath the lock.
+    // Loaded here only to fail loudly; the pass itself reloads it beneath the
+    // lock.
     Config::load()?;
     Ok(crate::core::provisioning::reconcile_locked())
 }
@@ -882,20 +879,12 @@ pub fn reindex() -> Result<(Config, usize)> {
 /// Record the number behind each project's id, for projects written before
 /// `Metadata::id_number` existed.
 ///
-/// **Why this is here and not on the counter's path.** Reading a number back
-/// out of a rendered id needs the template's `id.prefix` to know where the
-/// prefix ends, and the counter's floor is computed on every create *and*
-/// every preview, over every project in every base — loading a template per
-/// row there would be absurd, and worse, it has no answer for the cases that
-/// already exist: a project registered without a template, one whose template
-/// was deleted or renamed, one copied in from a machine with different
-/// templates. A guess that reads too *low* mints a duplicate id, which is
-/// worse than reading too high.
-///
-/// Reindex is where that lookup is affordable and where "no answer" is a fine
-/// outcome: it already holds the lock, it is the declared verb for changes
-/// fastf could not observe, and a project it cannot resolve is simply left
-/// alone to keep using the parse fallback.
+/// **Here and not on the counter's path**, which runs on every create and
+/// preview and would load a template per row, with no answer for a project
+/// whose template is gone or never was — and a guess that reads too *low*
+/// mints a duplicate id (`src/core/CLAUDE.md` › Create, apply, register).
+/// Reindex already holds the lock, and a project it cannot resolve keeps the
+/// parse fallback.
 fn backfill_id_numbers(config: &Config) {
     for project in library::discover(config) {
         if project.id_number.is_some() {
@@ -944,7 +933,7 @@ fn backfill_id_numbers(config: &Config) {
 /// `original_slug` is the slug the template was **loaded** under. When it
 /// differs from `template.slug` the directory is renamed before the manifest is
 /// written — the builder's edit mode can change a slug, and without the rename
-/// the new manifest landed in a fresh directory while the old one stayed behind
+/// the new manifest lands in a fresh directory while the old one stays behind
 /// as a second, stale template with the same contents.
 ///
 /// Returns the manifest path.
@@ -960,12 +949,10 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
     // **A save may land on a directory that already exists only when the
     // template was loaded from that very slug** — that, and only that, is an
     // edit in place. Everything else is a collision reached by one door or the
-    // other: a rename onto an occupied slug, which was always refused, or a
-    // *new* template typed onto one, which was not. The second had no guard at
-    // all, because the rename check lived inside `if let Some(original)` and a
-    // new template carries `None`: typing `general` as the slug of a new
-    // template overwrote the bundled one — its variables, its structure and its
-    // naming pattern replaced — and said `✓ Saved`.
+    // other: a rename onto an occupied slug, or a *new* template typed onto
+    // one. A new template carries `None`, so a check that lives inside
+    // `if let Some(original)` lets `general` typed as a new slug overwrite the
+    // bundled template whole.
     let manifest = crate::util::paths::template_manifest(slug.as_str());
     let loaded_here = match original_slug {
         Some(original) => {

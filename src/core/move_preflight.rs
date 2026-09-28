@@ -65,7 +65,7 @@ pub(crate) enum LinkProbe {
 /// `follow_symlinks`, `symlink()` makes the link on the server and then fails
 /// with `EIO`, because the mount reads the new entry back as the file it
 /// points to and the kernel expected a link. Taking that error for "cannot
-/// make links" let the incident's own mount through; something at the path
+/// make links" would let exactly that mount through; something at the path
 /// that is not a link is the answer.
 pub(crate) fn observe(made: std::io::Result<()>, found: std::io::Result<bool>) -> LinkProbe {
     match found {
@@ -179,7 +179,7 @@ fn hidden_links_refusal(base: &Path) -> String {
 ///
 /// Asked once per base per process, and only where the answer can be yes: a
 /// local disk and NFS show a link as a link. On a cloud mount the probe is
-/// seven requests, and 3.13 made it before every removal.
+/// seven requests, too many to make before every removal.
 pub(crate) fn links_hidden_in(base: &Path) -> Option<String> {
     use crate::util::fs_kind::FsKind;
     if matches!(crate::util::fs_kind::of(base), FsKind::Local | FsKind::Nfs) {

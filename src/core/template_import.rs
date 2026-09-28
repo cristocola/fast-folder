@@ -137,9 +137,8 @@ fn scan_dir(
     scan_dir_at(root, current, 0, bundle_assets, plan)
 }
 // Depth-0 entry point above. **Nothing else may call it** — the recursive step
-// goes to `scan_dir_at` with `depth + 1`, which it used to do through here
-// instead, resetting the counter at every level and leaving the limit
-// unreachable.
+// goes to `scan_dir_at` with `depth + 1`; recursing through here would reset
+// the counter at every level and leave the limit unreachable.
 
 fn scan_dir_at(
     root: &Path,
@@ -375,7 +374,7 @@ mod tests {
     }
 
     /// The three-way split every from-folder scan makes, and the only place it
-    /// is decided. Nothing tested it before.
+    /// is decided.
     #[test]
     fn text_becomes_editable_binary_is_bundled_or_skipped() {
         let text = classified("NOTES.md", b"# hello\n", false);

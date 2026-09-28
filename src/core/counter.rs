@@ -9,13 +9,11 @@ use crate::util::paths;
 /// The counter's high-water mark as kept **inside a base**, as
 /// `.fastf-counter.toml` next to that base's `.fastf-index.json`.
 ///
-/// This exists because of where the number has to be *readable* from. The
-/// counter used to live only in the data directory — `%APPDATA%\fastf` on
-/// Windows, `~/.config/fastf` on Linux — so a dual-boot machine had two of them
-/// and no way to keep them in step. The only workaround was to symlink one home
-/// into the other, which breaks the moment either is encrypted. The projects
-/// never had that problem: they already sit on a drive both systems mount, so
-/// the number that indexes them sits there too.
+/// This exists because of where the number has to be *readable* from. A
+/// dual-boot machine has two data directories — `%APPDATA%\fastf` on Windows,
+/// `~/.config/fastf` on Linux — and no way to keep them in step, while its
+/// projects sit on a drive both systems mount, so the number that indexes
+/// them sits there too.
 ///
 /// It does **not** replace the data-directory counter — see [`Counters::load`].
 /// The two cover different failures, and both are written on every create.
@@ -26,8 +24,8 @@ use crate::util::paths;
 /// pushes its new mark into all mounted bases ([`Counters::record`]), and
 /// [`Counters::converge`] repairs any divergence it finds. Nothing lowers it,
 /// which is why `fastf id set` refuses a value below the floor instead of
-/// pretending to accept one — before this rule it wrote a single file that
-/// [`Counters::floor`] then ignored, and reported success for a no-op.
+/// pretending to accept one: [`Counters::floor`] would ignore it, and the
+/// command would report success for a no-op.
 pub(crate) const BASE_COUNTER_FILE: &str = ".fastf-counter.toml";
 
 /// Single global counter shared across all templates.
@@ -48,25 +46,23 @@ impl Counters {
     ///   reach still renders inside the width its own template asked for.
     /// - It is below 2^53, so any JSON consumer reads it back exactly.
     ///
-    /// Without a ceiling, `fastf id set 18446744073709551615` was accepted (it
-    /// is above the floor, which was the only rule) and the very next create
-    /// overflowed the `+ 1`: a panic in debug, a wrap to zero in release.
+    /// Without a ceiling, `fastf id set 18446744073709551615` is above the
+    /// floor, and the very next create overflows the `+ 1`: a panic in debug,
+    /// a wrap to zero in release.
     pub const MAX_VALUE: u64 = 999_999_999_999;
 
     /// Read this machine's counter from the data directory.
     ///
-    /// Still written, and still needed, even though the base file is the shared
+    /// Written on every create beside the base file, which is the shared
     /// record — the two cover different failures:
     ///
-    /// - the **base** file is visible to every OS that mounts the drive, which
-    ///   is what removed the symlink;
+    /// - the **base** file is visible to every OS that mounts the drive;
     /// - this one spans **every base the machine has ever written to**, which is
     ///   what survives a base being unplugged.
     ///
     /// Without it, working in an archive base up to ID0005, unplugging it, then
     /// creating in another base restarts at ID0001 — and plugging the archive
-    /// back in gives two projects the same ID. Keeping it also means upgrading
-    /// needs no migration step.
+    /// back in gives two projects the same ID.
     pub fn load() -> Result<Self> {
         let path = paths::counters_path();
         if !path.exists() {
@@ -225,8 +221,8 @@ impl Counters {
     /// `counters` is honoured as a floor input so a caller holding an
     /// explicitly-set value is never silently overridden. Every caller that
     /// needs the next ID — `project::plan`, `operations::register`, and the
-    /// register rename preview — must go through here: when preview used its own
-    /// formula it confirmed one folder name and committed a different one.
+    /// register rename preview — must go through here: a preview with its own
+    /// formula confirms one folder name and commits a different one.
     pub fn next_value(cfg: &Config, counters: &Counters) -> Result<u64> {
         let current = counters.get().max(Self::floor(cfg));
         let next = current

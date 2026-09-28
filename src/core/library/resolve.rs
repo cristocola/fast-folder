@@ -198,12 +198,12 @@ pub(crate) fn max_id_in_base(base: &Path) -> u64 {
 /// preview/plan path.
 ///
 /// A **rejected** entry abandons the whole cache and goes back to the folders,
-/// exactly as `discovery::discover_base` does — this used to `filter_map` the
-/// rejected one away and carry on reading the rest, which is the one thing the
-/// rule forbids. `.fastf-index.json` travels with the projects by design, so a
-/// synced folder or an unpacked archive can deliver one; an entry naming
-/// anything but a direct child of its own base means the file is no longer
-/// fastf's own bookkeeping, and the rest of it is not evidence of anything.
+/// exactly as `discovery::discover_base` does, rather than dropping only that
+/// entry and reading on. `.fastf-index.json` travels with the projects by
+/// design, so a synced folder or an unpacked archive can deliver one; an
+/// entry naming anything but a direct child of its own base means the file is
+/// no longer fastf's own bookkeeping, and the rest of it is not evidence of
+/// anything.
 ///
 /// It matters most here, of all places: this is the read behind `max_id_in_base`
 /// and therefore behind `Counters::floor`. Silently dropping the entry that

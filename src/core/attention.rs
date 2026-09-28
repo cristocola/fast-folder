@@ -1,11 +1,10 @@
 //! What fastf left unfinished, sorted by **who finishes it** — the answer to
 //! "does anything here need me?".
 //!
-//! 3.13's header said "1 needs attention": a count, with nothing to say what
-//! it was, which key to press, or whether pressing it would help. Most of it
-//! never needed anybody — a reconcile finishes an interrupted move, removes an
-//! old copy, clears a record — and what did need somebody was reported by
-//! every pass for ever. Each item is one of three things now:
+//! A count alone says nothing of what an item is, which key to press, or
+//! whether pressing it would help. Most items need nobody — a reconcile
+//! finishes an interrupted move, removes an old copy, clears a record. Each
+//! item is one of three things:
 //!
 //! - [`State::Auto`] — fastf finishes it by itself: a reconcile does, and the
 //!   app starts one when it sees one;
@@ -362,7 +361,7 @@ pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> At
 /// [`records::SETTLE_SECS`] after the old copy is gone, and a pass after that
 /// clears it and removes whatever came back. Quiet until then — nothing to
 /// do, and the header does not count it — and then fastf's own: without an
-/// item nothing started that pass, and a file an upload put back stayed.
+/// item nothing starts that pass, and a file an upload put back stays.
 fn settling(incomplete: &[provisioning::Incomplete], answering: &[PathBuf]) -> Vec<Item> {
     // A record the list names already is its own item: its old copy is back.
     let listed: std::collections::HashSet<String> = incomplete

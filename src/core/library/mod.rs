@@ -9,20 +9,21 @@
 //! (`.fastf-index.json`) co-located with its projects, so it travels with them
 //! across machines. The cache is **never** an authority — it is always
 //! reconcilable from the folders:
-//!   - No cache, or the base dir's mtime is newer than the cache → rescan +
-//!     rewrite.
-//!   - Otherwise → load the cache and cheaply existence-check each entry,
-//!     dropping (and rewriting away) any whose folder has since disappeared.
+//!   - No cache, no recorded names, a names-only listing of the base that
+//!     differs from the names the cache recorded, or a base dir whose mtime
+//!     is newer than the cache → rescan + rewrite.
+//!   - Otherwise → load the cache, dropping (and rewriting away) any entry
+//!     whose folder the listing no longer holds.
 //!
 //! Cache entries are **base-relative** (`dir`), so a cache written on Linux
 //! (`/mnt/projects/...`) is valid when the same base is read on Windows (`D:\\...`).
 //! There is no manual prune: the "missing" state is transient and self-heals.
 //!
-//! **This module is a facade.** Every path callers used before the split still
-//! resolves — `library::discover`, `library::move_project`, `library::resolve` —
-//! while the implementations live in focused submodules. The move engine left
-//! the library entirely (`core::move_engine`): it depends on transactions,
-//! staged copies and progress reporting, which nothing else here does.
+//! **This module is a facade**: callers name `library::discover`,
+//! `library::move_project`, `library::resolve`, and the implementations live in
+//! focused submodules. The move engine is `core::move_engine`, re-exported
+//! here: it depends on transactions, staged copies and progress reporting,
+//! which nothing else here does.
 
 mod cache;
 mod discovery;
@@ -46,9 +47,8 @@ pub use crate::core::move_engine::{
     MoveOutcome, move_project, move_project_configured_with_outcome,
 };
 
-/// Compatibility re-export: the clock moved to [`crate::util::time`], which is
-/// where a timestamp belongs. `library` was importing nothing else from
-/// `project_info` or `provisioning`, and both of them imported this.
+/// Compatibility re-export: the clock lives in [`crate::util::time`], which is
+/// where a timestamp belongs.
 pub use crate::util::time::now_iso8601;
 
 #[cfg(test)]

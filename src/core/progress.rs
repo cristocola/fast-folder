@@ -167,7 +167,7 @@ impl<'a> Ticker<'a> {
     }
 
     /// Say which folder the steps from here work in, so a stall can name it
-    /// ("no answer from /mnt/cloud"): the mount it is on, when the system
+    /// ("no answer from /mnt/projects"): the mount it is on, when the system
     /// says, else the folder itself.
     pub fn working_in(self, path: &Path) {
         let place = crate::util::fs_kind::mount_identity(path)
@@ -195,8 +195,9 @@ impl<'a> Ticker<'a> {
 /// End a job's progress the way its result says: `Done`, or `Cancelled` when
 /// the cancel flag stopped it, or `Failed` with the reason.
 ///
-/// **Before this, a job that failed stayed `Running` for ever**, so anything
-/// watching it — the app's runtime polls until it is not — watched a dead job.
+/// **Every job's progress ends here**, or a job that failed stays `Running`
+/// for ever, and anything watching it — the app's runtime polls until it is
+/// not — watches a dead job.
 pub fn settle<T>(progress: &Mutex<Progress>, cancel: &AtomicBool, result: &anyhow::Result<T>) {
     let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
     match result {

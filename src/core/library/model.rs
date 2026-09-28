@@ -7,8 +7,8 @@ use std::path::PathBuf;
 pub const CACHE_FILENAME: &str = ".fastf-index.json";
 
 /// Scan depth beneath each base directory. `1` = direct children only, which
-/// matches the user's flat project layouts. Kept as a constant so it could
-/// become configurable later without hunting for magic numbers.
+/// matches the user's flat project layouts. Only `1` is implemented: the scan
+/// asserts it, and a cache entry's `dir` is valid only as one component.
 pub(crate) const SCAN_DEPTH: usize = 1;
 
 /// A discovered project — the in-memory view built either from a freshly-read
@@ -32,10 +32,11 @@ pub struct Project {
     /// ISO-8601 creation timestamp from metadata (folder mtime as a fallback).
     pub created: String,
     pub tags: Vec<String>,
-    /// `true` for freshly-scanned projects; cache entries are stat-checked and
-    /// only surface when their folder still exists, so this is effectively
-    /// always `true` for returned projects (the field exists so future callers
-    /// can render a transient "missing" state without a signature change).
+    /// `true` for freshly-scanned projects; cache entries are checked against
+    /// the base's listing and only surface when their folder is in it, so this
+    /// is effectively always `true` for returned projects (the field exists so
+    /// future callers can render a transient "missing" state without a
+    /// signature change).
     pub exists: bool,
 }
 
@@ -49,10 +50,9 @@ impl Project {
     /// The fallback is a guess, and for one shape of template a bad one:
     /// `Counters::format_id` is lossy, so a digits-only `id.prefix` renders
     /// project 1 as `2001` and the parse reads two thousand and one back.
-    /// That fed the counter's self-heal floor, and the counter never
-    /// descends — so a single create renumbered a whole library. Recording
-    /// the number removes the guess for everything created from here on, and
-    /// `fastf reindex` backfills what came before.
+    /// The guess feeds the counter's self-heal floor, and the counter never
+    /// descends — so a single create would renumber a whole library.
+    /// `fastf reindex` backfills the recorded number into older files.
     pub fn number(&self) -> Option<u64> {
         self.id_number
             .or_else(|| crate::core::naming::id_value(&self.id))

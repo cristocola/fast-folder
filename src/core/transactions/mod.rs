@@ -11,12 +11,11 @@
 //! **A copy is made in its final place, and `PROJECT_INFO.md` is written
 //! last.** Until that file lands the folder is not a project — discovery
 //! never lists it, and the record says whose it is — so the publish is still
-//! one step, and **no folder on the target is ever renamed**. 3.12.0 staged
-//! under the transaction and renamed the tree into place, and on a cloud
-//! mount that renames a folder while its uploads are still in flight some
-//! of them land at the old path: found on a real rclone Drive mount, which
-//! put three files of a moved project back under the staging path it had
-//! just left, and whose cache said everything was fine.
+//! one step, and **no folder on the target is ever renamed**: on a cloud
+//! mount (rclone) that renames a folder while its uploads are still in
+//! flight, some of them land at the old path while its cache says everything
+//! is fine. A 3.12.0 record staged under the transaction and renamed the tree
+//! into place, and recovery still finishes one that way.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -49,11 +48,9 @@ pub use walk::*;
 pub const TRANSACTIONS_DIR: &str = ".fastf-transactions";
 pub const JOURNAL_FILE: &str = "move.json";
 /// A phase reached, as a file whose name says which: `phase.CleanupPending`.
-/// **Created, never renamed.** A phase used to be a rewrite of the journal
-/// through an atomic sibling and a rename, and a cloud mount that misplaces
-/// renames left `move.json` on the remote saying `Copying` about a move that
-/// had long since retired its original. A file that is only ever created
-/// cannot be misplaced, and the phase is the highest marker present.
+/// **Created, never renamed**: a cloud mount can misplace a rename while
+/// uploads are in flight, and a file that is only ever created cannot be
+/// misplaced. The phase is the highest marker present.
 const PHASE_PREFIX: &str = "phase.";
 
 /// See [`MoveTransaction::mark_split`].

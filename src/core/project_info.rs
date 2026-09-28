@@ -13,8 +13,8 @@
 //!    section is, what a note or a task is — lives in [`crate::core::body`];
 //!    this module is the frontmatter and the document as a whole.
 //!
-//! Generation is best-effort: a write failure logs a warning but never fails
-//! project creation.
+//! Writing it is not best-effort: the file is the project's identity, so a
+//! create that cannot write it fails and is rolled back.
 //!
 //! Read back two ways:
 //!   - [`read`] returns the raw markdown (for `--plain` / fallback display).
@@ -54,12 +54,12 @@ pub fn pinfo_path(dir: &Path) -> std::path::PathBuf {
     dir.join(RESERVED_FILENAME)
 }
 
-/// True when `path` (the YAML `files[].path` field) collides with the reserved
-/// auto-gen filename. Compared case-insensitively on the final path component
+/// True when `path` (a template file's project-relative path) collides with
+/// the reserved auto-gen filename. Compared case-insensitively on the final path component
 /// so `notes/PROJECT_INFO.md` is fine but `PROJECT_INFO.md` at the root is not.
 pub fn path_is_reserved(path: &str) -> bool {
-    // Templates always use `/` separators (see CLAUDE.md "Cross-platform paths"),
-    // but accept `\` defensively in case a user-edited YAML used backslashes.
+    // Templates always use `/` separators, but accept `\` defensively in case
+    // a user-edited YAML used backslashes.
     let normalized = path.replace('\\', "/");
     let leaf = normalized.rsplit('/').next().unwrap_or(&normalized);
     // The reservation only kicks in at the project root — templates that want
@@ -77,18 +77,12 @@ pub struct Metadata {
     /// The project's number, as the counter minted it — `1` for `ID0001`.
     ///
     /// **The id string is a rendering, and a rendering cannot be inverted.**
-    /// `Counters::format_id` is lossy: prefix `20` with two digits and prefix
-    /// `2` with three both render `1` as `2001`. Reading the number back by
-    /// parsing the trailing digits therefore guesses, and a template with a
-    /// digits-only `id.prefix` — which `docs/cli.md` names as a supported
-    /// case — makes it guess catastrophically: `2001` reads back as two
-    /// thousand and one, the counter's self-heal floor jumps there, and
-    /// because the counter only ever rises, one create renumbers the library
-    /// for good.
-    ///
-    /// So the number is written down instead of re-derived.
-    /// `naming::id_value` remains as the fallback for every project written
-    /// before this field existed.
+    /// `Counters::format_id` is lossy — prefix `20` with two digits and prefix
+    /// `2` with three both render `1` as `2001` — so parsing the digits back
+    /// guesses, and for a digits-only `id.prefix` it guesses high, which the
+    /// counter's floor, only ever rising, keeps for good (`src/core/CLAUDE.md`
+    /// › Create, apply, register). `naming::id_value` is the fallback for
+    /// every project written before this field existed.
     ///
     /// `Option` + `skip_serializing_if`, so a file written by an earlier
     /// version stays byte-identical after a no-op mutation — the guarantee
@@ -102,18 +96,15 @@ pub struct Metadata {
     ///
     /// Deserialization is all-or-nothing: one missing required key and
     /// `read_project_meta` returns `None`, which discovery reads as "this
-    /// folder is not a project". So a `PROJECT_INFO.md` fastf wrote itself,
-    /// missing one `created:` line after a hand-edit — and `docs/projects.md`
-    /// says the file is the user's to edit — dropped the project out of
-    /// `recent`, `search`, `reindex` and the app, with `reindex` reporting a
-    /// count of zero as a success.
+    /// folder is not a project". A hand-edit that deletes one `created:` line
+    /// — and `docs/projects.md` says the file is the user's to edit — must not
+    /// drop the project out of `recent`, `search`, `reindex` and the app.
     ///
-    /// `created` already had a fallback one layer up (`folder_created_fallback`
-    /// in `library::discovery`, for filesystems with no birth time), and
+    /// `created` has a fallback one layer up (`folder_created_fallback` in
+    /// `library::discovery`, for filesystems with no birth time), and
     /// `folder`/`path` are re-derived from the directory in `project_from_meta`
-    /// and never read from here at all — so all three were *already* optional
-    /// in the model and required only by the derive. `id` and `template` stay
-    /// required: they are what a project is.
+    /// and never read from here at all. `id` and `template` stay required:
+    /// they are what a project is.
     #[serde(default)]
     pub template_name: String,
     #[serde(default)]
@@ -133,24 +124,22 @@ pub struct Metadata {
     /// **Written down rather than re-derived**, for the same reason
     /// `id_number` is: the derivation is not invertible. `tag reauto` has to
     /// know which tags it wrote last time so it can replace exactly those, and
-    /// the only thing it could ask before this field existed was "does this
-    /// tag start with a `tag_from` slug and a slash" — which is also true of
-    /// a literal tag the template declares (`tags: ["tier/legacy"]`) and of
-    /// any tag a user typed (`fastf tag add ID0001 tier/manual`). Re-deriving
-    /// deleted both.
+    /// "does this tag start with a `tag_from` slug and a slash" is also true
+    /// of a literal tag the template declares (`tags: ["tier/legacy"]`) and of
+    /// any tag a user typed (`fastf tag add ID0001 tier/manual`).
     ///
     /// Empty for a project written before this field existed;
     /// [`Metadata::previous_auto_tags`] reconstructs what it can for those.
-    /// `Vec::is_empty`
-    /// skips the key, so a project whose template derives nothing writes a
-    /// frontmatter byte-identical to what earlier versions wrote.
+    /// `Vec::is_empty` skips the key, so a project whose template derives
+    /// nothing writes a frontmatter byte-identical to what earlier versions
+    /// wrote.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auto_tags: Vec<String>,
     /// `true` while the project is still being built.
     ///
-    /// Metadata is written *first* now, immediately after the folder is claimed,
+    /// Metadata is written *first*, immediately after the folder is claimed,
     /// so an interrupted create leaves something visible instead of an orphan
-    /// folder no fastf command could see. This flag distinguishes "still filling
+    /// folder no fastf command can see. This flag distinguishes "still filling
     /// in" from "finished", and is cleared as the last step of a good create.
     ///
     /// Skipped when false, so a finished project's frontmatter is byte-identical
@@ -214,10 +203,8 @@ impl Metadata {
     /// `created`. `tags` is the combined literal + auto-derived tag list.
     ///
     /// Register needs this: it claims a folder that already existed, so the
-    /// project's `created` is the folder's own date, not now. It used to write
-    /// the file with `now` and then rewrite the frontmatter to patch the field —
-    /// two writes, and the second one only worked because
-    /// `to_string_preserving_unknown` happens to be lossless.
+    /// project's `created` is the folder's own date, not now — and taking it
+    /// here keeps the file to one write.
     pub fn from_plan_at(
         plan: &ProjectPlan,
         tmpl: &Template,
@@ -262,10 +249,9 @@ impl Metadata {
 /// Build the full markdown body — frontmatter + variables table + Notes section.
 ///
 /// Fails rather than substituting a placeholder for frontmatter it could not
-/// serialize. The placeholder this replaced (`# yaml-serialize-error: ...`) wrote
-/// a comment between valid `---` delimiters, which parses as an empty document:
-/// the file looked fine and the project was invisible to discovery from the
-/// moment it was created.
+/// serialize: a placeholder such as `# yaml-serialize-error` between valid
+/// `---` delimiters parses as an empty document, so the file looks fine and
+/// the project is invisible to discovery from the moment it is created.
 pub fn render(plan: &ProjectPlan, tmpl: &Template, tags: &[String]) -> Result<String> {
     render_at(plan, tmpl, tags, crate::util::time::now_iso8601())
 }
@@ -564,8 +550,8 @@ pub fn write_document(path: &Path, mutator: impl FnOnce(&mut Metadata, &mut Stri
     mutator(&mut meta, &mut body);
 
     // Merge rather than re-serialize: a key this build has no field for belongs
-    // to whoever wrote it, and rewriting the document from the struct alone is
-    // what used to delete it.
+    // to whoever wrote it, and rewriting the document from the struct alone
+    // deletes it.
     let new_yaml = crate::util::yaml::to_string_preserving_unknown(
         &meta,
         frontmatter_yaml,
@@ -691,7 +677,6 @@ mod tests {
 
     #[test]
     fn extracts_simple_frontmatter() {
-        // Legacy-style test — kept for regression
         let body = "---\nid: ID0001\ntemplate: foo\n---\n\n# Body\n";
         let (fm, _) = split_frontmatter_body(body).expect("frontmatter present");
         assert!(fm.contains("id: ID0001"));

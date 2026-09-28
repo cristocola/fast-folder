@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::core::template::{Template, VarType};
 
 /// Resolve defaults and validate required/select values without applying name
-/// transforms. CLI prompts, browser requests, previews, create, register, and
+/// transforms. CLI prompts, the guided app, previews, create, register, and
 /// apply all use this boundary so an input cannot be accepted by one interface
 /// and rejected by another.
 pub fn validated_raw_values(

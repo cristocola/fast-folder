@@ -107,8 +107,8 @@ fn malformed_v2_transaction_is_report_only() {
 }
 
 /// A record killed between making its folder and finishing its journal
-/// holds nothing else — a move writes its manifest next, and only then
-/// copies — and is removed rather than called invalid for ever.
+/// holds nothing else — a move finishes its journal before it copies
+/// anything — and is removed, not reported as invalid on every pass.
 #[test]
 fn a_record_killed_before_its_journal_was_written_is_removed() {
     let temp = tempfile::tempdir().unwrap();

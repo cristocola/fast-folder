@@ -725,7 +725,7 @@ mod windows_tests {
     /// holds its working folder — keeps the project folder from being
     /// renamed; the Restart Manager cannot see it, the folder's own open can.
     /// Held here by the test itself: a real console has to start and settle
-    /// first, which a busy CI runner did not always do in time (the console
+    /// first, which a busy CI runner does not always do in time (the console
     /// itself is the VM's scenario).
     #[test]
     fn a_folder_held_without_delete_sharing_is_found() {

@@ -3,19 +3,19 @@
 
 use super::*;
 
-/// Copy from a manifest with one reusable bounded buffer. Files are written
-/// directly into private staging, so no sibling `.part` convention exists.
+/// Copy from a manifest into `staging`, each file through a bounded buffer.
+/// Files are written directly at their own paths, so no sibling `.part`
+/// convention exists.
 ///
 /// **Every folder and every link first, then each file once.** A folder the
 /// target's filesystem will not hold — two whose names differ only in case on
 /// a drive that ignores it, a `:` on one that forbids it — is found before a
 /// byte of content moves, and so is a clash between two *file* names, by
 /// asking the target once whether it ignores case and then reading the record
-/// ([`case_clashes`]). Each file is then written exactly once: making every
-/// file empty first and filling it in a second pass, as 3.12.0 did, wrote each
-/// one twice, which on a cloud mount is two uploads — the second cancelling
-/// the first, a thousand times over — and on one that caches nothing, a second
-/// open it refuses.
+/// ([`case_clashes`]). Each file is then written exactly once: a file made
+/// empty and filled in a second pass is written twice, which on a cloud mount
+/// is two uploads — the second cancelling the first — and on one that caches
+/// nothing, a second open it refuses.
 pub fn copy_to_staging(
     manifest: &MoveManifest,
     source: &Path,
@@ -183,10 +183,9 @@ pub const SETTLE_ROUNDS: usize = 3;
 /// look finds nothing the copy does not hold, or [`SETTLE_ROUNDS`] rounds have
 /// caught up. Answers the root `PROJECT_INFO.md` as the last look found it.
 ///
-/// **A change made to a project while it moves is kept.** 3.13 compared the
-/// original with its scan once, after the whole copy, and a dev server's log
-/// line or a temp folder it made and removed failed the move and threw the
-/// copy away. **An original that never holds still does not stop the move
+/// **A change made to a project while it moves is kept**, never a reason to
+/// throw the copy away: a dev server's log line, a temp folder it made and
+/// removed. **An original that never holds still does not stop the move
 /// either** — a dev server appends to its log every tenth of a second: after
 /// the last round the copy is published as it is, consistent with its record,
 /// and what changes in the original from then on is carried into the moved

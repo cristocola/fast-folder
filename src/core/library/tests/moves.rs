@@ -80,8 +80,7 @@ fn staged_move_copies_verifies_commits_and_removes_source() {
 
     // Progress must actually advance, through every step in order. The steps
     // and their counts are the only feedback during a multi-minute network
-    // move, and a step that says nothing — removing the old copy used to run
-    // under "finalizing" with the bar full — looks exactly like a hung one.
+    // move, and a step that says nothing looks exactly like a hung one.
     crate::core::progress::settle(&progress, &cancel, &Ok(()));
     {
         use crate::core::assets::JobPhase;
@@ -270,12 +269,11 @@ fn only_the_cross_device_error_licenses_copy_fallback() {
 /// The staged (copying) move carries a link as a link — and, removing the
 /// original afterwards, never deletes through it.
 ///
-/// This is the data-loss regression the refusal used to guard: a link to an
-/// asset library inside a project, a staged move, and the original removed.
-/// Were the removal to follow the link, the library's own files would go with
-/// it. Reached through the private staged path because the public entry point
-/// only stages after `fs::rename` fails, and a test cannot conjure a second
-/// filesystem.
+/// A link to an asset library inside a project, a staged move, and the
+/// original removed: were the removal to follow the link, the library's own
+/// files would go with it. Reached through the private staged path because
+/// the public entry point only stages after `fs::rename` fails, and a test
+/// cannot conjure a second filesystem.
 #[test]
 fn a_staged_move_carries_a_link_and_never_deletes_through_it() {
     let tmp = tempfile::tempdir().unwrap();
@@ -283,19 +281,15 @@ fn a_staged_move_carries_a_link_and_never_deletes_through_it() {
     write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
     // Join components separately: `join("proj_a/linked")` yields a
     // mixed-separator path on Windows (`...\proj_a/linked`), and `cmd` then
-    // reads `/linked` as a switch — which is precisely how this test came to
-    // "skip" silently while reporting success.
+    // reads `/linked` as a switch.
     let link = base.join("proj_a").join("linked");
     let target = base.join("shared");
     fs::create_dir_all(&target).unwrap();
 
     // A silent skip here would be worse than no test: it reports "ok" while
-    // asserting nothing, which is exactly how the mutation run found that
-    // the transaction scanner's link refusal could be replaced with
-    // `Ok(())` and stay
-    // green. Junctions need no elevation on Windows and symlinks work
-    // normally on Unix, so failing to create one is a real problem — say so
-    // loudly rather than passing.
+    // asserting nothing. Junctions need no elevation on Windows and symlinks
+    // work normally on Unix, so failing to create one is a real problem — say
+    // so loudly rather than passing.
     #[cfg(windows)]
     {
         let out = std::process::Command::new("cmd")
@@ -488,10 +482,10 @@ fn interrupted_staged_move_never_loses_data_at_any_failpoint() {
     }
 }
 
-/// **The incident, without sshfs.** Anything that stops a removal part of the
-/// way — here a read-only folder inside the project — used to leave a husk
-/// that still held `PROJECT_INFO.md`: listed as the project, most of it gone.
-/// The original now leaves the library in one rename, and its retired copy is
+/// **A removal stopped part of the way never leaves a husk** — here by a
+/// read-only folder inside the project. A husk would still hold
+/// `PROJECT_INFO.md` and be listed as the project, most of it gone; the
+/// original leaves the library in one rename, and its retired copy is
 /// removed after, read-only folder and all.
 #[cfg(unix)]
 #[test]

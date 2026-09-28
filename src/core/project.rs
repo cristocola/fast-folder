@@ -58,11 +58,9 @@ pub struct FilePreview {
     pub verbatim: bool,
 }
 
-/// Everything a create preview says, with nothing about how it is drawn.
-///
-/// This is the data 255 lines of `println!` used to compute inline, which meant
-/// the only way to test any of it was to read terminal output — so none of it
-/// was tested. `cli::render` turns this into text; another surface could turn it into
+/// Everything a create preview says, with nothing about how it is drawn, so
+/// what a preview says is tested as data rather than read off a terminal.
+/// `cli::render` turns this into text; another surface could turn it into
 /// JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DryRunReport {
@@ -88,12 +86,10 @@ pub struct DryRunReport {
 pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> DryRunReport {
     // **One walk, one classification, both lists.** The file list and the
     // previews are two answers to one question — "what will this create
-    // write?" — and they were computed from two different sources: this walk,
-    // and the in-memory text buffer, which is every UTF-8 file under `files/`
-    // regardless of `exclude` or `verbatim` because its job is to feed the
-    // editors. So a dry run listed the right files and previewed the wrong
-    // ones. `assets::plan_entries` is now the only thing that decides, and
-    // `copy_template_files` asks it too.
+    // write?" — and `assets::plan_entries` alone decides it, here and in
+    // `copy_template_files`. The in-memory text buffer is every UTF-8 file
+    // under `files/` regardless of `exclude` or `verbatim`, because its job is
+    // to feed the editors; a preview chosen from it previews the wrong files.
     //
     // The walk uses the plan's own context, not a second sample of the clock: a
     // create spanning midnight must not preview a `{date}` in a file name
@@ -191,11 +187,10 @@ pub fn plan_report(plan: &ProjectPlan, template: &Template, config: &Config) -> 
         values,
         id: plan.id_str.clone(),
         counter: (plan.counter_value.saturating_sub(1), plan.counter_value),
-        // The plan's context, not a second sample of the clock. These are the
+        // The plan's context, not a second sample of the clock: these are the
         // `Resolved:` rows — `{date}`, `{YYYY}` — and a create spanning
-        // midnight was able to name one day in them and write another into
-        // every file and folder name, which is the one thing the context
-        // exists to prevent.
+        // midnight must not name one day in them and write another into every
+        // file and folder name.
         date: plan.ctx.date.clone(),
         date_parts: (
             plan.ctx.yyyy.clone(),
@@ -270,7 +265,7 @@ pub fn plan(
     // Resolve ID — one global counter across all templates, whose high-water
     // mark lives inside each base rather than in the data directory (see
     // `Counters`). Self-healing: the floor is the highest value seen in any
-    // base's counter file, the legacy data-dir counter, or the projects
+    // base's counter file, this machine's data-dir counter, or the projects
     // themselves — so a lost, reset or unreachable counter file can never mint
     // an ID that collides with a project already on disk.
     //
@@ -292,8 +287,8 @@ pub fn plan(
     // absolute path; reject the plan before even claiming a project folder.
     validate_rendered_template_paths(template, &vars, &ctx)?;
 
-    // Interpolate folder name. Use `interpolate_name` so empty variables don't
-    // leave `__` gaps or leading/trailing underscores in the folder name.
+    // Interpolate folder name. Use `interpolate_name_with` so empty variables
+    // don't leave `__` gaps or leading/trailing underscores in the folder name.
     // `ProjectFolderName` sanitizes the assembled result as well as the
     // individual variables — the pattern itself can contribute a trailing dot or
     // a literal reserved device name that no single variable is responsible for
@@ -313,9 +308,8 @@ pub fn plan(
 
     let base = config.resolve_base_dir();
 
-    // Advisory collision preview. A pattern need not contain `{id}` — the
-    // bundled templates no longer do, since `{date}` already sorts the library —
-    // so two projects created the same day from the same answers genuinely
+    // Advisory collision preview. A pattern need not contain `{id}`, so two
+    // projects created the same day from the same answers can genuinely
     // resolve to the same name, and the user should see the name they will
     // actually get *before* anything is written.
     //
@@ -374,10 +368,10 @@ fn create_inner(
     //
     // `plan` builds `root_path` as `base.join(folder_name)`, so this holds by
     // construction — until `folder_name` is something `join` treats specially.
-    // `base.join("")` is `base` itself, and its parent is the base's *parent*:
-    // that is how `--name=..` came to create a folder called `_2` one level
-    // above the library. `ProjectFolderName` now refuses those names at the
-    // plan, and this refuses a plan that carries one anyway.
+    // `base.join("")` is `base` itself, and its parent is the base's *parent*,
+    // so a claim would land one level above the library. `ProjectFolderName`
+    // refuses those names at the plan, and this refuses a plan that carries
+    // one anyway.
     let base = config.resolve_base_dir();
     let parent = plan.root_path.parent().unwrap_or(Path::new(""));
     if parent != base.as_path() {
@@ -393,12 +387,12 @@ fn create_inner(
 
     // Claim the project folder with a single atomic operation.
     //
-    // This used to be `exists()` followed by `create_dir_all()`. Because
-    // `create_dir_all` succeeds on a directory that is already there, two
-    // concurrent creates could both pass the check and then both write into the
-    // same folder — the second silently overwriting the first's files and
-    // PROJECT_INFO.md. `create_dir` fails with `AlreadyExists` instead, so the
-    // filesystem itself arbitrates and exactly one caller can ever win.
+    // **`create_dir`, never `exists()` then `create_dir_all()`**: that one
+    // succeeds on a directory that is already there, so two concurrent creates
+    // would both pass the check and then both write into the same folder — the
+    // second silently overwriting the first's files and PROJECT_INFO.md.
+    // `create_dir` fails with `AlreadyExists` instead, so the filesystem itself
+    // arbitrates and exactly one caller can ever win.
     //
     // A naming pattern need not contain `{id}`, so losing that race is an
     // ordinary event rather than an error: walk `name`, `name_2`, `name_3` until
@@ -467,8 +461,8 @@ fn create_inner(
         Err(err) => {
             match crate::util::fs_retry::remove_dir_all(&realized.root_path) {
                 // Said *here* — this is the only code that knows a folder was
-                // removed. `main` used to claim it on every interrupt, including
-                // a Ctrl-C at the menu with nothing in flight.
+                // removed; said on every interrupt, it would claim a rollback
+                // for a Ctrl-C with nothing in flight.
                 Ok(()) => crate::util::diag::note(format!(
                     "rolled back — removed the partial project at {}",
                     crate::util::paths::display_path(&realized.root_path)
@@ -489,8 +483,7 @@ fn create_inner(
 ///
 /// Nothing may sit between the claim and this call: an early return in that gap
 /// would skip the rollback and leak the folder. The `create:after-root-dir`
-/// failpoint lives *here*, inside the protected region, for exactly that reason
-/// — it caught the bug when it was placed one line too early.
+/// failpoint lives *here*, inside the protected region, for exactly that reason.
 fn provision_project(
     plan: &ProjectPlan,
     template: &Template,
@@ -512,16 +505,15 @@ fn provision_project(
 
     // PROJECT_INFO.md goes down FIRST, flagged as in-progress.
     //
-    // It used to be written last, after every file had been copied. Killing a
-    // create mid-copy therefore left a folder with no metadata — and since a
-    // folder is a project only if it has metadata, `recent`, `search`, `reindex`
-    // and `reconcile` were all blind to it. A 500 MB template interrupted at
-    // 60 ms stranded 300 MB that no fastf command could see or clean up.
+    // A folder is a project only if it has metadata, so a create killed
+    // mid-copy with the file still to write leaves a folder `recent`, `search`,
+    // `reindex` and `reconcile` are all blind to, which no fastf command can
+    // see or clean up.
     //
-    // Writing it first inverts that: the project is visible from the moment the
-    // folder exists, and the `provisioning` flag says plainly that it is not
-    // finished. This is a hard error, not a warning — without metadata we would
-    // be recreating the very orphan this is meant to prevent.
+    // Written first, the project is visible from the moment the folder exists,
+    // and the `provisioning` flag says plainly that it is not finished. This is
+    // a hard error, not a warning — without metadata we would be recreating the
+    // very orphan this is meant to prevent.
     crate::core::project_info::write(plan, template, &tags).context("writing project metadata")?;
     crate::core::project_info::mark_provisioning(&plan.root_path)
         .context("flagging project as in-progress")?;
@@ -612,7 +604,7 @@ pub fn run_post_create(
     }
     // No `Result` to unwrap: every individual failure is already a
     // `Note::Warning`, because the project on disk is finished and correct
-    // whatever the editor did. The `Err` arm this used to carry was dead code.
+    // whatever the editor did.
     crate::core::post_create::run(&actions, root, config)
 }
 
@@ -652,8 +644,8 @@ pub fn apply_plan(
 
 /// The render context an apply uses: one clock, and `{id}` from the target's
 /// own `PROJECT_INFO.md` when it has one. A target that is not a project
-/// leaves the token literal, which is what it has always done — `apply` never
-/// touches the counter and must not mint a number of its own.
+/// leaves the token literal: `apply` never touches the counter and must not
+/// mint a number of its own.
 fn apply_context(target: &Path, date_format: &str) -> RenderContext {
     let ctx = RenderContext::now(date_format);
     match crate::core::project_info::read_metadata(target) {
@@ -1008,9 +1000,7 @@ mod tests {
     // -----------------------------------------------------------------------
     // Reports
     //
-    // The dry-run's *content* had no test of any kind, because computing it and
-    // printing it were the same 255 lines: the only way to check what a preview
-    // said was to read terminal output. These check the data.
+    // What a preview says, checked as data rather than as terminal output.
     // -----------------------------------------------------------------------
 
     use crate::core::plan::ProjectPlan;
@@ -1018,12 +1008,9 @@ mod tests {
 
     /// The template, with its `files/` subtree really on disk.
     ///
-    /// It used to be a `Template` built in memory with a `files` buffer and no
-    /// directory at all, which previewed a file. It cannot any more, and that
-    /// is the fix rather than a casualty of it: `files/` on disk **is** the
-    /// create spec, a template with no directory writes nothing, and a preview
-    /// of a file that will not be written is the defect this whole change is
-    /// about. The buffer still supplies the text; the disk decides what exists.
+    /// `files/` on disk **is** the create spec: a template with a `files`
+    /// buffer and no directory writes nothing, so it previews nothing either.
+    /// The buffer supplies the text; the disk decides what exists.
     fn report_template_in(root: &Path) -> Template {
         let files = root.join("files");
         std::fs::create_dir_all(&files).unwrap();

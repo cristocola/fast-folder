@@ -176,7 +176,7 @@ pub enum Transform {
 }
 
 // `PartialEq`/`Eq` so a `DryRunReport` can be compared in a test: a preview is
-// data now, and comparing two of them is how the interpolation is checked.
+// data, and comparing two of them is how the interpolation is checked.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FolderNode {
     pub name: String,
@@ -214,11 +214,9 @@ pub struct FileEntry {
 impl Template {
     /// The `slug/value` tags this template derives from a project's variables.
     ///
-    /// **The one definition.** `project::provision_project` had one and
-    /// `operations::derived_tags` had another, and `operations::replace_auto_tags`
-    /// had a third written backwards — as "every tag under a `tag_from`
-    /// namespace", which is not the same set and is why re-deriving used to
-    /// delete tags nobody asked it to touch.
+    /// **The one definition**: a create, a register and a `tag reauto` all
+    /// derive through it, so re-deriving replaces exactly the set a create
+    /// wrote — never "every tag under a `tag_from` namespace", which is wider.
     ///
     /// `lookup` answers with the project's value for a slug. A slug with no
     /// value, or an empty one, derives nothing: a bare `slug/` is not a tag.
@@ -265,12 +263,10 @@ impl Template {
 
     /// Whether applying this template has any question to ask.
     ///
-    /// **A file that will not be interpolated cannot need a variable.** `apply`
-    /// asked whenever *any* text file had a body at all — the same unfiltered
-    /// buffer the dry-run previews used — so a template whose only text was an
-    /// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
-    /// literally, or a plain README with no token in it, asked a question whose
-    /// answer nothing could use.
+    /// **A file that will not be interpolated cannot need a variable**: an
+    /// `exclude`d `.DS_Store`, a `verbatim` file whose `{braces}` are meant
+    /// literally, or a plain README with no token in it asks nothing, since no
+    /// answer would be used.
     ///
     /// Three things can carry a token: a folder in `structure`, a file's name,
     /// and an interpolated file's body. This asks about exactly those.
@@ -308,10 +304,10 @@ impl Template {
     /// [`load_from_file`](Self::load_from_file), choosing whether to read the
     /// text files under `files/` into the in-memory buffer.
     ///
-    /// Listing templates does not need their contents, and reading every UTF-8
-    /// file of every template to print a name and a description is work nobody
-    /// asked for — `fastf template list`, `fastf id show` and the template
-    /// picker all did it.
+    /// Listing templates does not need their contents: `fastf template list`,
+    /// `fastf id show` and the template picker print a name and a description,
+    /// and reading every UTF-8 file of every template for that is work nobody
+    /// asked for.
     pub fn load_with(path: &Path, buffer: FileBuffer) -> Result<Self> {
         crate::util::trace::hit("template_load");
         let raw = fs::read_to_string(path)
@@ -320,8 +316,6 @@ impl Template {
         // and plenty of other Windows editors add one by default, and the parser
         // then fails with a thoroughly misleading `missing field \`slug\``
         // pointing at line 1 column 2 — while `slug` is sitting right there.
-        // `project_info::split_frontmatter_body` has stripped it for years; the
-        // template loader simply never got the same treatment.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
         let mut t: Self = crate::util::yaml::from_str(raw).with_context(|| {
             format!(
@@ -334,16 +328,13 @@ impl Template {
         // **The directory is the template's identity.** Every lookup in the
         // crate builds `templates/<slug>/template.yaml` from the slug —
         // `find_by_slug` is the only door — so a manifest whose `slug:`
-        // disagrees with the folder it sits in named a template no command
-        // could then open: `fastf template list` printed it and `template
-        // show` answered "not found — run `fastf template list`", pointing at
-        // the list that had just named it.
+        // disagrees with the folder it sits in would name a template `fastf
+        // template list` prints and no command can open.
         //
-        // Worse, a manifest field cannot be unique. Two folders both declaring
-        // `slug: general` both listed, and `find_by_slug` resolved both to
-        // whichever came first — picking the second one previewed and created
-        // the *first* template, with the right id and the wrong files, and no
-        // error anywhere. A directory name is unique by construction.
+        // Worse, a manifest field cannot be unique: two folders both declaring
+        // `slug: general` would both list and both open as whichever came
+        // first, creating from the wrong files with no error anywhere. A
+        // directory name is unique by construction.
         //
         // fastf never writes this state: `save_template` writes to
         // `template_dir(slug)` and renames the old directory first, and
@@ -428,8 +419,8 @@ impl Template {
             }
             // Anything else — EACCES, EIO, a directory where the manifest
             // should be, invalid UTF-8 — is a manifest that exists and could
-            // not be read. Treating that as "new template" wrote a fresh file
-            // over it, discarding every unknown key the user owns. Refuse
+            // not be read. Treating that as "new template" would write a fresh
+            // file over it, discarding every unknown key the user owns. Refuse
             // instead: the failure is recoverable, the overwrite is not.
             Err(err) => {
                 return Err(err).with_context(|| {
@@ -665,9 +656,9 @@ fn validate_structure_at(nodes: &[FolderNode], template_slug: &str, depth: usize
 // Transforms
 // ---------------------------------------------------------------------------
 //
-// These live beside `Transform` rather than in `naming`, which is where they
-// were: `naming` had to import `template` for the enum, and `template` imports
-// `naming` for interpolation, so the two modules each needed the other.
+// These live beside `Transform` rather than in `naming`, so `naming` never
+// imports `template` for the enum and the two modules cannot come to need
+// each other.
 
 /// Apply a transform to a raw string value.
 pub fn apply_transform(value: &str, transform: &Transform) -> String {
@@ -714,10 +705,10 @@ mod tests {
         }
     }
 
-    /// A manifest that exists but cannot be **decoded** is the case where the
-    /// old `Err(_)` arm actually destroyed data: `read_to_string` fails with
-    /// `InvalidData`, the arm called it a new template, and the atomic write
-    /// went straight through — taking every unknown key the user owns with it.
+    /// A manifest that exists but cannot be **decoded** is never replaced:
+    /// `read_to_string` fails with `InvalidData`, and a save that took that for
+    /// a new template would write straight through it — taking every unknown
+    /// key the user owns with it.
     ///
     /// Invalid UTF-8 is the honest fixture for that. No permissions to arrange,
     /// no root-runner exemption, and the file is genuinely replaceable, so the

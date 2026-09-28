@@ -44,11 +44,10 @@ fn cache_round_trips_base_relative() {
 
 /// A cache entry is a hint, and a hint may not name a path outside its base.
 ///
-/// `dir` used to be joined onto the base with no validation: `Path::join`
-/// *replaces* the base when given an absolute path, so `/etc` produced a
-/// "project" at `/etc`. Caches travel with the projects by design, and
-/// overwriting one in place does not bump the base's mtime, so a planted cache
-/// reads as fresh.
+/// `Path::join` *replaces* the base when given an absolute path, so an
+/// unchecked `/etc` would be a "project" at `/etc`. Caches travel with the
+/// projects by design, and overwriting one in place does not bump the base's
+/// mtime, so a planted cache reads as fresh.
 #[test]
 fn a_cache_entry_that_leaves_its_base_is_dropped() {
     let tmp = tempfile::tempdir().unwrap();
@@ -58,7 +57,7 @@ fn a_cache_entry_that_leaves_its_base_is_dropped() {
         "/etc", "../../x", "..", ".", "D:/x", r"D:\x", ".hidden", "a/b", r"a\b",
         "",
         // Not here: "   ". It is a single contained component, and containment
-        // is the rule. If no such directory exists the `is_dir()` check on the
+        // is the rule. If no such directory exists the listing check on the
         // fast path drops it like any other stale entry.
     ];
     for dir in hostile {
@@ -429,9 +428,8 @@ fn cache_staleness_gate_compares_the_right_way_round() {
     assert!(cache_is_stale(base));
 }
 
-/// **Defect 21.** A scan that missed a project wrote its index after the
-/// project arrived, so the index was newer than its base and read as fresh:
-/// the project stayed hidden until a rescan. The index now remembers the
+/// A scan that missed a project can write its index after the project
+/// arrives, so the index is newer than its base. The index remembers the
 /// names its scan saw, and a base holding another name is rescanned —
 /// whatever the times say.
 #[test]
@@ -458,8 +456,8 @@ fn a_project_the_scan_missed_is_found_whatever_the_times_say() {
 }
 
 /// On an rclone base a folder's time reads 2000-01-01 once the mount's
-/// directory cache expires, whatever was added: the time gate never fired
-/// there, and a project copied in from elsewhere stayed invisible.
+/// directory cache expires, whatever was added: the time gate never fires
+/// there, and a project copied in from elsewhere is found by the listing.
 #[cfg(unix)]
 #[test]
 fn a_base_whose_folder_time_never_moves_still_shows_a_new_project() {
@@ -614,7 +612,7 @@ fn empty_created_falls_back_to_the_folder_timestamp() {
 }
 
 /// A drive-root base has no last component, and its label is the whole path
-/// as it reads — the list showed `\\?\S:\` for an rclone drive.
+/// as it reads: `S:\`, never the canonical `\\?\S:\`.
 #[test]
 fn a_root_base_is_labelled_as_it_reads() {
     #[cfg(windows)]

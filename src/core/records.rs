@@ -2,18 +2,18 @@
 //! record is, and when a removed old copy was last seen gone.
 //!
 //! **The record in the target base stays the authority**; this index only
-//! finds it. Reconcile walks the configured bases, so a record anywhere else
-//! was out of its sight: a `copy-to`'s, beside a destination outside every
-//! base, and a move's whose target base was later dropped from `bases`. The
-//! old copy of that move then read as "no record of the move left … delete it
-//! yourself". Written best effort, at `<data dir>/records/<operation>.json`,
-//! read without trusting it: nothing here authorises a removal.
+//! finds it. Reconcile walks the configured bases, and without the index a
+//! record anywhere else is out of its sight: a `copy-to`'s, beside a
+//! destination outside every base, and a move's whose target base was later
+//! dropped from `bases`, whose old copy would then read as having no record.
+//! Written best effort, at `<data dir>/records/<operation>.json`, read without
+//! trusting it: nothing here authorises a removal.
 //!
 //! It also keeps `gone_at` for the **settle**: a cloud mount that uploads in
-//! the background can put a removed folder back a while later (rclone did, on
-//! R2, minutes after a move reported the old copy removed). On such a mount a
-//! removal that ends with the folder gone keeps the record, and the first pass
-//! at least [`SETTLE_SECS`] later that still finds it gone clears it.
+//! the background (rclone) can put a removed folder back minutes later. On
+//! such a mount a removal that ends with the folder gone keeps the record, and
+//! the first pass at least [`SETTLE_SECS`] later that still finds it gone
+//! clears it.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

@@ -245,8 +245,8 @@ impl MoveManifest {
 
     /// Verify exact relative paths, entry types, regular-file lengths and link
     /// targets. Destination modification times are intentionally not compared:
-    /// fastf promises content topology and byte lengths, not metadata
-    /// preservation.
+    /// fastf promises content topology and byte lengths, and keeps times only
+    /// as a best effort (`keep_attributes`).
     ///
     /// Hands back the walk it compared, which is the destination as it is
     /// about to be published.

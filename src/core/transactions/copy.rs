@@ -40,8 +40,7 @@ pub(super) fn copy_contents(
 
 /// Copy one recorded file into place, **keeping its permission bits and its
 /// times**, as `mv` does: both are set on the new file's own handle before it
-/// is synced, so what is published is what was verified. 3.13 kept neither,
-/// and every moved script lost its `+x`.
+/// is synced, so what is published is what was verified.
 ///
 /// **The file is copied as it is now**, and the answer is what was copied —
 /// its size and time from the handle it was read through — so a file changed

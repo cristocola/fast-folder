@@ -5,10 +5,10 @@ use super::*;
 /// Everything a walk of a tree found: what a manifest can hold, and what it
 /// cannot.
 ///
-/// **A walk never stops at an odd entry.** The scan used to: the first link,
-/// socket or unreadable name ended it with that one name, so a tree with three
-/// problems took three attempts to learn about, and an entry the filesystem
-/// lists but cannot examine read as a bare `No such file or directory`.
+/// **A walk never stops at an odd entry**: every problem is recorded beside
+/// what was found, so a refusal names all of them at once, and an entry the
+/// filesystem lists but cannot examine says so instead of reading as a bare
+/// `No such file or directory`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Walk {
     /// Sorted by path.
@@ -201,9 +201,7 @@ pub(crate) fn device_of(_metadata: &fs::Metadata) -> Option<u64> {
 /// dropped and came back (sshfs, rclone) is a new device for every entry
 /// under it, the root's own included. So a folder that disagrees is asked of
 /// the root again, and if the root agrees with it now, that is the same
-/// filesystem remounted, not another. Found by the lab: an sshfs killed
-/// mid-removal came back as a new device, and the removal kept 1352 entries
-/// "on another filesystem".
+/// filesystem remounted, not another.
 pub(crate) struct RootDevice<'r> {
     root: &'r Path,
     device: Mutex<Option<u64>>,
@@ -488,9 +486,8 @@ fn entry_for(
         })?;
     if file_type.is_symlink() {
         // **A link is content: recorded by its target text, never followed.**
-        // It is what `mv` does and what the same-filesystem rename already
-        // did; a dangling link is as good as any, since nothing is read
-        // through it.
+        // It is what `mv` does and what the same-filesystem rename does; a
+        // dangling link is as good as any, since nothing is read through it.
         let kind = link_kind(path, metadata)?;
         let target = fs::read_link(path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::PermissionDenied {

@@ -251,7 +251,7 @@ fn a_cancel_stops_a_removal_and_the_next_pass_finishes_it() {
 }
 
 /// These names are on disk in journals another build has to read, so the
-/// enum must serialize to exactly the strings the eleven literals produced.
+/// enum must serialize to exactly these strings.
 #[test]
 fn incomplete_kinds_serialize_to_their_documented_names() {
     use super::IncompleteKind;

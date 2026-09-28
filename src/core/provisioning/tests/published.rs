@@ -36,11 +36,10 @@ fn cleanup_pending_retries_but_identity_mismatch_never_mutates() {
     assert!(operation.is_dir());
 }
 
-/// **The incident's own state.** 3.11 deleted most of an original in
-/// place and stopped; every pass since said "left source untouched". What
-/// is left is exactly what the move recorded, so it is provably redundant,
-/// and the pass finishes it — rewriting the journal as version 3 before
-/// the rename, so a 3.11 binary cannot then lose track of it.
+/// **An original 3.11 half deleted in place is finished.** What is left is
+/// exactly what the move recorded, so it is provably redundant, and the
+/// pass finishes it — rewriting the journal as version 3 before the
+/// rename, so a 3.11 binary cannot then lose track of it.
 #[cfg(debug_assertions)]
 #[test]
 fn a_311_original_it_half_deleted_is_finished_and_rewritten_first() {
@@ -102,11 +101,11 @@ fn a_311_residue_without_its_project_info_is_finished_too() {
 }
 
 /// **Work written into the original after the scan is kept — in the
-/// moved copy.** 3.13 kept the whole original, listed twice, for ever. The
-/// merge carries a file that exists only there into the moved copy
-/// (within the hour after the publish) and removes the rest. A 3.11 record
-/// is merged as a residue: nothing is written into the moved copy, and
-/// what is new stays in the hidden old copy, with its record, named.
+/// moved copy.** The merge carries a file that exists only there into the
+/// moved copy (within the hour after the publish) and removes the rest. A
+/// 3.11 record is merged as a residue: nothing is written into the moved
+/// copy, and what is new stays in the hidden old copy, with its record,
+/// named.
 #[test]
 fn work_written_into_the_original_after_the_scan_is_kept() {
     for from_311 in [false, true] {
@@ -229,11 +228,9 @@ fn a_file_written_into_the_retired_copy_is_carried_across_within_the_hour() {
     }
 }
 
-/// **An old copy on a mount that does not answer keeps its record.** 3.13
-/// read the error as "gone", cleared the record, and left a folder no
-/// reconcile would touch again ("no record of the move left … delete it
-/// yourself"). Now the pass waits, changes nothing, and the next one that
-/// can look finishes.
+/// **An old copy on a mount that does not answer keeps its record.** An
+/// error is not "gone": the pass waits, changes nothing, and the next one
+/// that can look finishes.
 #[cfg(debug_assertions)]
 #[test]
 fn a_path_that_does_not_answer_keeps_the_record() {
@@ -297,8 +294,7 @@ fn a_source_base_that_is_not_mounted_is_waited_for() {
 /// copies and deletes object by object — leaves part of the original at
 /// its path and part at its retired name. Both are the move's own: the
 /// retired half goes, then what is left of the original, and the record
-/// only after both. 3.13 removed the retired half, cleared the record, and
-/// left the rest listed as the project.
+/// only after both.
 #[test]
 fn a_split_rename_is_finished_on_both_halves() {
     let temp = tempfile::tempdir().unwrap();
@@ -373,9 +369,8 @@ fn a_folder_made_again_before_retired_was_recorded_is_left_alone() {
     assert_eq!(fs::read(source.join("saved-late.txt")).unwrap(), b"late");
 }
 
-/// A record whose publish could not read its own `PROJECT_INFO.md` back
-/// left it out of `published.json`; every 3.13 pass then failed "not in
-/// the copy that was published", for ever.
+/// A record whose publish could not read its own `PROJECT_INFO.md` back,
+/// and so left it out of `published.json`, still finishes.
 #[test]
 fn a_published_record_without_project_info_still_finishes() {
     let temp = tempfile::tempdir().unwrap();
@@ -399,8 +394,7 @@ fn a_published_record_without_project_info_still_finishes() {
 
 /// A moved copy missing entries after the original was retired is
 /// completed from the retired copy — where the original's entries are by
-/// then. 3.13 read the original's old, empty path, so this could never
-/// finish.
+/// then, not at its old, empty path.
 #[test]
 fn a_moved_copy_missing_entries_after_the_retire_is_completed_from_it() {
     let temp = tempfile::tempdir().unwrap();
@@ -422,7 +416,7 @@ fn a_moved_copy_missing_entries_after_the_retire_is_completed_from_it() {
 }
 
 /// **The settle.** On a mount that can put a removed folder back (rclone
-/// did, on R2, minutes after a move said its old copy was removed), the
+/// can, from uploads still queued, minutes after the removal), the
 /// record outlives the removal: a pass inside the settle keeps it without
 /// anyone being told, one after it clears it, and an old copy that came
 /// back is removed by the record that is still there.
@@ -556,11 +550,11 @@ fn an_original_put_back_by_hand_undoes_the_move() {
     assert!(!operation.exists());
 }
 
-/// **The Drive case.** A cloud mount misplaced three uploads while the
-/// staging folder was renamed into place, so the moved copy was published
-/// missing three files. The original is whole and unchanged and holds
-/// them, so reconcile puts them back itself — folder, file and link alike
-/// — and finishes the move. Nobody copies files by hand.
+/// A cloud mount can misplace uploads while a 3.12.0 record's staging
+/// folder is renamed into place, so the moved copy is published missing
+/// files. The original is whole and unchanged and holds them, so reconcile
+/// puts them back itself — folder, file and link alike — and finishes the
+/// move. Nobody copies files by hand.
 #[test]
 fn a_moved_copy_missing_entries_is_completed_from_the_original() {
     let temp = tempfile::tempdir().unwrap();
@@ -663,10 +657,10 @@ fn a_moved_copy_older_than_published_keeps_the_originals_version() {
     assert!(transaction.operation_dir.is_dir(), "with its record");
 }
 
-/// **What the Drive run left.** A 3.12.0 record whose original is gone,
-/// and whose old staging folder holds two files the mount uploaded there
-/// after the rename — the one durable copy of each. They are moved into
-/// place, never deleted, and only then does the record go.
+/// A 3.12.0 record whose original is gone, and whose old staging folder
+/// holds two files the mount uploaded there after the rename — the one
+/// durable copy of each. They are moved into place, never deleted, and
+/// only then does the record go.
 #[test]
 fn files_a_mount_left_in_an_old_records_staging_are_moved_into_place() {
     let temp = tempfile::tempdir().unwrap();

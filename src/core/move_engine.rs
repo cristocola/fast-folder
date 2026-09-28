@@ -6,7 +6,8 @@
 //!
 //! **The invariant, restated because it is the whole point: the source is never
 //! removed until the destination is fully copied and verified** — and then it
-//! leaves the library in one rename, never by being deleted where it stands
+//! leaves the library in one step, renamed aside or, on a cloud mount, its
+//! `PROJECT_INFO.md` removed first, never by being deleted where it stands
 //! (`move_cleanup`).
 
 use anyhow::{Context, Result};
@@ -31,7 +32,7 @@ use crate::core::transactions::{self, MoveManifest, MovePhase, MoveTransaction, 
 pub enum SourceOutcome {
     /// Gone: renamed on the same filesystem, or retired and removed.
     Removed,
-    /// Out of the library in one rename — the move is done — and its old
+    /// Out of the library in one step — the move is done — and its old
     /// copy at `path` is being removed, as housekeeping after the data lock
     /// is released. What a move says the moment it is done; the removal's
     /// own outcome replaces it ([`finish_housekeeping`]).
@@ -157,7 +158,7 @@ impl MoveOutcome {
 
 /// Move a project folder into another base directory, keeping its folder name.
 ///
-/// The historical compatibility shape, kept for library callers: it holds the
+/// The compatibility shape, kept for library callers: it holds the
 /// coarse data lock, revalidates the recorded source base and identity beneath
 /// it, and runs with throwaway progress/cancel handles. Applications use
 /// [`move_project_configured_with_outcome`], which also revalidates the target
@@ -165,10 +166,10 @@ impl MoveOutcome {
 ///
 /// **Safety invariant: the source is never removed until the destination is
 /// fully copied AND verified.** Same-filesystem moves take an instant, atomic
-/// `fs::rename`. Cross-filesystem / network moves use a private v2 transaction
-/// below the target base, verify exact path/type/size topology plus a second
-/// source metadata scan, atomically publish the staging directory, and only
-/// then remove the source.
+/// `fs::rename`. Cross-filesystem / network moves keep a record below the
+/// target base, copy to the final path with `PROJECT_INFO.md` last, settle
+/// the copy against the original and verify exact path/type/size topology,
+/// publish by writing that one file, and only then retire the source.
 pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
@@ -337,9 +338,9 @@ fn move_project_unlocked_in_parts(
 
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
-    // It also preserves links perfectly, because nothing is copied, so the link
-    // refusal in the transaction scanner deliberately applies only to the
-    // staged fallback.
+    // It also preserves links perfectly, because nothing is copied, so the
+    // scan's refusals (a link it cannot carry, a special entry) deliberately
+    // apply only to the staged fallback.
     // Deliberately NOT `fs_retry::rename`: this call is *expected* to fail on a
     // cross-device move, and that failure is the signal to take the staged path.
     // Retrying would add the full backoff to every cross-drive move for nothing.
@@ -447,17 +448,6 @@ pub const MOVE_STEPS: &[JobPhase] = &[
     JobPhase::Clearing,
 ];
 
-/// The staged cross-filesystem move body. All pre-publication state lives in
-/// one exclusively-created operation directory; cancellation or an ordinary
-/// error before publication removes exactly that directory and leaves the
-/// source untouched.
-///
-/// **Cancel is honoured up to the publish and not after it** — not even by
-/// the publish's own one-file copy, which used to poll the flag and could
-/// stop the moment that makes the copy the project. From there on the moved
-/// copy is the project; setting the original aside and removing it are
-/// housekeeping, run with a ticker that cannot cancel, and a surface answers a
-/// late cancel with "too late" ([`Progress::committed`]).
 /// The whole staged move in one call, for the tests and the test-only entry
 /// point that force the staged path.
 #[cfg(any(test, debug_assertions))]
@@ -578,7 +568,18 @@ pub(crate) fn resume_in_parts(
 }
 
 /// The staged move's body, from a record just begun — or, when `adopt`, from
-/// a paused one whose copy is taken over.
+/// a paused one whose copy is taken over. Before publication there is only
+/// the record, one exclusively created operation directory, and the
+/// unpublished copy at its final path; a cancellation or an ordinary error
+/// before publication removes exactly those and leaves the source untouched.
+///
+/// **Cancel is honoured up to the publish and not after it** — not even by
+/// the publish's own one-file copy, which is handed a flag nobody sets: a
+/// stop there would interrupt the moment that makes the copy the project.
+/// From there on the moved copy is the project; setting the original aside
+/// and removing it are housekeeping, run with a ticker that cannot cancel,
+/// and a surface answers a late cancel with "too late"
+/// ([`Progress::committed`]).
 fn staged_in_parts(
     project: &Project,
     new_base: &Path,
@@ -805,7 +806,7 @@ fn staged_in_parts(
     };
 
     // A power loss must not keep the retire below and lose the publish above:
-    // they are on different filesystems, and each one's rename is only
+    // they are on different filesystems, and each one's new entry is only
     // durable once its folder is.
     move_cleanup::sync_dir(new_base);
     transactions::keep_folder_attributes(&manifest, &project.path, new_path);

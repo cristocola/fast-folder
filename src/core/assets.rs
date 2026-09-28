@@ -24,10 +24,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// sense and would blow up memory.
 pub const TEXT_MAX_BYTES: u64 = 1024 * 1024;
 
-/// A single deferred file copy (always a verbatim byte copy). Creates no longer
-/// defer anything, but [`crate::core::provisioning`] still reads create journals
-/// a pre-v2 binary may have left on a shared drive, and the staged move builds
-/// its own jobs.
+/// A single deferred file copy (always a verbatim byte copy). Creates defer
+/// nothing; [`crate::core::provisioning`] builds one for each copy owed by a
+/// create journal a fastf before v2.0.0 left on a shared drive.
 #[derive(Debug, Clone)]
 pub struct CopyJob {
     pub src: PathBuf,
@@ -38,14 +37,11 @@ pub struct CopyJob {
 /// Live progress of a long job: a create's resumed copies, a move, a copy out
 /// of the library, a reconcile.
 ///
-/// **Every step is named and counted as it happens.** A move used to report
-/// only its copy: the scan, both verification walks, the checks before the
-/// original is set aside and the removal of the old copy — ten minutes of API
-/// calls on a cloud mount — all ran under one "finalizing" with a full bar.
-/// Now each step is a [`JobPhase`], [`Self::step_done`] of [`Self::step_total`]
-/// moves for every entry it touches, and [`Self::finished`] keeps what each
-/// finished step counted. [`crate::core::progress::Ticker`] is how the engine
-/// writes it.
+/// **Every step is named and counted as it happens**, since a step after the
+/// copy can take ten minutes of API calls on a cloud mount: each step is a
+/// [`JobPhase`], [`Self::step_done`] of [`Self::step_total`] moves for every
+/// entry it touches, and [`Self::finished`] keeps what each finished step
+/// counted. [`crate::core::progress::Ticker`] is how the engine writes it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Progress {
@@ -119,9 +115,6 @@ pub struct FinishedStep {
 }
 
 /// Where a background job has got to.
-///
-/// Was a `String` set by literal at fifteen call sites, which is exactly as many
-/// chances to write `"canceled"`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
@@ -160,10 +153,11 @@ pub enum JobPhase {
     Verifying,
     /// Writing `PROJECT_INFO.md` last, which makes the copy the project.
     Publishing,
-    /// Checking the original is what was moved, then renaming it out of the
-    /// library in one step.
+    /// Checking the original is the project that was moved, then taking it
+    /// out of the library in one step: renamed aside, or on a cloud mount its
+    /// `PROJECT_INFO.md` removed.
     SettingAside,
-    /// Checking the set-aside copy is still what was moved.
+    /// Walking the moved copy, once, for the merge that removes the old copy.
     Checking,
     /// Removing the set-aside copy, entry by entry.
     Removing,
@@ -440,11 +434,9 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
 /// What a walked entry actually is.
 ///
 /// An enum rather than a pair of bools on purpose: adding a variant makes the
-/// compiler point at every consumer that must decide what to do with it. `walk`
-/// used to silently drop anything that was not a plain file or directory, which
-/// is how a cross-filesystem move came to delete a project's junctions — the
-/// copy skipped them, and the verification, built on the same walk, was blind to
-/// the very same entries on both sides.
+/// compiler point at every consumer that must decide what to do with it.
+/// **`walk` drops no entry**, whatever its kind: an entry a copy skips is one a
+/// verification built on the same walk is blind to, on both sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     Dir,
@@ -473,15 +465,12 @@ pub struct AssetEntry {
     /// Path relative to the walk root, forward-slash separated,
     /// **uninterpolated**, and **lossy** for a name that is not valid UTF-8.
     ///
-    /// This is the *textual* form: globs, `SafeRelativePath` and the browser's
-    /// JSON all reason about names as text and always have. Never join it to
-    /// open or create a file — use [`Self::os_rel`], which is exact.
+    /// This is the *textual* form: globs and `SafeRelativePath` reason about
+    /// names as text. Never join it to open or create a file — a name that is
+    /// not valid UTF-8 would open a `?`-substituted path that does not exist.
+    /// Use [`Self::os_rel`], which is exact.
     pub rel: String,
     /// The same path as the filesystem actually spells it.
-    ///
-    /// `rel` was the only form, so a template file whose name is not valid
-    /// UTF-8 was opened at a `?`-substituted path that does not exist — the copy
-    /// failed with "file not found" naming a path the user never wrote.
     pub os_rel: PathBuf,
     pub kind: EntryKind,
     pub size: u64,
@@ -618,18 +607,17 @@ pub fn interp_rel_os(
 /// [`interp_rel`] against a prepared context — see [`crate::core::naming::RenderContext`].
 ///
 /// **A component is only interpolated when it contains a token**, exactly as
-/// [`interp_rel_os`] has always done, so the two agree by construction for
-/// every UTF-8 path.
+/// in [`interp_rel_os`], so the two agree by construction for every UTF-8
+/// path.
 ///
 /// The separator collapse in `interpolate_name_with` is there for one job: an
 /// empty optional variable must take its leftover `_` or `-` with it rather
 /// than leaving a dangling one. A component with no `{` has no variable that
 /// could have vanished, so there is nothing to clean up and its name is meant
-/// literally. Running it through anyway rewrote names nobody had asked to
-/// change — `pkg/__init__.py` was *listed* as `pkg/init_.py` while the copy
-/// wrote the real one, and in `apply` the same collapsed name is what
-/// `entry_exists` is probed with, so the plan could report `[create]` for a
-/// file already on disk and `[skip]` for one it was about to write.
+/// literally. Collapsed anyway, `pkg/__init__.py` is *listed* as
+/// `pkg/init_.py` while the copy writes the real one, and `apply` probes
+/// `entry_exists` with the collapsed name, so its plan reports `[create]` for
+/// a file already on disk and `[skip]` for one it is about to write.
 pub fn interp_rel_with(
     rel: &str,
     vars: &HashMap<String, String>,
@@ -730,16 +718,12 @@ pub struct PlannedEntry<'a> {
 }
 
 /// Resolve a walked `files/` subtree against a template's globs: **the one
-/// place that decides what happens to a template file.**
-///
-/// The rule used to be written three times — in the copy, in the dry run's file
-/// list, and in `apply`'s plan — and the dry run's *previews* were a fourth
-/// place that had no rule at all. It iterated the in-memory text buffer, which
-/// is every UTF-8 file under `files/` because its job is to feed the editors,
-/// so an `exclude`d file was previewed with a body it would never have and a
-/// `verbatim` file was previewed with its `{braces}` filled in — the exact
-/// opposite of what the copy writes. `docs/cli.md` promises "the preview is
-/// built by the same code the commit runs"; this is what makes that true.
+/// place that decides what happens to a template file.** The copy, the dry
+/// run's file list and previews, and `apply`'s plan all read it, which is what
+/// makes `docs/cli.md`'s "the preview is built by the same code the commit
+/// runs" true. A preview must never iterate the in-memory text buffer instead:
+/// it holds every UTF-8 file under `files/`, so an `exclude`d file would
+/// preview a body it never gets and a `verbatim` one its `{braces}` filled in.
 ///
 /// One [`PlannedEntry`] per walked entry, `Skipped` included, so a caller that
 /// counts entries — a failpoint, a progress bar — still sees them all. It is
@@ -793,8 +777,7 @@ pub fn plan_entries<'a>(
 /// `dest_root` is the tree the copy must stay inside, and `rel` is the path
 /// beneath it: the two are joined here, through
 /// [`crate::util::paths::contained_destination`], immediately before the write.
-/// Passing an
-/// already-joined path would have skipped exactly the check that matters —
+/// An already-joined path would skip exactly the check that matters —
 /// `create_dir_all` walks straight through an existing `docs -> /outside`.
 pub fn copy_file(
     src: &Path,
@@ -991,9 +974,8 @@ mod tests {
         assert!(!link.is_file() && !link.is_dir());
     }
 
-    /// A file at exactly the interpolation cap is still interpolated; one past it
-    /// is copied verbatim. The threshold ordering itself is a compile-time
-    /// assertion next to the constants.
+    /// A text file under the interpolation cap is interpolated, however large;
+    /// one forced verbatim keeps its `{braces}`.
     #[test]
     fn text_cap_decides_interpolate_versus_verbatim() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1030,7 +1012,7 @@ mod tests {
 
         // A comfortably large — but still under the cap — text file must also be
         // interpolated. A README of a few hundred KB is ordinary in a template,
-        // and shipping it with raw `{tokens}` would be a silent regression.
+        // and shipping it with raw `{tokens}` would fail in silence.
         let big = tmp.path().join("big.md");
         let body = format!("{}\n# {{name}}\n", "filler line\n".repeat(20_000));
         fs::write(&big, &body).unwrap();
@@ -1135,10 +1117,8 @@ mod tests {
     /// The collapse exists so an empty optional variable does not leave a
     /// dangling `_` behind; a component with no `{` in it has no variable to
     /// vanish, so there is nothing to clean up and the name is meant
-    /// literally. `interp_rel_os` — the one the copy actually writes through —
-    /// has always worked that way; `interp_rel_with`, which every *preview*
-    /// goes through, did not, so `pkg/__init__.py` was listed as
-    /// `pkg/init_.py` and written as `pkg/__init__.py`.
+    /// literally — in `interp_rel_with`, which every *preview* goes through,
+    /// as in `interp_rel_os`, which the copy writes through.
     #[test]
     fn a_component_with_no_token_is_left_exactly_as_written() {
         let mut vars = HashMap::new();
@@ -1162,8 +1142,8 @@ mod tests {
         );
     }
 
-    /// The invariant the fix establishes, and the one worth pinning: the path
-    /// a preview renders and the path the copy writes are the same path.
+    /// The path a preview renders and the path the copy writes are the same
+    /// path.
     #[test]
     fn the_previewed_name_is_the_written_name() {
         let mut vars = HashMap::new();
@@ -1188,9 +1168,9 @@ mod tests {
         }
     }
 
-    /// The names a job's progress is written with. Nothing on disk holds them
-    /// yet; once a job runs in its own process they are what every other fastf
-    /// reads, so a rename is a format change, not a refactor.
+    /// The names a job's progress is written with. A job's state file holds
+    /// them and every other fastf reads them, so a rename is a format change,
+    /// not a refactor.
     #[test]
     fn job_status_and_phase_serialize_to_stable_names() {
         use super::{JobPhase, JobStatus};

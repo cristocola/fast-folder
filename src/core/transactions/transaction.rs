@@ -588,7 +588,8 @@ pub(crate) fn same_bytes(one: &Path, other: &Path) -> bool {
 /// created exclusively a moment ago, so a name is free; and on a cloud mount
 /// a rename is what a background upload can misplace. A crash mid-write
 /// leaves a file that does not parse, which recovery reports and never acts
-/// on.
+/// on — unless it is a `move.json` alone in its record (`is_bare_record`),
+/// which is removed.
 pub(crate) fn write_record_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let raw = serde_json::to_string_pretty(value)
         .with_context(|| format!("serializing {}", path.display()))?;

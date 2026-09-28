@@ -1,12 +1,12 @@
 //! Copying a project to somewhere outside the library.
 //!
 //! A copy is a move that keeps its source: the same manifest scan, the same
-//! private staging, the same exact path/type/size verification, the same atomic
-//! publish — and then nothing, because the source was never the thing being
-//! given up. `move_engine` and this module share
-//! [`transactions`] rather than each other, so the
-//! one invariant they both live by is stated in one place: **a destination is
-//! published only after it has been copied and verified in full.**
+//! copy made at its final path, the same exact path/type/size verification, the
+//! same publish of `PROJECT_INFO.md` last — and then nothing, because the source
+//! was never the thing being given up. `move_engine` and this module share
+//! [`transactions`] rather than each other, so the one invariant they both live
+//! by is stated in one place: **a destination is published only after it has
+//! been copied and verified in full.**
 //!
 //! **The copy keeps its ID.** It is the same project on another drive, and the
 //! base is what tells two of them apart — which is why the destination may not
@@ -153,9 +153,10 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
     Ok(target)
 }
 
-/// The staged body. Everything before publication lives in one exclusively
-/// created operation directory under the destination; a cancellation or a
-/// failure removes exactly that and leaves both ends untouched.
+/// The staged body. Before publication there is only the record, one
+/// exclusively created operation directory under the destination, and the
+/// unpublished copy at its final path; a cancellation or a failure removes
+/// exactly those and leaves the source untouched.
 fn copy_unlocked(
     project: &Project,
     target: &Path,

@@ -258,8 +258,7 @@ pub(super) fn is_stranded_case_rename(name: &str, path: &Path) -> bool {
 /// back, and a failed rollback says where it left it. A hard kill or a power
 /// loss reaches neither, and the project is then parked under a dot-prefixed
 /// name that `scan_base` skips — invisible to `recent`, `search`, `reindex`,
-/// `resolve` and the app, with nothing anywhere recording that it happened. It
-/// was the one multi-step mutation in the crate with no recovery story.
+/// `resolve` and the app, with nothing anywhere recording that it happened.
 ///
 /// Finishing forward rather than rolling back is the only option and the right
 /// one: the staging name carries the *target*, and the name the project had
@@ -289,11 +288,10 @@ fn reconcile_case_rename(base: &Path, name: &str, path: &Path, report: &mut Reco
             // The base's cache has to learn, exactly as the create arm's resume
             // does. Leaving it to the staleness gate is not enough: a rename
             // within a directory does not reliably move that directory's mtime
-            // on Windows, and `write_cache` deliberately re-stamps the index
+            // on Windows, and `write_index` deliberately re-stamps the index
             // *after* the rename that publishes it — so a cache written a
             // moment ago can still read as current, and the project stays
-            // missing from a library it has just been put back into. Found by
-            // the Windows leg of CI, on Linux's own green run.
+            // missing from a library it has just been put back into.
             crate::core::library::refresh_cache(&destination);
             report.restored += 1;
         }

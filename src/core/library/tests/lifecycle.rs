@@ -2,9 +2,9 @@
 
 use super::*;
 
-/// Renaming only the capitalisation is legitimate and used to be refused:
-/// `exists()` is case-insensitive on Windows, so the target "already
-/// existed" — it was the source.
+/// Renaming only the capitalisation is legitimate, though `exists()` is
+/// case-insensitive on Windows and the target "already exists" — it is the
+/// source.
 #[test]
 fn rename_allows_case_only_change() {
     let tmp = tempfile::tempdir().unwrap();
@@ -267,8 +267,8 @@ fn unregister_and_delete_guard_rails() {
 }
 
 /// `fastf delete` removes the project and never what a link in it points at:
-/// its removal walks the tree itself now, so the guard std's `remove_dir_all`
-/// gave for free is this test's to keep.
+/// its removal walks the tree itself, not through std's `remove_dir_all`, so
+/// the guard std would give for free is this test's to keep.
 #[test]
 fn a_delete_never_removes_what_a_link_points_at() {
     let tmp = tempfile::tempdir().unwrap();

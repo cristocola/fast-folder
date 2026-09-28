@@ -494,8 +494,8 @@ fn started_in_its_scope(child: &mut std::process::Child, id: &str) -> bool {
 /// std's `Command` asks for inheritance whenever it sets the child's stdio. A
 /// command run with its output captured through a pipe — `$(fastf move …
 /// --detach)`, a test harness — has an inheritable pipe as its stdout, so the
-/// worker held it open, and whoever read the command's output waited until the
-/// job ended. Found on CI's Windows runner; a console never shows it.
+/// worker would hold it open, and whoever reads the command's output would wait
+/// until the job ends. A console never shows it.
 #[cfg(windows)]
 struct StdHandlesNotInherited(Vec<(*mut std::ffi::c_void, u32)>);
 
@@ -685,9 +685,8 @@ pub struct Live {
 
 /// Whether `operation` is a live job's own: made by its worker, or claimed —
 /// or made by any fastf still running on this machine, whichever data dir it
-/// works in (`util::process`): a second data dir's reconcile once discarded a
-/// live move's copy while it was being written, because this data dir's jobs
-/// were all it asked.
+/// works in (`util::process`): a reconcile that asked only its own data dir's
+/// jobs would discard a live move's copy while it is being written.
 pub fn owned_by(operation: &str, live: &Live) -> bool {
     if live.operations.contains(operation) {
         return true;

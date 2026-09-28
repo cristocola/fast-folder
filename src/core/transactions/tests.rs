@@ -82,12 +82,10 @@ fn make_dir_link(link: &Path, target: &Path) -> bool {
     }
 }
 
-/// The data-loss regression, now guarded where the invariant lives. A
-/// junction inside a project was once invisible to the walk, so a staged
-/// move copied around it, verification walked the same blind way and
-/// reported success, and the source was deleted. A link is now recorded by
-/// its target — never followed, never silently omitted — so what is behind
-/// it is neither copied nor, when the original is removed, deleted.
+/// A link inside a project is recorded by its target — never followed,
+/// never silently omitted — so what is behind it is neither copied nor,
+/// when the original is removed, deleted. A walk blind to it would copy
+/// around it, verify the same blind way, and delete the source.
 #[test]
 fn scan_records_a_link_by_its_target_and_never_follows_it() {
     let temp = tempfile::tempdir().unwrap();
@@ -231,7 +229,7 @@ fn a_link_the_mount_will_not_read_names_the_option() {
 fn a_refused_link_is_said_in_words() {
     let refusal = link_refusal(&std::io::Error::from_raw_os_error(libc::EPERM));
     assert!(refusal.contains("cannot hold links"), "{refusal}");
-    // What an rclone mount answers without `--links`, found on a real one.
+    // What an rclone mount answers without `--links`.
     let refusal = link_refusal(&std::io::Error::from_raw_os_error(libc::EIO));
     assert!(refusal.contains("--links"), "{refusal}");
 }
@@ -465,8 +463,8 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-/// A tree with several things a move cannot take used to be refused one
-/// name at a time: fix the first, run again, meet the second.
+/// A tree with several things a move cannot take is refused with every one
+/// of them named, not one name at a time.
 #[cfg(unix)]
 #[test]
 fn a_scan_names_every_problem_not_just_the_first() {
@@ -495,10 +493,9 @@ fn a_scan_names_every_problem_not_just_the_first() {
     assert!(error.contains("socket, pipe or device"), "{error}");
 }
 
-/// The incident's first message was `classifying …: No such file or
-/// directory` — true, and no help. An entry the folder lists but `lstat`
-/// cannot examine is now named as exactly that, and a folder that cannot
-/// be listed at all is named as that.
+/// An entry the folder lists but `lstat` cannot examine is named as exactly
+/// that, never as a bare `No such file or directory`, and a folder that
+/// cannot be listed at all is named as that.
 #[cfg(unix)]
 #[test]
 fn entries_that_cannot_be_examined_or_listed_are_named_as_such() {
@@ -651,11 +648,6 @@ fn a_partly_removed_tree_is_a_residue_and_an_edited_one_is_not() {
     assert!(!edited.is_residue(), "{edited:?}");
 }
 
-/// Every name the target will not hold is found before any content is
-/// copied, and named together. A name already taken in a staging folder
-/// fastf made empty is how a case-insensitive drive refuses `README` beside
-/// `readme`; planting the clash is how a test on a case-sensitive one gets
-/// there.
 /// Every folder the target will not hold is found before any content is
 /// copied, and named together; a file name it will not hold is found when
 /// the file is reached, named the same way, still before anything is
@@ -998,8 +990,8 @@ fn the_parallel_walk_finds_what_one_thread_finds() {
 
 /// **A change made while a project moves is kept.** A file appended to, a
 /// file removed, a folder made — each found by the next look and brought
-/// across, where 3.13 failed the move after the whole copy and threw the
-/// copy away. A file changed before its copy is copied as it is then.
+/// across, never a reason to throw the copy away. A file changed before its
+/// copy is copied as it is then.
 #[test]
 fn what_changes_during_the_copy_is_copied_too() {
     let temp = tempfile::tempdir().unwrap();

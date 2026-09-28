@@ -2,19 +2,19 @@
 //! deleted project, a copy that was never published.
 //!
 //! Not `std::fs::remove_dir_all`: that stops at the first error, and on unix
-//! silently steps over an entry it cannot find, which is the pair that left
-//! the 3.11 husk. This carries on past a failure (everything here is already
-//! somewhere else, or was asked to go), gives a folder it may not write its
-//! owner's permission back, **never follows a link or crosses onto another
-//! filesystem**, and — given the move's record — takes only entries still
-//! exactly as it records them.
+//! silently steps over an entry it cannot find — together they leave a husk
+//! the library still lists. This carries on past a failure (everything here
+//! is already somewhere else, or was asked to go), gives a folder it may not
+//! write its owner's permission back, **never follows a link or crosses onto
+//! another filesystem**, and — given the move's record — takes only entries
+//! still exactly as it records them.
 //!
 //! **On the pool** (`util::pool`), because on a cloud mount each removal is a
-//! request: 3.13 removed an old copy from R2 at about 120 ms an entry, one at
-//! a time. Folders are listed and their entries taken by several workers at
-//! once; each entry is examined and removed by the same worker, one right
-//! after the other, so nothing changes between the look that allows a removal
-//! and the removal. The folders go last, deepest first, a level at a time.
+//! request, about 120 ms an entry on R2 one at a time. Folders are listed and
+//! their entries taken by several workers at once; each entry is examined and
+//! removed by the same worker, one right after the other, so nothing changes
+//! between the look that allows a removal and the removal. The folders go
+//! last, deepest first, a level at a time.
 //!
 //! Three calls an entry at most: its share of a listing, one `lstat`, one
 //! unlink. What is left is counted only when something is.
@@ -110,10 +110,9 @@ impl Judge for Recorded<'_> {
 /// records them; anything else is kept, and so is every folder above it.
 ///
 /// `ticker` counts every entry removed — on a cloud mount each one is an API
-/// call, and 1473 of them took ten minutes that used to show as nothing — and
-/// a cancel it honours stops the removal where it is; what is left is a
-/// redundant leftover the next reconcile finishes. The caller starts the
-/// step, since it knows the total.
+/// call, ten minutes for 1473 of them — and a cancel it honours stops the
+/// removal where it is; what is left is a redundant leftover the next
+/// reconcile finishes. The caller starts the step, since it knows the total.
 pub(crate) fn remove_tree(
     root: &Path,
     recorded: Option<&MoveManifest>,
@@ -786,8 +785,7 @@ mod tests {
     }
 
     /// A removal is `Removed` only when the folder is provably gone: a mount
-    /// that answers the last look with an error has not said so. 3.13 took
-    /// the error for "gone" and cleared the record.
+    /// that answers the last look with an error has not said so.
     #[cfg(debug_assertions)]
     #[test]
     fn a_removal_is_not_done_until_the_folder_is_provably_gone() {

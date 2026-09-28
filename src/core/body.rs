@@ -7,11 +7,11 @@
 //! `- [ ] text` and `- [x] text` — and, in a file written before v3.6.0, a
 //! `## Journal` section that held the notes then and keeps holding them now.
 //!
-//! **One grammar, read by the writer and the reader alike.** `notes_span`
-//! is where the notes are, for `append_journal_entry` and `notes_in` both;
-//! `section_span` is where any section is. The two halves had a definition
-//! each once, and a note the writer put past the point the reader stopped at
-//! was written, confirmed, and never seen again.
+//! **One grammar, read by the writer and the reader alike.** `section_span`
+//! is where any section is, for every writer and reader here; `notes_span`
+//! is where `append_journal_entry` puts a note, always inside a section
+//! `notes_in` reads. With a definition each, a note the writer puts past the
+//! point the reader stops at is written, confirmed, and never seen again.
 //!
 //! **The reader never fails and never drops a line it could show.** A
 //! heading is matched wherever it starts a line, in any case, with or without
@@ -216,9 +216,10 @@ pub(crate) fn section_span(content: &str, section: Section) -> Option<Range<usiz
     start.map(|from| base + from..content.len())
 }
 
-/// Where the notes are: the `## Journal` section if the file has one — a
+/// Where a new note goes: the `## Journal` section if the file has one — a
 /// file written before v3.6.0 keeps its shape, byte for byte — else the
-/// `## Notes` section. **Read by the writer and the reader alike.**
+/// `## Notes` section. `notes_in` reads both, so what is written here is
+/// read back.
 fn notes_span(content: &str) -> Option<Range<usize>> {
     section_span(content, Section::Journal).or_else(|| section_span(content, Section::Notes))
 }
@@ -1333,7 +1334,7 @@ mod tests {
             format!("{bare}\n## Todo\n\n### Setup\n- [ ] first\n")
         );
 
-        // And the phaseless append is what it always was.
+        // And with no phase, the task goes at the end of the section.
         let (_d, path) = file(&grouped);
         add_todo_in(&path, "last", None).unwrap();
         assert_eq!(
@@ -1738,8 +1739,8 @@ mod tests {
 
     #[test]
     fn add_todo_in_is_add_todos_in_with_one_text() {
-        // `add_todo_in` is one text through `add_todos_in` now; the bytes it
-        // writes and the words it refuses with are the ones it always had.
+        // `add_todo_in` is `add_todos_in` with one text: the same bytes
+        // written, the same words refused with.
         let shapes = [
             doc("## Todo\n\n- [x] read the order\n\n### Setup\n- [x] download\n\n### Other\n"),
             doc("## Todo\n## Archive\n"),

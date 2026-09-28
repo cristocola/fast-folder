@@ -613,13 +613,11 @@ fn staged_in_parts(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
-    mut transaction: MoveTransaction,
+    transaction: MoveTransaction,
     adopt: bool,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
-    use std::sync::atomic::Ordering;
-
     let ticker = Ticker::new(progress, cancel);
     ticker.plan(MOVE_STEPS);
     let old_base = crate::util::paths::canonical(&project.base).with_context(|| {
@@ -629,19 +627,87 @@ fn staged_in_parts(
         )
     })?;
     ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
-    // Who works in the folder: asked after the scan, which Windows needs —
-    // it asks about each file and folder the scan found.
-    let mut holders = crate::core::holders::Holders::default();
-    // Set once the copy is there to keep: a mount that stops answering from
-    // then on pauses the move instead of throwing the copy away.
-    let mut claimed = false;
-    let mut published = false;
-    // Set the moment the publish starts writing. A publish whose write then
-    // reports an error may still have landed — a `sync_all` that fails after
-    // the bytes did — and a `PROJECT_INFO.md` at the destination makes that
-    // folder the project, whatever the error said.
-    let mut publishing = false;
-    let pre_publication = (|| -> Result<(MoveManifest, MoveManifest)> {
+    let staged = Staged {
+        project,
+        old_base: &old_base,
+        new_base,
+        new_path,
+        progress,
+        cancel,
+        ticker,
+    };
+    let mut reached = Reached::default();
+    let pre_publication = staged.copy_and_publish(&transaction, adopt, &mut reached);
+
+    // A publish that reported an error but left its file behind is a publish:
+    // rolling it back would remove a folder that is already the project, and
+    // clearing the record would leave both copies listed with nothing tying
+    // them together. The record stays, and the move ends as published.
+    if !reached.published
+        && reached.publishing
+        && !crate::util::paths::presence(&new_path.join(project_info::RESERVED_FILENAME))
+            .is_absent()
+    {
+        reached.published = true;
+    }
+    match pre_publication {
+        Ok((manifest, published_record)) => {
+            staged.retire(transaction, &manifest, &published_record, &reached.holders)
+        }
+        Err(error) => staged.after_a_failure(transaction, &reached, error),
+    }
+}
+
+/// One staged move: what is moved, where to, and whom it tells.
+#[derive(Clone, Copy)]
+struct Staged<'a> {
+    project: &'a Project,
+    old_base: &'a Path,
+    new_base: &'a Path,
+    new_path: &'a Path,
+    progress: &'a Mutex<Progress>,
+    cancel: &'a AtomicBool,
+    ticker: Ticker<'a>,
+}
+
+/// How far a staged move has come, which decides what a failure undoes.
+#[derive(Default)]
+struct Reached {
+    /// Who works in the folder: asked after the scan, which Windows needs —
+    /// it asks about each file and folder the scan found.
+    holders: crate::core::holders::Holders,
+    /// Set once the copy is there to keep: a mount that stops answering from
+    /// then on pauses the move instead of throwing the copy away.
+    claimed: bool,
+    /// Set the moment the publish starts writing. A publish whose write then
+    /// reports an error may still have landed — a `sync_all` that fails after
+    /// the bytes did — and a `PROJECT_INFO.md` at the destination makes that
+    /// folder the project, whatever the error said.
+    publishing: bool,
+    published: bool,
+}
+
+impl Staged<'_> {
+    /// Everything up to and including the publish: scan, probe, copy, settle
+    /// and verify, then `PROJECT_INFO.md`. Answers the original's manifest and
+    /// the record of what was published.
+    fn copy_and_publish(
+        &self,
+        transaction: &MoveTransaction,
+        adopt: bool,
+        reached: &mut Reached,
+    ) -> Result<(MoveManifest, MoveManifest)> {
+        use std::sync::atomic::Ordering;
+
+        let Self {
+            project,
+            old_base,
+            new_base,
+            progress,
+            cancel,
+            ticker,
+            ..
+        } = *self;
         ticker.phase(JobPhase::Scanning, 0);
         ticker.working_in(&project.path);
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
@@ -650,14 +716,14 @@ fn staged_in_parts(
         // move its writes would land in the old copy, which then goes — or,
         // on Windows, holding anything in it, which keeps the old copy from
         // ever being set aside?
-        holders = crate::core::holders::in_manifest(&project.path, &manifest);
-        if let Some(refusal) = holders.refusal() {
+        reached.holders = crate::core::holders::in_manifest(&project.path, &manifest);
+        if let Some(refusal) = reached.holders.refusal() {
             anyhow::bail!("{refusal}");
         }
         // Can the original be taken out of its base afterwards, and does the
         // target have the room?
         crate::core::move_preflight::probe_source_base(
-            &old_base,
+            old_base,
             &project.path,
             &transaction.journal.operation_id,
         )?;
@@ -686,7 +752,7 @@ fn staged_in_parts(
         } else {
             (transaction.claim_staging()?, Vec::new())
         };
-        claimed = true;
+        reached.claimed = true;
         let kept_paths: std::collections::HashSet<PathBuf> =
             kept.iter().map(|entry| entry.path.clone()).collect();
         let to_copy = body.without_paths(&kept_paths);
@@ -714,7 +780,7 @@ fn staged_in_parts(
         );
         ticker.working_in(&project.path);
         let verified = transactions::settle_record_verify(
-            &transaction,
+            transaction,
             &mut body,
             &project.path,
             &staging,
@@ -736,7 +802,7 @@ fn staged_in_parts(
         }
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
-        publishing = true;
+        reached.publishing = true;
         transactions::publish(&manifest, &project.path, &staging, progress).with_context(|| {
             format!(
                 "publishing '{}' in {}",
@@ -745,7 +811,7 @@ fn staged_in_parts(
             )
         })?;
         crate::util::faults::check("move:after-publish-write")?;
-        published = true;
+        reached.published = true;
         let metadata_path = Path::new(project_info::RESERVED_FILENAME);
         // The file was written a moment ago; a mount that fails one lstat may
         // answer the next. Without the entry, the checks before the old
@@ -770,164 +836,190 @@ fn staged_in_parts(
         }
         let published_record = transaction.write_published(&staged)?;
         Ok((manifest, published_record))
-    })();
-
-    // A publish that reported an error but left its file behind is a publish:
-    // rolling it back would remove a folder that is already the project, and
-    // clearing the record would leave both copies listed with nothing tying
-    // them together. The record stays, and the move ends as published.
-    if !published
-        && publishing
-        && !crate::util::paths::presence(&new_path.join(project_info::RESERVED_FILENAME))
-            .is_absent()
-    {
-        published = true;
     }
-    let (manifest, published_record) = match pre_publication {
-        Ok(records) => records,
-        // A mount that stopped answering for longer than fastf waits, once
-        // there is a copy to keep: paused, not thrown away.
-        Err(error)
-            if !published
-                && claimed
-                && !cancel.load(Ordering::Relaxed)
-                && crate::util::fs_retry::class_of(&error)
-                    == Some(crate::util::fs_retry::ErrorClass::NotConnected) =>
-        {
-            let paused = transaction.mark_paused();
-            let why = format!(
-                "paused: the move of {} stopped hearing from its filesystem for {} minutes \
+
+    /// What a failure undoes: nothing once the copy is published, the owned
+    /// transaction before that — or, when the mount stopped answering with a
+    /// copy there to keep, nothing but a pause.
+    fn after_a_failure(
+        &self,
+        transaction: MoveTransaction,
+        reached: &Reached,
+        error: anyhow::Error,
+    ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
+        use std::sync::atomic::Ordering;
+
+        let Self {
+            project,
+            new_base,
+            new_path,
+            progress,
+            cancel,
+            ..
+        } = *self;
+        match error {
+            // A mount that stopped answering for longer than fastf waits, once
+            // there is a copy to keep: paused, not thrown away.
+            error
+                if !reached.published
+                    && reached.claimed
+                    && !cancel.load(Ordering::Relaxed)
+                    && crate::util::fs_retry::class_of(&error)
+                        == Some(crate::util::fs_retry::ErrorClass::NotConnected) =>
+            {
+                let paused = transaction.mark_paused();
+                let why = format!(
+                    "paused: the move of {} stopped hearing from its filesystem for {} minutes \
                  ({error:#}); what it copied is kept, and it goes on from there when you \
                  move it again, or with `fastf reconcile` once the mount is back",
-                project.id,
-                crate::util::fs_retry::MOUNT_WAIT.as_secs() / 60
-            );
-            return match paused {
-                Ok(()) => Err(anyhow::Error::new(Paused(why))),
-                Err(marker) => match transaction.remove() {
-                    Ok(()) => Err(error).context(format!(
-                        "and the pause could not be recorded ({marker:#}), so the copy was \
+                    project.id,
+                    crate::util::fs_retry::MOUNT_WAIT.as_secs() / 60
+                );
+                match paused {
+                    Ok(()) => Err(anyhow::Error::new(Paused(why))),
+                    Err(marker) => match transaction.remove() {
+                        Ok(()) => Err(error).context(format!(
+                            "and the pause could not be recorded ({marker:#}), so the copy was \
                          discarded"
-                    )),
-                    Err(cleanup) => Err(error).context(format!(
-                        "also could not remove the owned transaction: {cleanup:#}"
-                    )),
-                },
-            };
-        }
-        Err(error) if !published => {
-            return match transaction.remove() {
+                        )),
+                        Err(cleanup) => Err(error).context(format!(
+                            "also could not remove the owned transaction: {cleanup:#}"
+                        )),
+                    },
+                }
+            }
+            error if !reached.published => match transaction.remove() {
                 Ok(()) => Err(error),
                 Err(cleanup) => Err(error).context(format!(
                     "also could not remove the owned transaction: {cleanup:#}"
                 )),
-            };
-        }
-        Err(error) => {
-            // Publication is a point of no return. Preserve the transaction and
-            // return a truthful successful outcome: the source is untouched.
-            let moved = moved_view(project, new_base, new_path);
-            let copied = {
-                let state = progress.lock().unwrap_or_else(|error| error.into_inner());
-                (state.total_files, state.total_bytes)
-            };
-            return Ok((
-                MoveOutcome {
-                    project: moved,
-                    source: SourceOutcome::KeptWhole {
-                        reason: format!("{error:#}"),
+            },
+            error => {
+                // Publication is a point of no return. Preserve the transaction and
+                // return a truthful successful outcome: the source is untouched.
+                let moved = moved_view(project, new_base, new_path);
+                let copied = {
+                    let state = progress.lock().unwrap_or_else(|error| error.into_inner());
+                    (state.total_files, state.total_bytes)
+                };
+                Ok((
+                    MoveOutcome {
+                        project: moved,
+                        source: SourceOutcome::KeptWhole {
+                            reason: format!("{error:#}"),
+                        },
+                        staged: true,
+                        copied: Some(copied),
+                        links: 0,
+                        notes: Vec::new(),
                     },
-                    staged: true,
-                    copied: Some(copied),
-                    links: 0,
-                    notes: Vec::new(),
-                },
-                None,
-            ));
-        }
-    };
-
-    // A power loss must not keep the retire below and lose the publish above:
-    // they are on different filesystems, and each one's new entry is only
-    // durable once its folder is. The copy's own folders are synced where the
-    // original is set aside (`move_cleanup::set_aside`).
-    move_cleanup::sync_dir(new_base);
-    transactions::keep_folder_attributes(&manifest, &project.path, new_path);
-    let mut moved: Option<Project> = None;
-    let mut housekeeping = None;
-    let fate = if let Err(error) = crate::util::faults::check("move:after-publication")
-        .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
-    {
-        SourceFate::KeptWhole {
-            reason: format!("{error:#}"),
-        }
-    } else if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
-        SourceFate::KeptWhole {
-            reason: format!("the cleanup could not be recorded ({error:#})"),
-        }
-    } else if let Err(error) = crate::util::faults::check("move:before-source-cleanup")
-        .and_then(|()| revalidate_recorded_project(project).map(drop))
-    {
-        SourceFate::KeptWhole {
-            reason: format!("{error:#}"),
-        }
-    } else {
-        let cleanup = Cleanup {
-            manifest: &manifest,
-            published: Some(&published_record),
-            source: &project.path,
-            final_path: new_path,
-            project_id: &project.id,
-            residue_allowed: false,
-            split: false,
-            reappeared: false,
-            ticker: ticker.uncancellable(),
-        };
-        match move_cleanup::set_aside(transaction, &cleanup, || {
-            moved = Some(finish_move_bookkeeping(
-                project, &old_base, new_base, new_path,
-            ));
-        }) {
-            move_cleanup::SetAside::Settled(fate) => fate,
-            move_cleanup::SetAside::Retired(transaction) => {
-                let old = move_cleanup::Housekeeping::old_copy(*transaction, &cleanup);
-                let path = old.path();
-                housekeeping = Some(old);
-                // Not a fate the cleanup reached: the move is done, and the
-                // old copy's removal is the caller's to run.
-                SourceFate::Leftover {
-                    path,
-                    reason: String::new(),
-                    redundant: true,
-                }
+                    None,
+                ))
             }
         }
-    };
+    }
 
-    let source = match (&housekeeping, fate) {
-        (Some(_), SourceFate::Leftover { path, .. }) => SourceOutcome::SetAside { path },
-        (_, fate) => SourceOutcome::from_fate(fate),
-    };
-    let moved = moved.unwrap_or_else(|| moved_view(project, new_base, new_path));
-    let copied = {
-        let state = progress.lock().unwrap_or_else(|error| error.into_inner());
-        (state.total_files, state.total_bytes)
-    };
-    Ok((
-        MoveOutcome {
-            project: moved,
-            source,
-            staged: true,
-            copied: Some(copied),
-            links: manifest.total_links(),
-            notes: manifest
-                .link_notes(&project.path)
-                .into_iter()
-                .chain(holders.notes())
-                .collect(),
-        },
-        housekeeping,
-    ))
+    /// The copy is published: the original leaves the library, and what is
+    /// left of it is the caller's housekeeping.
+    fn retire(
+        &self,
+        mut transaction: MoveTransaction,
+        manifest: &MoveManifest,
+        published_record: &MoveManifest,
+        holders: &crate::core::holders::Holders,
+    ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
+        let Self {
+            project,
+            old_base,
+            new_base,
+            new_path,
+            progress,
+            ticker,
+            ..
+        } = *self;
+
+        // A power loss must not keep the retire below and lose the publish above:
+        // they are on different filesystems, and each one's new entry is only
+        // durable once its folder is. The copy's own folders are synced where the
+        // original is set aside (`move_cleanup::set_aside`).
+        move_cleanup::sync_dir(new_base);
+        transactions::keep_folder_attributes(manifest, &project.path, new_path);
+        let mut moved: Option<Project> = None;
+        let mut housekeeping = None;
+        let fate = if let Err(error) = crate::util::faults::check("move:after-publication")
+            .and_then(|()| crate::util::faults::check("move:after-commit-before-source-removal"))
+        {
+            SourceFate::KeptWhole {
+                reason: format!("{error:#}"),
+            }
+        } else if let Err(error) = transaction.set_phase(MovePhase::CleanupPending) {
+            SourceFate::KeptWhole {
+                reason: format!("the cleanup could not be recorded ({error:#})"),
+            }
+        } else if let Err(error) = crate::util::faults::check("move:before-source-cleanup")
+            .and_then(|()| revalidate_recorded_project(project).map(drop))
+        {
+            SourceFate::KeptWhole {
+                reason: format!("{error:#}"),
+            }
+        } else {
+            let cleanup = Cleanup {
+                manifest,
+                published: Some(published_record),
+                source: &project.path,
+                final_path: new_path,
+                project_id: &project.id,
+                residue_allowed: false,
+                split: false,
+                reappeared: false,
+                ticker: ticker.uncancellable(),
+            };
+            match move_cleanup::set_aside(transaction, &cleanup, || {
+                moved = Some(finish_move_bookkeeping(
+                    project, old_base, new_base, new_path,
+                ));
+            }) {
+                move_cleanup::SetAside::Settled(fate) => fate,
+                move_cleanup::SetAside::Retired(transaction) => {
+                    let old = move_cleanup::Housekeeping::old_copy(*transaction, &cleanup);
+                    let path = old.path();
+                    housekeeping = Some(old);
+                    // Not a fate the cleanup reached: the move is done, and the
+                    // old copy's removal is the caller's to run.
+                    SourceFate::Leftover {
+                        path,
+                        reason: String::new(),
+                        redundant: true,
+                    }
+                }
+            }
+        };
+
+        let source = match (&housekeeping, fate) {
+            (Some(_), SourceFate::Leftover { path, .. }) => SourceOutcome::SetAside { path },
+            (_, fate) => SourceOutcome::from_fate(fate),
+        };
+        let moved = moved.unwrap_or_else(|| moved_view(project, new_base, new_path));
+        let copied = {
+            let state = progress.lock().unwrap_or_else(|error| error.into_inner());
+            (state.total_files, state.total_bytes)
+        };
+        Ok((
+            MoveOutcome {
+                project: moved,
+                source,
+                staged: true,
+                copied: Some(copied),
+                links: manifest.total_links(),
+                notes: manifest
+                    .link_notes(&project.path)
+                    .into_iter()
+                    .chain(holders.notes())
+                    .collect(),
+            },
+            housekeeping,
+        ))
+    }
 }
 
 fn finish_move_bookkeeping(

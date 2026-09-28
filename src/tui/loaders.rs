@@ -685,8 +685,38 @@ fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             Some(Entry { name, is_dir })
         })
-        .take(LISTING_LIMIT)
         .collect();
+    // Sorted, then cut: cut first, a folder of more than the limit shows
+    // whichever entries the filesystem happened to list first.
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(LISTING_LIMIT);
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder of more entries than the pane lists shows the first of them
+    /// in the pane's own order, folders first: sorted, then cut.
+    #[test]
+    fn a_long_listing_is_sorted_before_it_is_cut() {
+        let temp = tempfile::tempdir().unwrap();
+        for n in 0..LISTING_LIMIT + 50 {
+            std::fs::write(temp.path().join(format!("take_{n:04}.wav")), "x").unwrap();
+        }
+        std::fs::create_dir(temp.path().join("zz_renders")).unwrap();
+
+        let listed = listing(temp.path()).unwrap();
+        assert_eq!(listed.len(), LISTING_LIMIT);
+        assert_eq!(listed[0].name, "zz_renders", "folders first");
+        let files: Vec<&str> = listed[1..]
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let wanted: Vec<String> = (0..LISTING_LIMIT - 1)
+            .map(|n| format!("take_{n:04}.wav"))
+            .collect();
+        assert_eq!(files, wanted, "then the first files by name");
+    }
 }

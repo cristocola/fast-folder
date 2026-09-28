@@ -96,9 +96,8 @@ pub fn describe(t: &Template) -> Vec<String> {
     }
 
     // The buffer holds every UTF-8 file under `files/`, because its job is to
-    // feed the editors — `exclude` is not its business, and it was not applied
-    // here either, so a `*.tmp` a create never writes was listed as one of the
-    // template's files.
+    // feed the editors — `exclude` is not its business. It is applied here, or
+    // a `*.tmp` a create never writes is listed as one of the template's files.
     let listed: Vec<&str> = t
         .files
         .iter()
@@ -168,11 +167,11 @@ pub fn describe(t: &Template) -> Vec<String> {
 /// The files under `files/` that reach a project as bytes: everything the text
 /// buffer does not hold, minus everything the copy drops.
 ///
-/// **It listed files that are never copied**, under a heading promising they
-/// are copied byte-for-byte. A root `PROJECT_INFO.md` is stripped from
-/// `t.files` (fastf owns that name) and skipped by every copy path, so it was
-/// absent from the buffer, present on disk, and named here as a bundled asset;
-/// an `exclude`d binary was listed for the same reason.
+/// **Never a file that is not copied**, under a heading promising it is copied
+/// byte-for-byte. A root `PROJECT_INFO.md` is stripped from `t.files` (fastf
+/// owns that name) and skipped by every copy path, so it is absent from the
+/// buffer and present on disk, and would read as a bundled asset; so would an
+/// `exclude`d binary.
 fn bundled_assets(t: &Template) -> Vec<String> {
     let known: std::collections::HashSet<&str> = t.files.iter().map(|f| f.path.as_str()).collect();
     let mut out: Vec<String> = crate::core::assets::walk(&t.files_dir())
@@ -251,7 +250,8 @@ pub type FromFolderReport = crate::core::template_import::FromFolderReport;
 /// by tests). Text files are reproduced into `files/`;
 /// binary/large files are bundled byte-for-byte only when `bundle_assets` is set
 /// (otherwise they are skipped). The generated template can be edited like any
-/// other — via `fastf template edit <slug>`, the browser editor, or on disk.
+/// other — via `fastf template edit <slug>`, the guided app's builder, or on
+/// disk.
 pub fn from_folder(
     source: &str,
     slug: &str,

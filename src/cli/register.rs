@@ -58,9 +58,9 @@ pub enum PinfoConflict {
 /// the trailing bucket, so a flag means the same thing wherever it was typed.
 ///
 /// The constraints live here rather than only in clap's attributes because
-/// `trailing_var_arg` hides everything after the path from clap: `requires` and
-/// `conflicts_with` simply do not see those tokens. That is how
-/// `register <path> --dry-run` came to write the folder for real.
+/// `trailing_var_arg` hides everything after an undeclared token from clap:
+/// `requires` and `conflicts_with` simply do not see those tokens, and
+/// `register <path> --artist=X --dry-run` would write the folder for real.
 #[derive(Default, Debug)]
 pub struct RegisterFlags {
     pub recursive: bool,
@@ -224,10 +224,8 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
 /// What registering one folder would name it, and where its ID comes from.
 ///
 /// Print-free and terminal-free, so the CLI's rename confirmation and the
-/// guided app's preview are the same computation. They were not: the app's
-/// bridge asked its own prompt, and the ID in the question came from a different
-/// expression than the one the commit used — `..._ID0001` offered,
-/// `..._ID0011` written.
+/// guided app's preview are the same computation, and the ID in the question
+/// is the one the commit writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenamePlan {
     /// The ID this registration would carry.
@@ -434,7 +432,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         on_pinfo_conflict,
     })?;
 
-    // Success summary — mirrors `project::print_success` layout.
+    // Success summary — mirrors `render::print_success` layout.
     let project = &outcome.project;
     println!("\n{}  {}", "✓".green().bold(), "Project registered".bold());
     println!("  {} {}", "Template:".dimmed(), project.template_name);
@@ -464,9 +462,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 pub struct RecursiveArgs {
     pub base: PathBuf,
     pub template_slug: Option<String>,
-    /// Raw variable values applied to every child. Empty is the ordinary case;
-    /// they were dropped entirely before, so a template with required variables
-    /// could not be used for bulk onboarding at all.
+    /// Raw variable values applied to every child. Empty is the ordinary case.
     pub vars: HashMap<String, String>,
     pub use_today: bool,
     pub dry_run: bool,
@@ -556,13 +552,10 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
         }
     }
     println!();
-    // **The summary counts both, and registering nothing is not a success.**
-    // Every failure was an `eprintln!` and the tail printed `✓ Registered 0
-    // folders.` and returned `Ok(())` regardless — so a base whose children
-    // were all unwritable, or all already held a `PROJECT_INFO.md` that
-    // `--on-conflict skip` refused, gave a script a clean exit for a run that
-    // onboarded nothing. A flag that cannot be obeyed is an error, and so is a
-    // pass that did nothing it was asked to.
+    // **The summary counts both, and registering nothing is not a success**: a
+    // base whose children were all skipped must not give a script a clean exit
+    // for a run that onboarded nothing. A flag that cannot be obeyed is an
+    // error, and so is a pass that did nothing it was asked to.
     println!(
         "{}  Registered {} folder{}{}.",
         if registered == 0 {
@@ -634,7 +627,7 @@ fn desired_rename(
 ///
 /// Precedence:
 /// 1. `override_date` ("YYYY-MM-DD") → `YYYY-MM-DDT00:00:00Z`.
-/// 2. `use_today` → `library::now_iso8601()`.
+/// 2. `use_today` → `util::time::now_iso8601()`.
 /// 3. fs `created()` → fallback to `modified()` → fallback to `now`.
 ///
 /// Pure function (no Counters/Config dependency) so tests can exercise every

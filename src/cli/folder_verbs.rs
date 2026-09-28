@@ -1,5 +1,5 @@
 //! `fastf rename`, `fastf unregister`, `fastf delete` — the three verbs on a
-//! project's folder that the guided app had and the command line did not.
+//! project's folder, on the command line as in the guided app.
 //!
 //! Each resolves a query the way `open`/`copy`/`path` do (an ambiguous one
 //! gets the picker), asks its question the way the app asks it — a name to
@@ -150,7 +150,7 @@ pub fn delete(query: &str, yes: bool, detach: bool) -> Result<()> {
         }
     }
     // A job of its own: removing a large folder on a cloud mount takes
-    // minutes, and the project is out of the library in one rename before it.
+    // minutes, and the project leaves the library in one step before it.
     let item = crate::core::jobs::JobItem::of(&project, None)?;
     match crate::cli::jobs::start(crate::core::jobs::JobKind::Delete, vec![item], detach)? {
         crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),

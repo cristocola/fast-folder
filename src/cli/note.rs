@@ -52,9 +52,9 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
     }
 
     // `resolve_editor()`, not the raw field: an unset `editor` (the default)
-    // must fall back to $EDITOR, exactly as post-create does. Passing the raw
-    // field made the documented "omit the message to open your editor" mode fail
-    // with `launching editor ''` on every default install.
+    // must fall back to $EDITOR, exactly as post-create does, or the documented
+    // "omit the message to open your editor" mode fails with `launching editor
+    // ''` on every default install.
     let message = resolve_message(
         args.message.as_deref(),
         &cfg.resolve_editor(),
@@ -133,8 +133,8 @@ pub fn notes(args: NotesArgs) -> Result<()> {
     println!();
     for note in &filtered {
         // `get`, not a byte slice: a hand-edited PROJECT_INFO.md can put any
-        // text where the timestamp goes, and slicing to 10 bytes panicked
-        // mid-character on the first multi-byte one.
+        // text where the timestamp goes, and slicing to 10 bytes panics
+        // mid-character on a multi-byte one.
         let date = note
             .timestamp
             .as_deref()
@@ -188,11 +188,8 @@ fn resolve_message(raw: Option<&str>, editor: &str, cwd: Option<&Path>) -> Resul
     }
 }
 
-/// A scratch file that removes itself however the function exits.
-///
-/// The old path was a predictable `/tmp/fastf-note-<pid>.txt` written with
-/// `fs::write`, which follows a symlink someone else planted there, and which
-/// leaked whenever the editor exited non-zero.
+/// A scratch file that removes itself however the function exits, an editor
+/// that exits non-zero included.
 struct ScratchFile(std::path::PathBuf);
 
 impl Drop for ScratchFile {
@@ -211,15 +208,10 @@ impl Drop for ScratchFile {
 /// and a collision just means trying again.
 ///
 /// The handle is dropped here rather than returned. Exclusivity is decided at
-/// the moment of creation, and keeping the handle open for as long as the
-/// editor ran added nothing to it — but on Windows it was a sharing violation
-/// waiting to happen: a handle open for writing forbids any later open that
-/// does not grant `FILE_SHARE_WRITE`, and Notepad, like most Win32 editors,
-/// saves by reopening the file for writing with `FILE_SHARE_READ` alone. Every
-/// save failed. Notepad answered with a Save As dialog opened in fastf's
-/// working directory — the install folder under `Program Files`, from the
-/// Start Menu shortcut, where the second attempt was refused as well — and
-/// the note never reached the journal.
+/// the moment of creation, and on Windows a handle open for writing forbids any
+/// later open that does not grant `FILE_SHARE_WRITE`: Notepad, like most Win32
+/// editors, saves by reopening the file for writing with `FILE_SHARE_READ`
+/// alone, so every save would fail and the note never reach the journal.
 fn create_scratch_file() -> Result<ScratchFile> {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};

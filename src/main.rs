@@ -903,13 +903,9 @@ enum IdAction {
     Reset,
 }
 
-/// `template from-folder`'s long help, with the skipped directories read from
-/// the list itself.
-///
-/// The list was written out here by hand and had drifted: nine of the twelve
-/// were named, so a source tree with a `venv/`, a `.next/` or a `.DS_Store` had
-/// them vanish from the generated template with nothing in the help or the docs
-/// accounting for it.
+/// `template from-folder`'s long help, with the skipped names read from the
+/// list the scan uses: a list written out here by hand drifts from it, and a
+/// name the scan skips then goes unmentioned.
 fn from_folder_help() -> String {
     format!(
         "Walks the folder, turning every directory into a FolderNode and every\n\
@@ -1005,9 +1001,9 @@ fn main() {
 ///
 /// **The claim that this is that window rides on argv, not on the environment.**
 /// `FASTF_RELAUNCHED` is inherited, so a shell inside the window has it and so
-/// does everything typed into that shell — and `fastf completions bash` in a
-/// package build then stopped and waited for an Enter nobody was there to
-/// press. `cli::terminal::relaunched_window` reads the `--relaunched` flag the
+/// does everything typed into that shell — so `fastf completions bash` in a
+/// package build would stop and wait for an Enter nobody is there to press.
+/// `cli::terminal::relaunched_window` reads the `--relaunched` flag the
 /// relaunch put on this process's own command line, which nothing inherits.
 ///
 /// After `restore_terminal` and in cooked mode, so there is no ordering hazard
@@ -1049,10 +1045,10 @@ fn is_config_parse_failure(rendered: &str) -> bool {
 /// Take `--relaunched` off the command line, recording it, before clap sees it.
 ///
 /// It is fastf's own bookkeeping — `util::relaunch` writes it, `cli::terminal`
-/// reads it — and declaring it as a clap argument put it in front of users:
+/// reads it — and declared as a clap argument it would be in front of users:
 /// `hide` keeps a flag out of `--help` and the man pages but **not** out of the
-/// generated shell completions, so `fastf --<TAB>` offered it. Off argv here, it
-/// exists on no surface at all.
+/// generated shell completions, so `fastf --<TAB>` would offer it. Off argv
+/// here, it exists on no surface at all.
 ///
 /// Only in the first position, which is exactly where `relaunch::build` puts it:
 /// anywhere else it is a word the user typed, and clap should refuse it as it
@@ -1274,11 +1270,10 @@ fn run() -> Result<()> {
             extra,
         }) => {
             let classified = classify_for("register", extra)?;
-            // clap's `requires`/`conflicts_with` only see flags written *before*
-            // the path; `trailing_var_arg` swallows anything after it. So the
-            // flags are merged first and the constraints checked on the merged
-            // set — `fastf register X --dry-run` used to be dropped silently and
-            // the folder written for real.
+            // clap's `requires`/`conflicts_with` never see a flag that lands in
+            // the trailing bucket — everything after the first undeclared token.
+            // So the flags are merged first and the constraints checked on the
+            // merged set; `RegisterFlags::validate` is the authority.
             let mut flags = cli::register::RegisterFlags {
                 recursive,
                 dry_run,
@@ -1394,9 +1389,9 @@ fn run() -> Result<()> {
 /// Sort one subcommand's trailing bucket, using **that subcommand's own clap
 /// declarations** as the list of flags to recognize.
 ///
-/// Reading the list from clap is the point: the hand-written recognizer knew
-/// five flags, `register` declares none of them, and every register flag typed
-/// after the path was reported "unrecognized" and dropped.
+/// Reading the list from clap is the point: a list written out here drifts
+/// from the declarations, and a flag it misses works before the positional
+/// and is refused after it.
 fn classify_for(subcommand: &str, extra: Vec<String>) -> Result<cli::extra::ClassifiedExtra> {
     use clap::CommandFactory;
     let command = Cli::command();
@@ -1465,10 +1460,10 @@ mod tests {
             .collect()
     }
 
-    /// The guard that replaces the old "three coordinated edits" rule: declare a
-    /// flag in clap, handle it in that command's `apply_extra`, and this test
-    /// catches the case you forget. Before it, a flag added to clap kept working
-    /// before the positional and silently did nothing after it.
+    /// Adding a flag is two steps — declare it in clap, handle it in that
+    /// command's `apply_extra` — and this test catches a forgotten second step,
+    /// which would leave the flag working before the positional and refused
+    /// after it.
     #[test]
     fn every_declared_flag_is_handled_after_the_positional() {
         let mut new_args = fastf::cli::new::NewArgs {

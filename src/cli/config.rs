@@ -214,8 +214,8 @@ fn parse_usize(value: &str) -> Result<usize> {
 /// nothing — conjuring a missing base would plant an empty directory over a
 /// mount point and shadow the drive it stands for.
 ///
-/// Shared with the TUI's Library bases menu so there is one validator rather
-/// than two that can drift.
+/// Shared with the settings screen's library bases so there is one validator
+/// rather than two that can drift.
 pub fn normalize_base_entry(raw: &str) -> Result<String> {
     let expanded = crate::core::config::expand_base_path(raw)?;
     if !expanded.is_dir() {
@@ -236,8 +236,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
     // `config set` calls each write back their own copy of the whole file and
-    // one update is silently lost. A release-mode test caught this; the debug
-    // build happened to be slow enough to serialize the processes by luck.
+    // one update is silently lost.
     let mut said = String::new();
     crate::core::operations::update_config(|config| {
         said = apply(config, key, value)?;
@@ -258,9 +257,9 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
         match normalized.as_str() {
             "base_dir" => {
                 // Same validation as first-run onboarding — see
-                // `config::resolve_base_dir_input`. Storing the raw string let a
-                // quoted `~/Projects` become a literal directory named `~`, and a
-                // relative path scatter projects wherever the command ran.
+                // `config::resolve_base_dir_input`. A raw string would make a
+                // quoted `~/Projects` a literal directory named `~`, and a
+                // relative path would scatter projects wherever the command ran.
                 let resolved = crate::core::config::resolve_base_dir_input(value)?;
                 config.base_dir = crate::util::paths::storable(&resolved, "the base directory")?;
                 format!(
@@ -316,9 +315,8 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     }
                 )
             }
-            // A setting in v3.6.0, retired when the app stopped asking the
-            // terminal for the mouse at all. Accepted and ignored for the
-            // reason `show_banner` and `show_frame` are.
+            // A v3.6.0 setting; the app never takes the mouse. Accepted and
+            // ignored for the reason `show_banner` and `show_frame` are.
             "mouse" => format!(
                 "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
             ),
@@ -402,10 +400,9 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                     format!("Set bases = {}", config.bases.join(", "))
                 }
             }
-            // `recent-default-limit` was the name while it also sized a menu
-            // page; the app scrolls, so it is only the `recent` default now.
-            // The old key keeps parsing — a config file that names it must not
-            // start failing at a major version.
+            // `recent-default-limit` is the key's name before v3.0.0, when it
+            // also sized a menu page. It keeps parsing: a config file that
+            // names it must not start failing.
             "recent_limit" | "recent_default_limit" => {
                 let n = parse_usize(value)?;
                 if n == 0 {
@@ -419,8 +416,8 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
                 if trimmed.is_empty() {
                     bail!("register_naming_pattern cannot be empty");
                 }
-                // `{name}` and `{id}` are the safety net — without them the pattern
-                // would silently rename multiple registered folders to the same path.
+                // `{id}` is the safety net — without it the pattern would
+                // silently rename several registered folders to the same path.
                 if !trimmed.contains("{id}") {
                     bail!(
                         "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",

@@ -55,11 +55,11 @@ pub fn run(args: SearchArgs) -> Result<()> {
 
     // **A clause that cannot mean what it looks like is refused, not run.**
     // `query::parse` never rejects a term — a script may pass anything, and a
-    // bare word is a free-text search — so `created<tomorrow` parsed as a
-    // lexicographic compare against `2026-…` and matched *every* project, while
-    // `created>`, `tag:` and `=x` printed "No projects match" and exited 0. The
-    // guided app's search bar has refused all of these by name since it was
-    // written; this is the same question, asked once, from the other surface.
+    // bare word is a free-text search — so `created<tomorrow` would be a
+    // lexicographic compare against `2026-…` that matches *every* project, and
+    // `created>`, `tag:` and `=x` would print "No projects match" and exit 0.
+    // The guided app's search bar refuses the same clauses by name, through
+    // the same `query::diagnose`.
     //
     // It sits below the hand-off deliberately: from a launcher the message
     // would go to a journald socket, and the relaunched process asks it again
@@ -70,8 +70,8 @@ pub fn run(args: SearchArgs) -> Result<()> {
 
     let predicates = query::parse(&args.terms);
 
-    // Now that bare terms parse to Predicate::Free, predicates can only be
-    // empty when every term was whitespace.  Skip silently in that case.
+    // Bare terms parse to `Predicate::Free`, so predicates can only be empty
+    // when every term was whitespace.
     if predicates.is_empty() {
         println!("{}", "No projects match that query.".dimmed());
         return Ok(());
@@ -107,8 +107,8 @@ pub fn run(args: SearchArgs) -> Result<()> {
 
     // Two questions, both of which must say yes: stdout decides the *format*
     // (a pipe gets the plain list), and stderr decides whether the picker can
-    // be drawn and answered at all. Without the second, `2>/dev/null` launched
-    // a picker nobody could see and waited for a key.
+    // be drawn and answered at all. Without the second, `2>/dev/null` would
+    // launch a picker nobody can see and wait for a key.
     if args.json {
         return crate::cli::json::print_projects(&matches);
     }

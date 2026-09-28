@@ -95,7 +95,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     // Allocate the ID and claim the folder under the cross-process data lock.
     // The counter is re-read and the plan recomputed inside the lock: another
     // fastf may have taken an ID while the confirmation prompt was open, and
-    // reusing the previewed value is exactly how duplicate IDs were minted.
+    // reusing the previewed value would mint a duplicate.
     // Post-create runs after the lock is released — see `run_post_create`.
     let mut created = crate::core::operations::create(crate::core::operations::CreateOptions {
         template_slug: tmpl.slug.clone(),
@@ -166,14 +166,9 @@ fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Option<Templa
     pick_template_interactively()
 }
 
-/// `Ok(None)` is Esc — cancelled, not failed.
-///
-/// It used to `bail!`, so pressing Esc at the *template* step printed a red
-/// `error: no template chosen` and exited 1, while pressing Esc one prompt
-/// later — at the first variable — printed `Cancelled — nothing was created.`
-/// and exited 0. `docs/cli.md` states the rule for both: "Esc cancels, says so,
-/// and exits 0, because deciding not to act is not a failure", and every
-/// sibling picker already obeys it.
+/// `Ok(None)` is Esc — cancelled, not failed, as at every prompt after it.
+/// `docs/cli.md` states the rule: "Esc cancels, says so, and exits 0, because
+/// deciding not to act is not a failure".
 pub fn pick_template_interactively() -> Result<Option<Template>> {
     crate::tui::pickers::pick_template(
         "Select template",
@@ -188,10 +183,10 @@ pub fn pick_template_interactively() -> Result<Option<Template>> {
 
 /// Apply the flags [`crate::cli::extra::classify_extra`] recovered for `new`.
 ///
-/// The `_ =>` arm is the guard: a flag declared in clap but not handled here is
-/// a build-time-visible bug rather than a flag that silently stops working when
-/// typed after the slug. `main.rs`'s exhaustiveness test calls this with every
-/// long `new` declares.
+/// The `_ =>` arm is the guard: a flag declared in clap but not handled here
+/// fails the suite rather than silently stopping working when typed after the
+/// slug. `main.rs`'s exhaustiveness test calls this with every long `new`
+/// declares.
 pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()> {
     for flag in recognized {
         match flag.name.as_str() {

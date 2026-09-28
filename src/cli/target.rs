@@ -53,7 +53,7 @@ pub fn one_project(cfg: &Config, query: &str, prompt: &str, how: &str) -> Result
                 Ok(Target::HandedOff)
             } else {
                 // Piped, redirected, cron, CI: somebody is reading this and
-                // nobody is answering it. The error text is unchanged.
+                // nobody is answering it, so the candidates are the error.
                 Err(library::ambiguous_error(query, &candidates))
             }
         }
@@ -63,21 +63,20 @@ pub fn one_project(cfg: &Config, query: &str, prompt: &str, how: &str) -> Result
 /// **Stderr decides, not stdout.**
 ///
 /// `recent` and `search` gate on both because there stdout chooses the output
-/// *format* — a pipe gets the plain list instead of the browser. This is a
+/// *format* — a pipe gets the plain list instead of the guided app. This is a
 /// different question: "can I ask?", which is what `util::tty` exists to answer,
 /// and the answer is stderr, because that is where a prompt draws and stdin is
 /// where it reads.
 ///
 /// Gating on stdout would make the picker unreachable in the one place `path`
 /// is designed for: `cd "$(fastf path lullaby)"` redirects stdout by
-/// construction, with a terminal sitting right there. It would also repeat the
-/// exact mistake `util::tty` was written to fix, and which
-/// `a_redirected_stdout_still_has_a_terminal_to_prompt_on` pins.
+/// construction, with a terminal sitting right there
+/// (`a_redirected_stdout_still_has_a_terminal_to_prompt_on` pins it).
 ///
 /// stdout's own contract survives either way, because the picker never writes
 /// to it: a redirected `fastf path` still emits the path and nothing else. A
 /// script, cron job or CI runner has no terminal on stderr either, so it gets
-/// the ambiguity error unchanged.
+/// the ambiguity error.
 fn can_ask() -> bool {
     crate::util::tty::prompt_available()
 }

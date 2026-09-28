@@ -15,18 +15,15 @@ use crate::util::tty;
 /// anything — a template of plain folders needs no answers.
 ///
 /// `pub` so the TUI can collect **once** and hand the same values to a dry run
-/// and the real run. It used to call `apply::run` twice with an empty map, which
-/// meant answering every prompt a second time to confirm what you had just
-/// previewed.
+/// and the real run, or every prompt is answered a second time to confirm what
+/// was just previewed.
 pub fn collect_if_needed(
     tmpl: &crate::core::template::Template,
     provided: &HashMap<String, String>,
 ) -> Result<Option<HashMap<String, String>>> {
     // **The question is whether anything is interpolated, not whether any file
-    // has text in it.** This read the same unfiltered buffer the dry-run
-    // previews did, so an `exclude`d file, a `verbatim` one whose braces are
-    // meant literally, or a plain README with no token in it all made `apply`
-    // ask for variables nothing would use.
+    // has text in it**: an `exclude`d file, a `verbatim` one whose braces are
+    // meant literally, or a plain README with no token in it needs no answers.
     if tmpl.interpolates_anything() {
         collect_vars(tmpl, provided)
     } else {

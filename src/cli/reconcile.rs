@@ -8,7 +8,8 @@
 //! Version-1 markers contain arbitrary absolute paths, so this command never
 //! parses them, follows them, copies through them, or deletes anything they name.
 //! It reports their own paths for manual inspection and leaves all bytes alone.
-//! Reconciliation is explicit, idempotent, and also available through the UI.
+//! Reconciliation is idempotent; the guided app also starts one by itself when
+//! fastf has something to finish.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -267,9 +268,8 @@ pub fn run(detach: bool) -> Result<()> {
         for item in &report.unrecoverable {
             println!("     - {}", item.yellow());
         }
-        // The other two blocks each end with a sentence saying what to do.
-        // This one — the category the user can do least about — ended with the
-        // bare list.
+        // Every block ends with a sentence saying what to do, this one most of
+        // all: it is the category the user can do least about.
         println!(
             "     {}",
             "Each line says what is on disk and what fastf left alone. Where it names a \

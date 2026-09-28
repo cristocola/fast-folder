@@ -2,8 +2,8 @@
 //! `fastf jobs` to list, follow and cancel any.
 //!
 //! A long verb — `move`, `copy-to`, `delete`, `reconcile` — starts a job
-//! (`core::jobs::start`) and follows its state file here, printing the same
-//! lines it printed when the work ran in this process. **The work is not this
+//! (`core::jobs::start`) and follows its state file here, printing the lines a
+//! run in this process would print. **The work is not this
 //! process's**: killing it, or closing its terminal, leaves the job running.
 //! Ctrl-C asks the job to cancel while a cancel still undoes it; once the job
 //! is past its point of no return, Ctrl-C leaves it to finish and says how to
@@ -107,8 +107,8 @@ pub(crate) fn follow(id: &str) -> Result<Followed> {
     }
 }
 
-/// Print a job's items the way the command line always printed its outcome,
-/// and fail the way it always failed.
+/// Print a job's items as the verb's own outcome, and fail with the verb's own
+/// error.
 pub(crate) fn finish(state: &JobState) -> Result<()> {
     let mut failures = Vec::new();
     for item in &state.items {
@@ -133,7 +133,7 @@ pub(crate) fn finish(state: &JobState) -> Result<()> {
     match state.status {
         JobStatus::Done => Ok(()),
         JobStatus::Cancelled => {
-            // What an interrupted run has always ended with.
+            // An interrupted run ends as a signal would.
             crate::util::interrupt::raise();
             bail!(
                 "{}",
@@ -151,7 +151,7 @@ pub(crate) fn finish(state: &JobState) -> Result<()> {
     }
 }
 
-/// `Moved ID0047 name` with the id and name bold, as the verbs printed it.
+/// `Moved ID0047 name`, with the id and name bold.
 fn bold_headline(headline: &str) -> String {
     let mut words = headline.splitn(3, ' ');
     let (verb, id, rest) = (

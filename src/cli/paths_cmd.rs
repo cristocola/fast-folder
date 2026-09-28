@@ -19,8 +19,8 @@ pub fn run() -> Result<()> {
         "Config:".green(),
         paths::config_path().display()
     );
-    // Two counter locations, and the base one is the record — saying only
-    // "Counters: <data dir>" made the backup input look authoritative.
+    // Two counter locations, and the base one is the record — naming only the
+    // data dir's would make the backup input look authoritative.
     println!(
         "  {:<16} {}",
         "Counter:".green(),

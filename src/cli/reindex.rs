@@ -2,9 +2,9 @@
 //!
 //! The project library is discovered from each project's `PROJECT_INFO.md`
 //! (filesystem-as-truth) and accelerated by a per-base `.fastf-index.json`
-//! cache. That cache self-heals on its own (mtime gate + existence checks), so
-//! this command is only needed after **external** changes fastf can't observe —
-//! e.g. folders moved or metadata hand-edited on another machine.
+//! cache. That cache self-heals on its own (a names-only listing of the base,
+//! and the mtime gate), so this command is only needed after **external**
+//! changes fastf can't observe — e.g. metadata hand-edited on another machine.
 
 use anyhow::Result;
 use colored::Colorize;

@@ -122,20 +122,48 @@ pub fn restore_terminal() {
             }
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // Windows has no async-signal-safety rule to keep, so the escape can
-        // simply be written through the ordinary handles.
-        use std::io::{IsTerminal, Write};
-        const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
-        if std::io::stdout().is_terminal() {
-            let _ = std::io::stdout().write_all(SHOW_CURSOR);
-            let _ = std::io::stdout().flush();
+        use std::os::windows::io::AsRawHandle;
+        show_console_cursor(std::io::stdout().as_raw_handle());
+        show_console_cursor(std::io::stderr().as_raw_handle());
+    }
+}
+
+/// Show the cursor of the console `handle` is, and answer whether it is one.
+/// **The console's own call, not an escape sequence**: a console without
+/// virtual terminal processing — the legacy one, and any a program has not
+/// switched — prints `ESC [ ? 25 h` as text. A handle that is a pipe or a
+/// file answers no to the first call and is never written to.
+#[cfg(windows)]
+fn show_console_cursor(handle: std::os::windows::io::RawHandle) -> bool {
+    #[repr(C)]
+    struct ConsoleCursorInfo {
+        size: u32,
+        visible: i32,
+    }
+    unsafe extern "system" {
+        fn GetConsoleCursorInfo(
+            console: std::os::windows::io::RawHandle,
+            info: *mut ConsoleCursorInfo,
+        ) -> i32;
+        fn SetConsoleCursorInfo(
+            console: std::os::windows::io::RawHandle,
+            info: *const ConsoleCursorInfo,
+        ) -> i32;
+    }
+    let mut info = ConsoleCursorInfo {
+        size: 25,
+        visible: 1,
+    };
+    // SAFETY: both calls take a handle the process owns and a struct of the
+    // size they document; a handle that is no console makes the first fail.
+    unsafe {
+        if GetConsoleCursorInfo(handle, &mut info) == 0 {
+            return false;
         }
-        if std::io::stderr().is_terminal() {
-            let _ = std::io::stderr().write_all(SHOW_CURSOR);
-            let _ = std::io::stderr().flush();
-        }
+        info.visible = 1;
+        SetConsoleCursorInfo(handle, &info) != 0
     }
 }
 
@@ -256,6 +284,20 @@ fn install_platform() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream that is not a console is never written to: a pipe a script
+    /// reads, a file a run was redirected into.
+    #[cfg(windows)]
+    #[test]
+    fn a_handle_that_is_no_console_is_left_alone() {
+        use std::os::windows::io::AsRawHandle;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("out.txt");
+        let file = std::fs::File::create(&path).unwrap();
+        assert!(!show_console_cursor(file.as_raw_handle()));
+        drop(file);
+        assert_eq!(std::fs::read(&path).unwrap(), b"");
+    }
 
     #[test]
     fn install_is_idempotent_and_starts_clear() {

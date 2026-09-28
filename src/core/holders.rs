@@ -673,6 +673,7 @@ mod windows_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        panic!("waited a minute for the program to hold what it was started to hold");
     }
 
     /// A program holding a file — any sharing — is named by the Restart

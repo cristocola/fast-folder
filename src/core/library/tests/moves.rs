@@ -794,6 +794,7 @@ fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
             }
             sleep(Duration::from_millis(20));
         }
+        panic!("waited two seconds for a program to show in the folder");
     };
 
     let mut writer = std::process::Command::new("sh")

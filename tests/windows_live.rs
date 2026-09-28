@@ -53,29 +53,19 @@
 // file.
 #![allow(clippy::permissions_set_readonly_false)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+// The one list of what a spawned fastf must never inherit from whoever ran the
+// suite.
+use common::NOT_INHERITED;
 
 const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 
 const LOCAL_VAR: &str = "FASTF_WIN_LOCAL_BASE";
 const SHARE_VAR: &str = "FASTF_WIN_SHARE_BASE";
-
-/// Variables a spawned fastf must never inherit from whoever ran the suite —
-/// the same list `tests/common` keeps, for the same reason: the developer's
-/// own shell must not answer for fastf.
-const NOT_INHERITED: &[&str] = &[
-    "EDITOR",
-    "FASTF_ASCII",
-    "FASTF_FAULT",
-    "FASTF_NO_RELAUNCH",
-    "FASTF_PROJECT_PATH",
-    "FASTF_RELAUNCHED",
-    "FASTF_THEME",
-    "FASTF_TRACE_FILE",
-    "NO_COLOR",
-    "TERMINAL",
-];
 
 /// One run's scaffolding: a private data directory, and one subfolder under
 /// each configured base.

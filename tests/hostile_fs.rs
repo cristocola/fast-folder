@@ -264,8 +264,11 @@ fn metadata_as_a_directory_is_not_fatal() {
         let found = library::discover(&cfg);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "good");
-        // reconcile walks the same folders and must also survive it.
-        let _ = provisioning::reconcile_unlocked(&cfg);
+        // reconcile walks the same folders: it finds nothing of its own
+        // there, and leaves the folder as it is.
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(report.is_empty(), "nothing to reconcile: {report:?}");
+        assert!(weird.join("PROJECT_INFO.md").is_dir());
     });
 }
 
@@ -357,7 +360,15 @@ fn absent_base_is_treated_as_empty() {
         let found = library::discover(&cfg);
         assert_eq!(found.len(), 1);
         assert_eq!(library::max_id(&cfg), 1);
-        let _ = provisioning::reconcile_unlocked(&cfg);
+        // To reconcile it is a base to wait for, named, and nothing to look at.
+        let report = provisioning::reconcile_unlocked(&cfg);
+        assert!(report.unrecoverable.is_empty(), "{report:?}");
+        assert_eq!(report.waiting.len(), 1, "{report:?}");
+        assert!(
+            report.waiting[0].contains("not_mounted")
+                && report.waiting[0].contains("is not mounted"),
+            "{report:?}"
+        );
     });
 }
 

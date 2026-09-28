@@ -146,7 +146,6 @@ fn narrow_keeps_the_folder_name() {
         );
     }
     assert!(!frame.contains("TAGS"), "tags are the first column to go");
-    let _ = KeyCode::Null;
 }
 
 // --- single-project actions ----------------------------------------------

@@ -291,5 +291,4 @@ fn a_missing_display_is_enough_to_suppress_it() {
     let run = sb.run_like_a_launcher(&["search", "anything"], &[("DISPLAY", ":99")]);
     assert_eq!(run.code, 0, "{}", run.output);
     assert!(rec.was_called(), "with a display it hands off");
-    let _ = fs::metadata(&rec.log);
 }

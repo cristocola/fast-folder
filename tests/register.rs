@@ -437,13 +437,25 @@ fn register_rename_sanitizes_spaces_in_folder_name() {
         register_run(args).unwrap();
 
         let parent = target.parent().unwrap();
-        let renamed = fs::read_dir(parent)
+        let names: Vec<String> = fs::read_dir(parent)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .find(|n| n.contains("Old_Project_With_Spaces"));
+            .collect();
+        let renamed = names
+            .iter()
+            .find(|n| n.ends_with("_Old_Project_With_Spaces_ID0001"))
+            .unwrap_or_else(|| panic!("no folder renamed with underscores among {names:?}"));
+        let date = renamed
+            .strip_suffix("_Old_Project_With_Spaces_ID0001")
+            .unwrap();
         assert!(
-            renamed.is_some(),
-            "expected sanitized folder name with underscores"
+            date.len() == 10 && date.chars().all(|c| c.is_ascii_digit() || c == '-'),
+            "the name is today's date, the words and the id: {renamed}"
+        );
+        assert!(!target.exists(), "nothing is left under the old name");
+        assert!(
+            parent.join(renamed).join("PROJECT_INFO.md").is_file(),
+            "and the renamed folder is the project"
         );
     });
 }

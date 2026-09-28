@@ -684,7 +684,11 @@ mod tests {
     fn resolve_created_invalid_date_bails() {
         let tmp = tempfile::tempdir().unwrap();
         let r = resolve_created(tmp.path(), false, Some("not-a-date"));
-        assert!(r.is_err());
+        let said = format!("{:#}", r.unwrap_err());
+        assert!(
+            said.contains("--created 'not-a-date' is not a valid YYYY-MM-DD date"),
+            "{said}"
+        );
     }
 
     #[test]

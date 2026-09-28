@@ -976,6 +976,13 @@ fn a_structure_just_inside_the_walk_limit_still_loads() {
         fs::create_dir_all(dir.join("files")).unwrap();
         fs::write(dir.join("template.yaml"), yaml).unwrap();
 
-        assert!(template::find_by_slug("ok").is_ok());
+        let loaded = template::find_by_slug("ok").expect("a structure inside the limit loads");
+        let mut levels = 0;
+        let mut nodes = &loaded.structure;
+        while let Some(node) = nodes.first() {
+            levels += 1;
+            nodes = &node.children;
+        }
+        assert_eq!(levels, depth, "and every level of it is there");
     });
 }

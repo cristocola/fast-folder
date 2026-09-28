@@ -29,12 +29,13 @@ fn register_dry_run_is_refused_and_writes_nothing() {
     }
 }
 
-/// `--recursive` silently ignored `--rename`, `--apply`, `--created` and
-/// `--yes`: the folder came back unrenamed and stamped with today's date.
+/// `--recursive` refuses `--rename`, `--created` and `--yes` by name, and
+/// registers nothing: bulk registration never prompts, renames or back-dates.
 #[test]
 fn recursive_register_refuses_the_flags_it_cannot_honour() {
     let sb = Sandbox::new();
-    fs::create_dir_all(sb.base.join("child")).unwrap();
+    let child = sb.base.join("child");
+    fs::create_dir_all(&child).unwrap();
     let base = sb.base.display().to_string();
 
     for flag in [
@@ -44,7 +45,15 @@ fn recursive_register_refuses_the_flags_it_cannot_honour() {
     ] {
         let mut args = vec!["register", &base, "--recursive"];
         args.extend(flag.iter().copied());
-        sb.fails(&args);
+        let refused = sb.fails(&args);
+        assert!(
+            refused.contains("--recursive") && refused.contains(flag[0]),
+            "the refusal names both flags ({flag:?}):\n{refused}"
+        );
+        assert!(
+            child.is_dir() && !child.join("PROJECT_INFO.md").exists(),
+            "and nothing was registered ({flag:?})"
+        );
     }
 }
 

@@ -271,13 +271,20 @@ fn verify_destination_detects_short_and_missing_files() {
 
     // Truncated at the destination.
     fs::write(staging.join("sub/b.bin"), vec![0_u8; 1024]).unwrap();
-    assert!(manifest.verify_destination(&staging).is_err());
+    let said = format!("{:#}", manifest.verify_destination(&staging).unwrap_err());
+    assert!(said.contains("1 changed"), "{said}");
+    assert!(said.contains("b.bin: 1024 bytes now, was 2048"), "{said}");
     fs::write(staging.join("sub/b.bin"), vec![0_u8; 2048]).unwrap();
     manifest.verify_destination(&staging).unwrap();
 
     // Dropped at the destination.
     fs::remove_file(staging.join("a.txt")).unwrap();
-    assert!(manifest.verify_destination(&staging).is_err());
+    let said = format!("{:#}", manifest.verify_destination(&staging).unwrap_err());
+    assert!(
+        said.contains("1 of the 3 recorded entries missing"),
+        "{said}"
+    );
+    assert!(said.contains("a.txt: missing"), "{said}");
 }
 
 #[test]
@@ -288,7 +295,11 @@ fn source_metadata_changes_are_detected_after_copy() {
     fs::write(source.join("file"), b"one").unwrap();
     let manifest = MoveManifest::scan(&source).unwrap();
     fs::write(source.join("file"), b"two-two").unwrap();
-    assert!(manifest.verify_source_unchanged(&source).is_err());
+    let said = format!(
+        "{:#}",
+        manifest.verify_source_unchanged(&source).unwrap_err()
+    );
+    assert!(said.contains("file: 7 bytes now, was 3"), "{said}");
 }
 
 #[test]

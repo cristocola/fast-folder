@@ -354,6 +354,12 @@ mod tests {
             .collect();
         let scanner = SizeScanner::new();
         scanner.request(&dirs);
+        let started = std::time::Instant::now();
         drop(scanner);
+        assert!(
+            started.elapsed() < super::DROP_WAIT + std::time::Duration::from_secs(2),
+            "the drop waits `DROP_WAIT` for its workers and no longer: {:?}",
+            started.elapsed()
+        );
     }
 }

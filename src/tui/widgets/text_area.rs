@@ -21,7 +21,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::tui::command::Key;
-use crate::tui::widgets::input::visible_window;
+use crate::tui::widgets::input::{byte_index, visible_window};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextArea {
@@ -292,13 +292,6 @@ impl TextArea {
             area.y + row as u16,
         ))
     }
-}
-
-fn byte_index(text: &str, char_index: usize) -> usize {
-    text.char_indices()
-        .nth(char_index)
-        .map(|(index, _)| index)
-        .unwrap_or(text.len())
 }
 
 #[cfg(test)]

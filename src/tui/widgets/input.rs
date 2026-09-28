@@ -187,7 +187,7 @@ impl LineEdit {
 }
 
 /// Byte offset of char `n`, saturating at the end.
-fn byte_index(text: &str, n: usize) -> usize {
+pub(crate) fn byte_index(text: &str, n: usize) -> usize {
     text.char_indices()
         .nth(n)
         .map(|(i, _)| i)

@@ -406,7 +406,7 @@ impl MergeJudge<'_> {
                 _ => false,
             };
         }
-        same_bytes(path, &other)
+        transactions::same_bytes(path, &other)
     }
 
     /// Put the old copy's entry into the moved copy — replacing what is
@@ -544,7 +544,7 @@ impl Judge for Identical<'_> {
                 (Ok(here), Ok(there)) if same_but_for_place(&here, &there)
             )
         } else {
-            metadata.len() == there.len() && same_bytes(path, &other)
+            metadata.len() == there.len() && transactions::same_bytes(path, &other)
         };
         if same {
             Verdict::Take
@@ -591,31 +591,6 @@ pub(crate) fn copy_whole(from: &Path, to: &Path, expected: &ManifestEntry) -> Re
         Ok(())
     } else {
         Err("it changed while it was copied".to_string())
-    }
-}
-
-/// Whether two files hold the same bytes, read side by side; `false` when
-/// either cannot be read.
-fn same_bytes(one: &Path, other: &Path) -> bool {
-    let (Ok(mut one), Ok(mut other)) = (fs::File::open(one), fs::File::open(other)) else {
-        return false;
-    };
-    match (one.metadata(), other.metadata()) {
-        (Ok(a), Ok(b)) if a.len() == b.len() => {}
-        _ => return false,
-    }
-    let mut left = vec![0_u8; 256 * 1024];
-    let mut right = vec![0_u8; 256 * 1024];
-    loop {
-        let Ok(count) = one.read(&mut left) else {
-            return false;
-        };
-        if count == 0 {
-            return other.read(&mut right).is_ok_and(|n| n == 0);
-        }
-        if other.read_exact(&mut right[..count]).is_err() || left[..count] != right[..count] {
-            return false;
-        }
     }
 }
 

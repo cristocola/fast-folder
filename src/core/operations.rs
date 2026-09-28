@@ -435,7 +435,11 @@ pub fn resolve_created(
     }
 }
 
-fn slugify_folder_name(name: &str) -> String {
+/// Turn an existing folder basename into the `{name}` token used by
+/// `config.register_naming_pattern`. Collapses any run of whitespace to a
+/// single `_` and then runs `sanitize_name` to strip filesystem-illegal chars.
+/// Case is preserved.
+pub fn slugify_folder_name(name: &str) -> String {
     sanitize_name(&name.split_whitespace().collect::<Vec<_>>().join("_"))
 }
 

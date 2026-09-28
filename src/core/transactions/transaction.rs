@@ -558,12 +558,28 @@ pub(super) fn through_uploads<T>(
     )
 }
 
-/// Whether two files hold the same bytes, read whole; `false` when either
-/// cannot be read.
-fn same_bytes(one: &Path, other: &Path) -> bool {
-    match (fs::read(one), fs::read(other)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
+/// Whether two files hold the same bytes, read side by side; `false` when
+/// either cannot be read.
+pub(crate) fn same_bytes(one: &Path, other: &Path) -> bool {
+    let (Ok(mut one), Ok(mut other)) = (fs::File::open(one), fs::File::open(other)) else {
+        return false;
+    };
+    match (one.metadata(), other.metadata()) {
+        (Ok(a), Ok(b)) if a.len() == b.len() => {}
+        _ => return false,
+    }
+    let mut left = vec![0_u8; 256 * 1024];
+    let mut right = vec![0_u8; 256 * 1024];
+    loop {
+        let Ok(count) = one.read(&mut left) else {
+            return false;
+        };
+        if count == 0 {
+            return other.read(&mut right).is_ok_and(|n| n == 0);
+        }
+        if other.read_exact(&mut right[..count]).is_err() || left[..count] != right[..count] {
+            return false;
+        }
     }
 }
 

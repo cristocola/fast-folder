@@ -29,7 +29,7 @@ use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::Project;
-use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
+use crate::core::naming::{interpolate_name, parse_id_token};
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::tui::vars::collect_vars;
@@ -275,7 +275,7 @@ pub fn plan_rename(
     if !has_template {
         preview_vars
             .entry("name".to_string())
-            .or_insert_with(|| slugify_folder_name(&current_name));
+            .or_insert_with(|| crate::core::operations::slugify_folder_name(&current_name));
     }
     let desired = desired_rename(tmpl, has_template, &preview_vars, cfg)?.unwrap_or_default();
     Ok(RenamePlan {
@@ -660,18 +660,10 @@ pub fn resolve_created(
     crate::core::operations::resolve_created(path, use_today, override_date)
 }
 
-/// Turn an existing folder basename into the `{name}` token used by
-/// `config.register_naming_pattern`. Collapses any run of whitespace to a
-/// single `_` and then runs `sanitize_name` to strip filesystem-illegal chars.
-/// Case is preserved.
-fn slugify_folder_name(name: &str) -> String {
-    let collapsed = name.split_whitespace().collect::<Vec<_>>().join("_");
-    sanitize_name(&collapsed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::operations::slugify_folder_name;
 
     #[test]
     fn resolve_created_explicit_date() {

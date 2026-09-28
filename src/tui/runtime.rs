@@ -1112,8 +1112,8 @@ fn reindex() -> Result<ActionOutcome> {
         ListChange::Reload,
         format!(
             "Reindexed {count} project{} across {bases} base{}.",
-            if count == 1 { "" } else { "s" },
-            if bases == 1 { "" } else { "s" }
+            crate::util::plural::s(count),
+            crate::util::plural::s(bases)
         ),
     ))
 }
@@ -1148,7 +1148,7 @@ fn remove_tags(project: Box<Project>, tags: Vec<String>) -> Result<ActionOutcome
         },
         format!(
             "Removed {count} tag{} from {}",
-            if count == 1 { "" } else { "s" },
+            crate::util::plural::s(count),
             project.id
         ),
     ))
@@ -1261,7 +1261,7 @@ fn rederive_auto_tags(project: Box<Project>) -> Result<ActionOutcome> {
         format!(
             "Re-derived {} auto-tag{} for {}",
             derived.len(),
-            if derived.len() == 1 { "" } else { "s" },
+            crate::util::plural::s(derived.len()),
             project.id
         ),
     ))
@@ -1332,7 +1332,7 @@ fn apply_template(request: &ApplyRequest) -> Result<ActionOutcome> {
         format!(
             "Applied {} — {created} item{} created",
             request.template_slug,
-            if created == 1 { "" } else { "s" }
+            crate::util::plural::s(created)
         ),
     )
     .session(format!(
@@ -1358,10 +1358,13 @@ fn register_recursively(request: Box<crate::tui::app::register::Request>) -> Res
         ListChange::Reload,
         format!(
             "Registered {registered} folder{}",
-            if registered == 1 { "" } else { "s" }
+            crate::util::plural::s(registered)
         ),
     )
-    .session(format!("registered {registered} folders"));
+    .session(format!(
+        "registered {registered} folder{}",
+        crate::util::plural::s(registered)
+    ));
     Ok(if failures.is_empty() {
         outcome
     } else {
@@ -1395,9 +1398,9 @@ fn template_from_folder(request: &FromFolderRequest) -> Result<ActionOutcome> {
         "Generated template {} — {} folder{}, {} text file{}",
         request.slug,
         report.folders,
-        if report.folders == 1 { "" } else { "s" },
+        crate::util::plural::s(report.folders),
         report.text_files,
-        if report.text_files == 1 { "" } else { "s" }
+        crate::util::plural::s(report.text_files)
     );
     if report.bundled > 0 {
         message.push_str(&format!(
@@ -1412,7 +1415,7 @@ fn template_from_folder(request: &FromFolderRequest) -> Result<ActionOutcome> {
         outcome.warning(Some(format!(
             "{} binary or oversized file{} skipped — turn on Bundle assets to include them",
             report.skipped,
-            if report.skipped == 1 { "" } else { "s" }
+            crate::util::plural::s(report.skipped)
         )))
     } else {
         outcome

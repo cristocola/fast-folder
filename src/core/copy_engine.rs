@@ -229,33 +229,27 @@ fn copy_unlocked(
         );
         // The copy is of one moment: what changed in the source while it was
         // copied is copied too, until it holds still.
-        let verified =
-            transactions::settle_copy(&mut body, &project.path, &staging, progress, cancel, ticker)
-                .and_then(|root| {
-                    let manifest = body.clone().with_entry(root);
-                    manifest.validate()?;
-                    transaction.write_manifest(&manifest)?;
-                    body.verify_destination_with(&staging, ticker)
-                        .map(|_| manifest)
-                });
+        let verified = transactions::settle_record_verify(
+            &transaction,
+            &mut body,
+            &project.path,
+            &staging,
+            progress,
+            cancel,
+            ticker,
+        );
         if verified.is_err() && ticker.cancelled() {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
-        let manifest = verified?;
+        let (manifest, _) = verified?;
         crate::util::faults::check("copy:after-verify")?;
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
-        transactions::copy_to_staging(
-            &manifest.only_root_metadata(),
-            &project.path,
-            &staging,
-            progress,
-            &AtomicBool::new(false),
-        )
-        .with_context(|| format!("publishing the copy at {}", target.display()))?;
+        transactions::publish(&manifest, &project.path, &staging, progress)
+            .with_context(|| format!("publishing the copy at {}", target.display()))?;
         transactions::keep_folder_attributes(&manifest, &project.path, &staging);
         Ok(totals)
     })();

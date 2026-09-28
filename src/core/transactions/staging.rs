@@ -132,6 +132,46 @@ pub fn adopt_staging(body: &MoveManifest, staging: &Path) -> Result<Vec<Manifest
     Ok(kept)
 }
 
+/// **What a move and a copy both do once the body is copied**, in the one
+/// order that keeps the record true: settle the copy against the original
+/// ([`settle_copy`]), write the manifest — what the copy holds, with the
+/// `PROJECT_INFO.md` the publish will write — and only then verify the copy
+/// against it. Answers that manifest, and the walk of the verified copy.
+pub fn settle_record_verify(
+    transaction: &MoveTransaction,
+    body: &mut MoveManifest,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+    ticker: Ticker,
+) -> Result<(MoveManifest, Walk)> {
+    let root = settle_copy(body, source, staging, progress, cancel, ticker)?;
+    let manifest = body.clone().with_entry(root);
+    manifest.validate()?;
+    transaction.write_manifest(&manifest)?;
+    let staged = body.verify_destination_with(staging, ticker)?;
+    Ok((manifest, staged))
+}
+
+/// **The publish**: the root `PROJECT_INFO.md`, written once, last, which is
+/// what makes the copy a project. No folder on the target is renamed, and the
+/// copy is handed a flag nobody sets: once it starts, it finishes.
+pub fn publish(
+    manifest: &MoveManifest,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+) -> Result<Vec<ManifestEntry>> {
+    copy_to_staging(
+        &manifest.only_root_metadata(),
+        source,
+        staging,
+        progress,
+        &AtomicBool::new(false),
+    )
+}
+
 /// How many times [`settle_copy`] catches the copy up with the original
 /// before it publishes what the copy holds.
 pub const SETTLE_ROUNDS: usize = 3;

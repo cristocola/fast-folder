@@ -675,17 +675,15 @@ fn staged_in_parts(
             body.entries.len() + manifest.entries.len(),
         );
         ticker.working_in(&project.path);
-        let verified =
-            transactions::settle_copy(&mut body, &project.path, &staging, progress, cancel, ticker)
-                .and_then(|root| {
-                    // What the copy holds, and the `PROJECT_INFO.md` the publish
-                    // writes: the record, written once the original holds still.
-                    let manifest = body.clone().with_entry(root);
-                    manifest.validate()?;
-                    transaction.write_manifest(&manifest)?;
-                    body.verify_destination_with(&staging, ticker)
-                        .map(|staged| (manifest, staged))
-                });
+        let verified = transactions::settle_record_verify(
+            &transaction,
+            &mut body,
+            &project.path,
+            &staging,
+            progress,
+            cancel,
+            ticker,
+        );
         if verified.is_err() && ticker.cancelled() {
             anyhow::bail!("move of '{}' cancelled", project.name);
         }
@@ -701,17 +699,8 @@ fn staged_in_parts(
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
         publishing = true;
-        // The publish: one file, written once. No folder on the target is
-        // renamed, which is what a cloud mount with uploads in flight needs.
-        // Its copy is handed a flag nobody sets: once it starts, it finishes.
-        transactions::copy_to_staging(
-            &manifest.only_root_metadata(),
-            &project.path,
-            &staging,
-            progress,
-            &AtomicBool::new(false),
-        )
-        .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
+        transactions::publish(&manifest, &project.path, &staging, progress)
+            .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
         crate::util::faults::check("move:after-publish-write")?;
         published = true;
         let metadata_path = Path::new(project_info::RESERVED_FILENAME);

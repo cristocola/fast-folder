@@ -673,10 +673,13 @@ process" (`lockfile::describe_holder_with`, set by `main`).
 ## Copying projects out
 
 `copy_engine::copy_project_configured` is a move that keeps its source: the same
-`MoveManifest::scan`, `MoveTransaction`, `copy_to_staging`, `verify_destination`,
-`verify_source_unchanged` and atomic publish, then nothing. Both engines share
-`transactions`, so **the invariant lives in one place**; a copy has no
-cleanup-pending state.
+`MoveManifest::scan`, `MoveTransaction` and `copy_to_staging`, then the two
+steps both engines call by name — `transactions::settle_record_verify` (settle
+against the original, write the manifest, verify the copy against it, in that
+order) and `transactions::publish` (`PROJECT_INFO.md`, last, uncancellable) —
+then nothing. **The invariant lives in those two**; what each engine keeps for
+itself is its own failpoints, its sentences and, for a move, the probe, the
+holders and the resume. A copy has no cleanup-pending state.
 
 **`resolve_destination` is the whole rule**, checked before any confirmation: a
 real directory, not inside the project (checked first, for the right message), not

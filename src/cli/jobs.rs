@@ -184,50 +184,35 @@ pub fn list() -> Result<()> {
 }
 
 fn describe(job: &JobView) -> (String, String) {
-    let state = job.state.as_ref();
-    if job.interrupted() {
-        return (
-            "stopped".yellow().to_string(),
-            "its process ended before it said how it went; `fastf reconcile` finishes \
-             anything it left"
-                .to_string(),
-        );
-    }
-    match state.map(|state| state.status) {
-        Some(JobStatus::Running) | None => (
-            "running".cyan().to_string(),
-            state
-                .map(|state| {
-                    let item = state.progress.item_text();
-                    if item.is_empty() {
-                        state.progress.step_text()
-                    } else {
-                        format!("{item}: {}", state.progress.step_text())
-                    }
-                })
-                .unwrap_or_default(),
-        ),
-        Some(JobStatus::Done) => (
-            "done".green().to_string(),
-            state.map(|state| state.summary.clone()).unwrap_or_default(),
-        ),
-        Some(JobStatus::Unknown) => (
-            "ended".to_string(),
-            state.map(|state| state.summary.clone()).unwrap_or_default(),
-        ),
-        Some(JobStatus::Failed) => (
-            "failed".red().to_string(),
-            state.map(|state| state.summary.clone()).unwrap_or_default(),
-        ),
-        Some(JobStatus::Cancelled) => (
-            "cancelled".yellow().to_string(),
-            state.map(|state| state.summary.clone()).unwrap_or_default(),
-        ),
-        Some(JobStatus::Paused) => (
-            "paused".yellow().to_string(),
-            state.map(|state| state.summary.clone()).unwrap_or_default(),
-        ),
-    }
+    use crate::core::jobs::Standing;
+    let standing = job.standing();
+    let word = standing.word();
+    let word = match standing {
+        Standing::Running => word.cyan().to_string(),
+        Standing::Done => word.green().to_string(),
+        Standing::Ended => word.to_string(),
+        Standing::Failed => word.red().to_string(),
+        Standing::Cancelled | Standing::Paused | Standing::Stopped => word.yellow().to_string(),
+    };
+    let detail = match standing {
+        Standing::Stopped => "its process ended before it said how it went; `fastf reconcile` \
+                              finishes anything it left"
+            .to_string(),
+        Standing::Running => job
+            .state
+            .as_ref()
+            .map(|state| {
+                let item = state.progress.item_text();
+                if item.is_empty() {
+                    state.progress.step_text()
+                } else {
+                    format!("{item}: {}", state.progress.step_text())
+                }
+            })
+            .unwrap_or_default(),
+        _ => job.summary(),
+    };
+    (word, detail)
 }
 
 /// The job `id` names, or the newest one running.

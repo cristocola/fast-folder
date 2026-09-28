@@ -162,7 +162,59 @@ pub struct JobView {
     pub cancel_asked: bool,
 }
 
+/// Where a job stands, as the one word every list of jobs shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    Running,
+    Done,
+    /// It ended in a state a later fastf wrote.
+    Ended,
+    Failed,
+    Cancelled,
+    Paused,
+    /// Its worker ended without saying how the job ended.
+    Stopped,
+}
+
+impl Standing {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Ended => "ended",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 impl JobView {
+    /// Where the job stands. A job with no state yet is running: it is
+    /// starting.
+    pub fn standing(&self) -> Standing {
+        if self.interrupted() {
+            return Standing::Stopped;
+        }
+        match self.state.as_ref().map(|state| state.status) {
+            Some(JobStatus::Running) | None => Standing::Running,
+            Some(JobStatus::Done) => Standing::Done,
+            Some(JobStatus::Unknown) => Standing::Ended,
+            Some(JobStatus::Failed) => Standing::Failed,
+            Some(JobStatus::Cancelled) => Standing::Cancelled,
+            Some(JobStatus::Paused) => Standing::Paused,
+        }
+    }
+
+    /// What the job said of itself when it ended; nothing, before it has.
+    pub fn summary(&self) -> String {
+        self.state
+            .as_ref()
+            .map(|state| state.summary.clone())
+            .unwrap_or_default()
+    }
+
     /// The worker ended without saying how the job ended: killed.
     pub fn interrupted(&self) -> bool {
         !self.alive

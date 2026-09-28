@@ -299,47 +299,26 @@ pub fn message_rows(
 /// The jobs page's rows, newest first — when it started, how it stands, what
 /// it is, and its step or its outcome — with the id of each.
 pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String>) {
-    use crate::core::assets::JobStatus;
+    use crate::core::jobs::Standing;
     if jobs.is_empty() {
         return (vec!["No jobs yet.".to_string()], Vec::new());
     }
     let mut rows = Vec::new();
     let mut ids = Vec::new();
     for job in jobs {
-        let state = job.state.as_ref();
-        let (word, detail) = if job.interrupted() {
-            (
-                "stopped",
+        let standing = job.standing();
+        let word = standing.word();
+        let detail = match standing {
+            Standing::Stopped => {
                 "its process ended before it said how it went; Reconcile finishes anything it left"
-                    .to_string(),
-            )
-        } else {
-            match state.map(|state| state.status) {
-                Some(JobStatus::Running) | None => {
-                    ("running", crate::tui::app::background::step_of(job))
-                }
-                Some(JobStatus::Done) => {
-                    ("done", state.map(|s| s.summary.clone()).unwrap_or_default())
-                }
-                Some(JobStatus::Failed) => (
-                    "failed",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Cancelled) => (
-                    "cancelled",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Unknown) => (
-                    "ended",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Paused) => (
-                    "paused",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
+                    .to_string()
             }
+            Standing::Running => crate::tui::app::background::step_of(job),
+            _ => job.summary(),
         };
-        let started = state
+        let started = job
+            .state
+            .as_ref()
             .map(|state| crate::util::time::local_readable(&state.started))
             .unwrap_or_default();
         rows.push(format!(

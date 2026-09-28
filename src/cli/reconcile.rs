@@ -141,6 +141,14 @@ pub fn run(detach: bool) -> Result<()> {
         return Ok(());
     }
 
+    print_verdict(&report);
+    print_what_it_did(&report);
+    print_what_it_will_not_touch(&report);
+    print_what_is_still_open(&report);
+    Ok(())
+}
+
+fn print_verdict(report: &crate::core::provisioning::ReconcileReport) {
     // Not a green tick over a report that may be nothing but "could not
     // inspect": the tick means something worked, and here it only means the
     // pass ran.
@@ -160,6 +168,9 @@ pub fn run(detach: bool) -> Result<()> {
             "⚠".yellow().bold()
         }
     );
+}
+
+fn print_what_it_did(report: &crate::core::provisioning::ReconcileReport) {
     if report.resumed > 0 {
         println!(
             "   {} {} interrupted copy job(s) finished",
@@ -205,6 +216,9 @@ pub fn run(detach: bool) -> Result<()> {
             println!("     - {item}");
         }
     }
+}
+
+fn print_what_it_will_not_touch(report: &crate::core::provisioning::ReconcileReport) {
     if !report.incomplete.is_empty() {
         println!(
             "   {} {} project(s) were never finished being created:",
@@ -237,6 +251,9 @@ pub fn run(detach: bool) -> Result<()> {
                 .dimmed()
         );
     }
+}
+
+fn print_what_is_still_open(report: &crate::core::provisioning::ReconcileReport) {
     if !report.leftovers.is_empty() {
         println!(
             "   {} {} old folder(s) not removed yet:",
@@ -287,5 +304,4 @@ pub fn run(detach: bool) -> Result<()> {
                 .dimmed()
         );
     }
-    Ok(())
 }

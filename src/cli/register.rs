@@ -343,18 +343,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     let (tmpl, collected_vars) = match &args.template_slug {
         Some(slug) => {
             let t = template::find_by_slug(slug)?;
-            let known: std::collections::HashSet<&str> =
-                t.variables.iter().map(|v| v.slug.as_str()).collect();
-            for k in args.vars.keys() {
-                if !known.contains(k.as_str()) {
-                    eprintln!(
-                        "{} unknown variable '--{}' — not defined in template '{}'",
-                        "warning:".yellow().bold(),
-                        k,
-                        t.slug
-                    );
-                }
-            }
+            warn_unknown_vars(&t, &args);
             let Some(v) = collect_vars(&t, &args.vars)? else {
                 crate::tui::prompt::report_cancelled("nothing was registered");
                 return Ok(());
@@ -364,7 +353,53 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         None => (registered_stub_template(), HashMap::new()),
     };
 
-    // Decide whether to actually rename: preview the target and confirm.
+    let rename = decide_rename(&args, &canonical, &tmpl, &collected_vars, &cfg)?;
+
+    let on_pinfo_conflict = pinfo_conflict_policy(&args, &canonical);
+
+    if args.apply_structure {
+        println!();
+    }
+
+    let outcome = register_core(RegisterOptions {
+        path: args.path,
+        template_slug: args.template_slug,
+        vars: collected_vars,
+        apply_structure: args.apply_structure,
+        rename,
+        use_today: args.use_today,
+        created_override: args.created_override,
+        on_pinfo_conflict,
+    })?;
+
+    print_registered(&outcome.project);
+
+    Ok(())
+}
+
+fn warn_unknown_vars(t: &Template, args: &RegisterArgs) {
+    let known: std::collections::HashSet<&str> =
+        t.variables.iter().map(|v| v.slug.as_str()).collect();
+    for k in args.vars.keys() {
+        if !known.contains(k.as_str()) {
+            eprintln!(
+                "{} unknown variable '--{}' — not defined in template '{}'",
+                "warning:".yellow().bold(),
+                k,
+                t.slug
+            );
+        }
+    }
+}
+
+/// Decide whether to actually rename: preview the target and confirm.
+fn decide_rename(
+    args: &RegisterArgs,
+    canonical: &Path,
+    tmpl: &Template,
+    collected_vars: &HashMap<String, String>,
+    cfg: &Config,
+) -> Result<bool> {
     let mut rename = args.rename;
     if rename && !args.yes {
         tty::require_tty(
@@ -372,11 +407,11 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             "pass --yes to rename without confirming",
         )?;
         let plan = plan_rename(
-            &canonical,
-            &tmpl,
+            canonical,
+            tmpl,
             args.template_slug.is_some(),
-            &collected_vars,
-            &cfg,
+            collected_vars,
+            cfg,
         )?;
         if plan.renames() {
             println!();
@@ -387,10 +422,13 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             .unwrap_or(false);
         }
     }
+    Ok(rename)
+}
 
-    // Decide PROJECT_INFO.md conflict policy.
-    let pinfo_path = project_info::pinfo_path(&canonical);
-    let on_pinfo_conflict = if pinfo_path.exists() {
+/// Decide PROJECT_INFO.md conflict policy.
+fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> PinfoConflict {
+    let pinfo_path = project_info::pinfo_path(canonical);
+    if pinfo_path.exists() {
         if args.yes {
             PinfoConflict::Overwrite
         } else if tty::prompt_available() {
@@ -420,25 +458,11 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         }
     } else {
         PinfoConflict::Overwrite
-    };
-
-    if args.apply_structure {
-        println!();
     }
+}
 
-    let outcome = register_core(RegisterOptions {
-        path: args.path,
-        template_slug: args.template_slug,
-        vars: collected_vars,
-        apply_structure: args.apply_structure,
-        rename,
-        use_today: args.use_today,
-        created_override: args.created_override,
-        on_pinfo_conflict,
-    })?;
-
-    // Success summary — mirrors `render::print_success` layout.
-    let project = &outcome.project;
+/// Success summary — mirrors `render::print_success` layout.
+fn print_registered(project: &Project) {
     println!("\n{}  {}", "✓".green().bold(), "Project registered".bold());
     println!("  {} {}", "Template:".dimmed(), project.template_name);
     println!("  {} {}", "ID:".dimmed(), project.id);
@@ -455,8 +479,6 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         parent_display.dimmed(),
         project.name.bold().white()
     );
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

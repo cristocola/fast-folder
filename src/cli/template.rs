@@ -45,6 +45,18 @@ pub fn show(slug: &str) -> Result<()> {
 /// one. The first line is the template's name.
 pub fn describe(t: &Template) -> Vec<String> {
     let mut lines = vec![t.name.clone()];
+    describe_summary(t, &mut lines);
+    describe_variables(t, &mut lines);
+    describe_structure(t, &mut lines);
+    describe_files(t, &mut lines);
+    describe_bundled_assets(t, &mut lines);
+    describe_globs(t, &mut lines);
+    describe_todos(t, &mut lines);
+    describe_tags(t, &mut lines);
+    lines
+}
+
+fn describe_summary(t: &Template, lines: &mut Vec<String>) {
     // Said here rather than warned about on every load: `load_all` runs on
     // every dashboard refresh, nothing has failed, and the one moment this is
     // worth reading is while looking at the template it is about.
@@ -65,7 +77,9 @@ pub fn describe(t: &Template) -> Vec<String> {
         "0".repeat(t.id.digits),
         t.id.digits
     ));
+}
 
+fn describe_variables(t: &Template, lines: &mut Vec<String>) {
     if !t.variables.is_empty() {
         lines.push(String::new());
         lines.push("Variables:".to_string());
@@ -88,16 +102,20 @@ pub fn describe(t: &Template) -> Vec<String> {
             }
         }
     }
+}
 
+fn describe_structure(t: &Template, lines: &mut Vec<String>) {
     if !t.structure.is_empty() {
         lines.push(String::new());
         lines.push("Folder structure:".to_string());
         lines.extend(crate::tui::widgets::tree::lines(&t.structure, false));
     }
+}
 
-    // The buffer holds every UTF-8 file under `files/`, because its job is to
-    // feed the editors — `exclude` is not its business. It is applied here, or
-    // a `*.tmp` a create never writes is listed as one of the template's files.
+/// The buffer holds every UTF-8 file under `files/`, because its job is to
+/// feed the editors — `exclude` is not its business. It is applied here, or
+/// a `*.tmp` a create never writes is listed as one of the template's files.
+fn describe_files(t: &Template, lines: &mut Vec<String>) {
     let listed: Vec<&str> = t
         .files
         .iter()
@@ -111,10 +129,12 @@ pub fn describe(t: &Template) -> Vec<String> {
             lines.push(format!("  • {path}"));
         }
     }
+}
 
-    // `t.files` is a load-time scan of *text* files only, so bundled binary
-    // assets in `files/` are invisible there even though every new project gets
-    // them. List what is actually on disk that the scan skipped.
+/// `t.files` is a load-time scan of *text* files only, so bundled binary
+/// assets in `files/` are invisible there even though every new project gets
+/// them. List what is actually on disk that the scan skipped.
+fn describe_bundled_assets(t: &Template, lines: &mut Vec<String>) {
     let bundled = bundled_assets(t);
     if !bundled.is_empty() {
         lines.push(String::new());
@@ -123,7 +143,9 @@ pub fn describe(t: &Template) -> Vec<String> {
             lines.push(format!("  • {rel}"));
         }
     }
+}
 
+fn describe_globs(t: &Template, lines: &mut Vec<String>) {
     if !t.verbatim.is_empty() {
         lines.push(String::new());
         lines.push("Verbatim globs (never interpolated):".to_string());
@@ -134,6 +156,9 @@ pub fn describe(t: &Template) -> Vec<String> {
         lines.push("Excluded globs (never copied):".to_string());
         lines.extend(t.exclude.iter().map(|g| format!("  • {g}")));
     }
+}
+
+fn describe_todos(t: &Template, lines: &mut Vec<String>) {
     if !t.todo.is_empty() {
         let tasks: usize = t.todo.iter().map(|b| b.tasks.len()).sum();
         lines.push(String::new());
@@ -150,7 +175,9 @@ pub fn describe(t: &Template) -> Vec<String> {
             }
         }
     }
+}
 
+fn describe_tags(t: &Template, lines: &mut Vec<String>) {
     if !t.tags.is_empty() || !t.tag_from.is_empty() {
         lines.push(String::new());
         lines.push("Tags:".to_string());
@@ -161,7 +188,6 @@ pub fn describe(t: &Template) -> Vec<String> {
                 .map(|slug| format!("  • {slug}/<value of {slug}>")),
         );
     }
-    lines
 }
 
 /// The files under `files/` that reach a project as bytes: everything the text

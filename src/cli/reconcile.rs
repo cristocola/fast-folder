@@ -149,10 +149,10 @@ pub fn run(detach: bool) -> Result<()> {
 }
 
 fn print_verdict(report: &crate::core::provisioning::ReconcileReport) {
-    // Not a green tick over a report that may be nothing but "could not
-    // inspect": the tick means something worked, and here it only means the
-    // pass ran.
-    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty() && !report.cancelled;
+    // The tick says nothing is left for a person to look at, which is the
+    // report's own question: an item waiting for a base to answer is ordinary
+    // and is listed below, one that could not be inspected is not a tick.
+    let clean = !report.needs_a_look();
     if report.cancelled {
         println!(
             "{}  Reconcile stopped when asked. What it finished is below; what it had \

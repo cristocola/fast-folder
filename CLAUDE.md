@@ -93,9 +93,10 @@ tell you.
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions/` (v2 staged moves, a facade over `journal` / `manifest` /
-  `walk` / `transaction` / `staging` / `copy`), `provisioning.rs` (v2 recovery
-  plus report-only pre-v2 discovery), `template_import.rs` (the from-folder
-  engine),
+  `walk` / `transaction` / `staging` / `copy`), `provisioning/` (v2 recovery
+  plus report-only pre-v2 discovery, a facade over `create` / `incomplete` /
+  `report` / `pass` / `base` / `moves` / `finish` / `recordless`),
+  `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
   byte-copy), `body.rs` (the grammar of `PROJECT_INFO.md`'s body: sections,
   notes, todos), `validated.rs` (typed slugs, relative paths, tags, project

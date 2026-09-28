@@ -1,4 +1,5 @@
-//! The journal (`move.json`): its schema, where a record lives, and how one is read.
+//! The journal (`move.json`): its schema, where a record lives, and how one is
+//! read.
 
 use super::*;
 

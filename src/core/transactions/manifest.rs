@@ -1,4 +1,5 @@
-//! The manifest: what a project holds, entry by entry, and the one comparison of two of them.
+//! The manifest: what a project holds, entry by entry, and the one comparison
+//! of two of them.
 
 use super::*;
 

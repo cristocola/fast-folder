@@ -1,4 +1,5 @@
-//! The copy as a whole: names first, then contents, then settled against an original that may still move.
+//! The copy as a whole: names first, then contents, then settled against an
+//! original that may still move.
 
 use super::*;
 

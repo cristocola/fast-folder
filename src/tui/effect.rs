@@ -18,8 +18,8 @@ pub enum Effect {
     StartAutoReconcile,
     /// Read the messages and the log for the activity screen (`L`).
     LoadActivity,
-    /// `library::discover` on a worker. The generation tells a late answer
-    /// from a current one.
+    /// Discovery, a worker per base (`runtime::discover_by_base`). The
+    /// generation tells a late answer from a current one.
     Discover {
         generation: u64,
     },
@@ -48,8 +48,9 @@ pub enum Effect {
     /// Start another program on the user's behalf; answered by `Msg::Spawned`.
     Spawn(SpawnKind),
     /// Read one project's full metadata or journal for a read-only view;
-    /// answered by `Msg::ViewLoaded`.
+    /// answered by `Msg::ViewLoaded`, which carries `request` back.
     LoadView {
+        request: u64,
         title: String,
         path: PathBuf,
         kind: ViewKind,
@@ -92,8 +93,10 @@ pub enum Effect {
     CancelJob(String),
     /// Say that a job's outcome has been shown.
     MarkSeen(String),
-    /// Read a job's own log into the message dialog titled `title`.
+    /// Read a job's own log into the message dialog titled `title`; answered
+    /// as a `LoadView` is.
     LoadJobLog {
+        request: u64,
         id: String,
         title: String,
     },
@@ -104,8 +107,7 @@ pub enum Effect {
 
 /// What a flow wants previewed, and then committed. The same value serves
 /// both, so the screen cannot show a plan built one way and commit one built
-/// another — which is exactly how a rename prompt came to offer `ID0001` and
-/// write `ID0011`.
+/// another.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Create(CreateRequest),

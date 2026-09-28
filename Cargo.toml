@@ -22,7 +22,6 @@ exclude = [
     "packaging/",
     "docs/img/",
     "tests/snapshots/",
-    "PLAN.md",
 ]
 
 [[bin]]

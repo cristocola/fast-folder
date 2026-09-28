@@ -24,7 +24,10 @@ pub struct RecentArgs {
 
 pub fn run(args: RecentArgs) -> Result<()> {
     let cfg = Config::load()?;
-    let limit = args.limit.unwrap_or(cfg.recent_default_limit).max(1);
+    let limit = args
+        .limit
+        .unwrap_or_else(|| cfg.resolve_recent_limit())
+        .max(1);
 
     // Nothing below this line can be read from a desktop launcher: stdout and
     // stderr are journald sockets there, and the picker has no terminal to draw
@@ -38,12 +41,9 @@ pub fn run(args: RecentArgs) -> Result<()> {
     // Every refusal is **below** the hand-off, for the reason `cli::search`
     // spells out: from a desktop launcher this message would go to a journald
     // socket nobody reads, and the relaunched process asks the same question
-    // again in the window it opened. `--limit 0` was refused above it while its
-    // three siblings were refused here — the move went the wrong way for the
-    // one case that stayed put.
+    // again in the window it opened.
     //
-    // `--limit 0` used to be clamped to 1, quietly showing a project the user
-    // asked not to see. A zero-length list is not what anyone means by it.
+    // `--limit 0` is refused, not clamped: nobody means a zero-length list.
     if args.limit == Some(0) {
         anyhow::bail!("--limit must be at least 1");
     }
@@ -77,8 +77,8 @@ pub fn run(args: RecentArgs) -> Result<()> {
 
     // Two questions, both of which must say yes: stdout decides the *format*
     // (a pipe gets the plain list), and stderr decides whether the picker can
-    // be drawn and answered at all. Without the second, `2>/dev/null` launched
-    // a picker nobody could see and waited for a key.
+    // be drawn and answered at all. Without the second, `2>/dev/null` would
+    // launch a picker nobody can see and wait for a key.
     if args.json {
         return crate::cli::json::print_projects(&filtered);
     }
@@ -119,12 +119,11 @@ pub(crate) fn check_since(since: &str) -> Result<()> {
 
 /// Refuse a filter that can only ever match nothing.
 ///
-/// **"No projects match those filters" is an answer, and it was being given to
-/// a question fastf had not understood.** `--limit 0` was already refused right
-/// beside these three, so the surface disagreed with itself; and `--since` is
-/// the sharp one, because it is compared as text: `--since 2026-6-1` is not a
-/// date fastf writes, so it sorts *after* every `2026-0…` project and silently
-/// hid the whole year.
+/// **"No projects match those filters" is an answer, and must never be given
+/// to a question fastf has not understood.** `--since` is the sharp one,
+/// because it is compared as text: `--since 2026-6-1` is not a date fastf
+/// writes, so it sorts *after* every `2026-0…` project and silently hides the
+/// whole year.
 ///
 /// Every message names what was wrong and what the real answers are. A filter
 /// that matches nothing because the library is empty is still a legitimate
@@ -213,9 +212,10 @@ fn filter_projects<'a>(
 ///
 /// **Takes the base itself, not a project in it**, because the same question is
 /// asked twice: once of every project while filtering, and once of the
-/// configured bases before filtering starts — a `--base` that names nothing was
-/// answered with "No projects match those filters", which is true of a typo and
-/// of an empty base alike. Two spellings of one rule is how they would drift.
+/// configured bases before filtering starts, so a `--base` that names nothing
+/// is refused rather than answered with "No projects match those filters",
+/// which is true of a typo and of an empty base alike. Two spellings of one
+/// rule would drift.
 pub fn base_matches(base: &std::path::Path, want: &str) -> bool {
     let want = want.trim_end_matches(['/', '\\']);
     library::base_label(base) == want

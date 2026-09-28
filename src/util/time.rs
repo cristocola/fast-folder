@@ -1,8 +1,4 @@
 //! One clock.
-//!
-//! `now_iso8601` lived in `core::library`, which is why `project_info` and
-//! `provisioning` — neither of which has anything to do with the project library
-//! — both imported it. A timestamp is not a library concern.
 
 /// Current UTC timestamp, ISO-8601 with seconds precision.
 ///

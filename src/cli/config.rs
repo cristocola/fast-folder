@@ -11,48 +11,68 @@ pub fn show() -> Result<()> {
     let editor = config.resolve_editor();
 
     println!("{}", "fastf config:".bold());
+    print_data_dir();
+    println!();
+    print_base_and_programs(&config, base, editor);
+    print_look_and_defaults(&config);
+    println!();
+    print_prompts_and_library(&config);
+    println!();
+    print_post_create(&config);
+
+    Ok(())
+}
+
+fn print_data_dir() {
     if let Ok((_, mode)) = paths::try_install_dir() {
         println!("  {:<26} {}", "Data dir mode:".dimmed(), mode.label());
     }
     println!(
         "  {:<26} {}",
         "Config file:".dimmed(),
-        paths::config_path().display()
+        crate::util::paths::display_path(&paths::config_path())
     );
     println!(
         "  {:<26} {}",
         "Templates dir:".dimmed(),
-        paths::templates_dir().display()
+        crate::util::paths::display_path(&paths::templates_dir())
     );
     // The data-dir counter is a backup input, not the record — each base carries
     // its own `.fastf-counter.toml`. `fastf id show` lists them.
     println!(
         "  {:<26} {}",
         "Counter (this machine):".dimmed(),
-        paths::counters_path().display()
+        crate::util::paths::display_path(&paths::counters_path())
     );
     println!(
         "  {:<26} {}",
         "Counter (per base):".dimmed(),
         "<base>/.fastf-counter.toml  — see `fastf id show`".dimmed()
     );
-    println!();
+}
+
+fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: String) {
     println!(
         "  {:<26} {}",
         "base_dir:".green(),
         if config.base_dir.is_empty() {
-            format!("{} (home directory — not configured)", base.display())
+            format!(
+                "{} (home directory — not configured)",
+                crate::util::paths::display_path(&base)
+            )
         } else {
-            base.display().to_string()
+            crate::util::paths::display_path(&base)
         }
     );
     println!(
         "  {:<26} {}",
         "editor:".green(),
-        if config.editor.is_empty() {
+        if !config.editor.is_empty() {
+            editor
+        } else if std::env::var_os("EDITOR").is_some() {
             format!("{} (from $EDITOR)", editor)
         } else {
-            editor
+            format!("{} ($EDITOR is not set)", editor)
         }
     );
     println!(
@@ -71,6 +91,9 @@ pub fn show() -> Result<()> {
                 "(probe: konsole, gnome-terminal, kitty, …)".to_string(),
         }
     );
+}
+
+fn print_look_and_defaults(config: &Config) {
     println!(
         "  {:<26} {}",
         "theme:".green(),
@@ -110,7 +133,9 @@ pub fn show() -> Result<()> {
         "preview_lines:".green(),
         config.preview_lines
     );
-    println!();
+}
+
+fn print_prompts_and_library(config: &Config) {
     println!(
         "  {:<26} {}",
         "prompt_open_after_create:".green(),
@@ -124,7 +149,7 @@ pub fn show() -> Result<()> {
     println!(
         "  {:<26} {}",
         "recent_limit:".green(),
-        config.recent_default_limit
+        config.resolve_recent_limit()
     );
     println!(
         "  {:<26} {}",
@@ -150,7 +175,9 @@ pub fn show() -> Result<()> {
             "(a taken folder name is refused)".dimmed()
         }
     );
-    println!();
+}
+
+fn print_post_create(config: &Config) {
     println!("  {}", "post_create defaults:".bold());
     println!(
         "    {:<24} {}",
@@ -177,10 +204,8 @@ pub fn show() -> Result<()> {
         "    {:<24} {} command{}",
         "commands".dimmed(),
         cmd_count,
-        if cmd_count == 1 { "" } else { "s" }
+        crate::util::plural::s(cmd_count)
     );
-
-    Ok(())
 }
 
 fn bool_label(b: bool) -> colored::ColoredString {
@@ -214,8 +239,8 @@ fn parse_usize(value: &str) -> Result<usize> {
 /// nothing — conjuring a missing base would plant an empty directory over a
 /// mount point and shadow the drive it stands for.
 ///
-/// Shared with the TUI's Library bases menu so there is one validator rather
-/// than two that can drift.
+/// Shared with the settings screen's library bases so there is one validator
+/// rather than two that can drift.
 pub fn normalize_base_entry(raw: &str) -> Result<String> {
     let expanded = crate::core::config::expand_base_path(raw)?;
     if !expanded.is_dir() {
@@ -236,8 +261,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
     // `config set` calls each write back their own copy of the whole file and
-    // one update is silently lost. A release-mode test caught this; the debug
-    // build happened to be slow enough to serialize the processes by luck.
+    // one update is silently lost.
     let mut said = String::new();
     crate::core::operations::update_config(|config| {
         said = apply(config, key, value)?;
@@ -254,234 +278,242 @@ pub fn set(key: &str, value: &str) -> Result<()> {
 /// does. Every refusal here is the refusal `config set` has always made.
 pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
     let normalized = key.replace('-', "_");
-    let said = {
-        match normalized.as_str() {
-            "base_dir" => {
-                // Same validation as first-run onboarding — see
-                // `config::resolve_base_dir_input`. Storing the raw string let a
-                // quoted `~/Projects` become a literal directory named `~`, and a
-                // relative path scatter projects wherever the command ran.
-                let resolved = crate::core::config::resolve_base_dir_input(value)?;
-                config.base_dir = crate::util::paths::storable(&resolved, "the base directory")?;
-                format!(
-                    "Set base_dir = {}",
-                    crate::util::paths::display_path(&resolved)
-                )
-            }
-            "editor" => {
-                config.editor = value.to_string();
-                format!("Set editor = {}", value)
-            }
-            "terminal" => {
-                config.terminal = value.to_string();
-                format!("Set terminal = {}", value)
-            }
-            "motion" => {
-                let Some(choice) = crate::tui::motion::Motion::parse(value) else {
-                    bail!("expected on or off; got '{}'", value.trim());
-                };
-                config.motion = choice.name().to_string();
-                format!(
-                    "Set motion = {}  ({})",
-                    choice.name(),
-                    match choice {
-                        crate::tui::motion::Motion::On =>
-                            "a row that changed lights up and fades, the focus eases between the panes",
-                        crate::tui::motion::Motion::Off => "every frame is a hard cut",
-                    }
-                )
-            }
-            "log_level" => {
-                let Some(level) = crate::util::log::Level::parse(value) else {
-                    bail!(
-                        "expected one of {}; got '{}'",
-                        crate::util::log::Level::NAMES.join(", "),
-                        value.trim()
-                    );
-                };
-                config.log_level = level.name().to_string();
-                format!(
-                    "Set log_level = {}  ({})",
-                    level.name(),
-                    match level {
-                        crate::util::log::Level::Trace =>
-                            "every step, and every entry a move or a reconcile touches",
-                        crate::util::log::Level::Debug => "every step, with what each decided",
-                        crate::util::log::Level::Info =>
-                            "every step of every job, and every warning",
-                        crate::util::log::Level::Warn => "warnings and errors",
-                        crate::util::log::Level::Error => "errors only",
-                        crate::util::log::Level::Off =>
-                            "nothing; a job's own log still keeps its story",
-                    }
-                )
-            }
-            // A setting in v3.6.0, retired when the app stopped asking the
-            // terminal for the mouse at all. Accepted and ignored for the
-            // reason `show_banner` and `show_frame` are.
-            "mouse" => format!(
-                "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
-            ),
-            "theme" => {
-                let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {
-                    bail!(
-                        "expected {}; got '{}'",
-                        crate::tui::theme::ThemeChoice::NAMES.join(", "),
-                        value.trim()
-                    );
-                };
-                config.theme = choice.name().to_string();
-                format!(
-                    "Set theme = {}  ({})",
-                    choice.name(),
-                    match choice {
-                        crate::tui::theme::ThemeChoice::Auto =>
-                            "follows what the terminal announces",
-                        crate::tui::theme::ThemeChoice::Kind(
-                            crate::tui::theme::ThemeKind::Mono,
-                        ) => "no colour, bold and reverse video only",
-                        crate::tui::theme::ThemeChoice::Kind(
-                            crate::tui::theme::ThemeKind::Ansi,
-                        ) => "the terminal's sixteen colours",
-                        crate::tui::theme::ThemeChoice::Kind(
-                            crate::tui::theme::ThemeKind::Rich,
-                        ) => "24-bit colour, muted, on the terminal's own background",
-                        crate::tui::theme::ThemeChoice::Kind(
-                            crate::tui::theme::ThemeKind::DoomOne,
-                        ) => "Doom One: 24-bit colour on its own dark background",
-                    }
-                )
-            }
-            "default_template" => {
-                config.default_template = value.to_string();
-                format!("Set default_template = {}", value)
-            }
-            "date_format" => {
-                let preview = Local::now().format(value).to_string();
-                if preview.is_empty() {
-                    bail!(
-                        "invalid date format '{}' — must be a valid strftime string (e.g. %Y-%m-%d)",
-                        value
-                    );
-                }
-                config.date_format = value.to_string();
-                format!("Set date_format = {}  (today: {})", value, preview)
-            }
-            "preview_lines" => {
-                config.preview_lines = parse_usize(value)?;
-                format!("Set preview_lines = {}", config.preview_lines)
-            }
-            "prompt_open_after_create" => {
-                config.prompt_open_after_create = parse_bool(value)?;
-                format!(
-                    "Set prompt_open_after_create = {}",
-                    config.prompt_open_after_create
-                )
-            }
-            "confirm_create" => {
-                config.confirm_create = parse_bool(value)?;
-                format!("Set confirm_create = {}", config.confirm_create)
-            }
-            // Retired at v3.0.0 with the menu they drew. Accepted and ignored
-            // rather than refused: a config file or a script that still sets
-            // one must not start failing.
-            "show_banner" | "show_frame" => format!(
-                "{normalized} is no longer used — the guided app has no banner and no frame"
-            ),
-            "bases" => {
-                // Comma-separated list of extra base directories to index. Empty
-                // value clears the list.
-                let mut resolved = Vec::new();
-                for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    resolved.push(normalize_base_entry(raw)?);
-                }
-                config.bases = resolved;
-                if config.bases.is_empty() {
-                    "Cleared bases".to_string()
-                } else {
-                    format!("Set bases = {}", config.bases.join(", "))
-                }
-            }
-            // `recent-default-limit` was the name while it also sized a menu
-            // page; the app scrolls, so it is only the `recent` default now.
-            // The old key keeps parsing — a config file that names it must not
-            // start failing at a major version.
-            "recent_limit" | "recent_default_limit" => {
-                let n = parse_usize(value)?;
-                if n == 0 {
-                    bail!("recent_limit must be at least 1");
-                }
-                config.recent_default_limit = n;
-                format!("Set recent_limit = {}", config.recent_default_limit)
-            }
-            "register_naming_pattern" => {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    bail!("register_naming_pattern cannot be empty");
-                }
-                // `{name}` and `{id}` are the safety net — without them the pattern
-                // would silently rename multiple registered folders to the same path.
-                if !trimmed.contains("{id}") {
-                    bail!(
-                        "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",
-                        trimmed
-                    );
-                }
-                config.register_naming_pattern = trimmed.to_string();
-                format!(
-                    "Set register_naming_pattern = {}",
-                    config.register_naming_pattern
-                )
-            }
-            "on_name_collision" => {
-                config.on_name_collision = match value.trim().to_lowercase().as_str() {
-                    "suffix" => crate::core::config::NameCollision::Suffix,
-                    "error" => crate::core::config::NameCollision::Error,
-                    // The *setter* is still strict: a typo typed at the command
-                    // line is a mistake to report, where a typo already sitting
-                    // in a config file must not stop every command.
-                    other => bail!("expected 'suffix' or 'error'; got '{other}'"),
-                };
-                format!(
-                    "Set on_name_collision = {}  ({})",
-                    config.on_name_collision,
-                    if config.suffix_on_name_collision() {
-                        "a taken folder name gets _2, _3, …"
-                    } else {
-                        "a taken folder name is refused"
-                    }
-                )
-            }
-            "post_create.git_init" => {
-                config.post_create.git_init = parse_bool(value)?;
-                format!("Set post_create.git_init = {}", config.post_create.git_init)
-            }
-            "post_create.reveal" => {
-                config.post_create.reveal = parse_bool(value)?;
-                format!("Set post_create.reveal = {}", config.post_create.reveal)
-            }
-            "post_create.open_in_editor" => {
-                config.post_create.open_in_editor = parse_bool(value)?;
-                format!(
-                    "Set post_create.open_in_editor = {}",
-                    config.post_create.open_in_editor
-                )
-            }
-            "post_create.print_path" => {
-                config.post_create.print_path = parse_bool(value)?;
-                format!(
-                    "Set post_create.print_path = {}",
-                    config.post_create.print_path
-                )
-            }
-            other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
-             preview-lines, prompt-open-after-create, confirm-create, \
-             recent-limit, register-naming-pattern, on-name-collision, \
-             post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
-                other
-            ),
+    Ok(match normalized.as_str() {
+        "base_dir" => set_base_dir(config, value)?,
+        "editor" => {
+            config.editor = value.to_string();
+            format!("Set editor = {}", value)
         }
+        "terminal" => {
+            config.terminal = value.to_string();
+            format!("Set terminal = {}", value)
+        }
+        "motion" => set_motion(config, value)?,
+        "log_level" => set_log_level(config, value)?,
+        // A retired key: the app never takes the mouse. Accepted and
+        // ignored for the reason `show_banner` and `show_frame` are.
+        "mouse" => format!(
+            "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
+        ),
+        "theme" => set_theme(config, value)?,
+        "default_template" => {
+            config.default_template = value.to_string();
+            format!("Set default_template = {}", value)
+        }
+        "date_format" => set_date_format(config, value)?,
+        "preview_lines" => {
+            config.preview_lines = parse_usize(value)?;
+            format!("Set preview_lines = {}", config.preview_lines)
+        }
+        "prompt_open_after_create" => {
+            config.prompt_open_after_create = parse_bool(value)?;
+            format!(
+                "Set prompt_open_after_create = {}",
+                config.prompt_open_after_create
+            )
+        }
+        "confirm_create" => {
+            config.confirm_create = parse_bool(value)?;
+            format!("Set confirm_create = {}", config.confirm_create)
+        }
+        // Retired keys. Accepted and ignored rather than refused: a
+        // config file or a script that still sets one must not start
+        // failing.
+        "show_banner" | "show_frame" => {
+            format!("{normalized} is no longer used — the guided app has no banner and no frame")
+        }
+        "bases" => set_bases(config, value)?,
+        // `recent-default-limit` is the key's older name. It keeps
+        // parsing: a config file that names it must not start failing.
+        "recent_limit" | "recent_default_limit" => set_recent_limit(config, value)?,
+        "register_naming_pattern" => set_register_naming_pattern(config, value)?,
+        "on_name_collision" => set_on_name_collision(config, value)?,
+        "post_create.git_init" => {
+            config.post_create.git_init = parse_bool(value)?;
+            format!("Set post_create.git_init = {}", config.post_create.git_init)
+        }
+        "post_create.reveal" => {
+            config.post_create.reveal = parse_bool(value)?;
+            format!("Set post_create.reveal = {}", config.post_create.reveal)
+        }
+        "post_create.open_in_editor" => {
+            config.post_create.open_in_editor = parse_bool(value)?;
+            format!(
+                "Set post_create.open_in_editor = {}",
+                config.post_create.open_in_editor
+            )
+        }
+        "post_create.print_path" => {
+            config.post_create.print_path = parse_bool(value)?;
+            format!(
+                "Set post_create.print_path = {}",
+                config.post_create.print_path
+            )
+        }
+        other => bail!(
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
+         preview-lines, prompt-open-after-create, confirm-create, \
+         recent-limit, register-naming-pattern, on-name-collision, \
+         post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
+            other
+        ),
+    })
+}
+
+/// Same validation as first-run onboarding — see
+/// `config::resolve_base_dir_input`. A raw string would make a quoted
+/// `~/Projects` a literal directory named `~`, and a relative path would
+/// scatter projects wherever the command ran.
+fn set_base_dir(config: &mut Config, value: &str) -> Result<String> {
+    let resolved = crate::core::config::resolve_base_dir_input(value)?;
+    config.base_dir = crate::util::paths::storable(&resolved, "the base directory")?;
+    Ok(format!(
+        "Set base_dir = {}",
+        crate::util::paths::display_path(&resolved)
+    ))
+}
+
+fn set_motion(config: &mut Config, value: &str) -> Result<String> {
+    let Some(choice) = crate::tui::motion::Motion::parse(value) else {
+        bail!("expected on or off; got '{}'", value.trim());
     };
-    Ok(said)
+    config.motion = choice.name().to_string();
+    Ok(format!(
+        "Set motion = {}  ({})",
+        choice.name(),
+        match choice {
+            crate::tui::motion::Motion::On =>
+                "a row that changed lights up and fades, the focus eases between the panes",
+            crate::tui::motion::Motion::Off => "every frame is a hard cut",
+        }
+    ))
+}
+
+fn set_log_level(config: &mut Config, value: &str) -> Result<String> {
+    let Some(level) = crate::util::log::Level::parse(value) else {
+        bail!(
+            "expected one of {}; got '{}'",
+            crate::util::log::Level::NAMES.join(", "),
+            value.trim()
+        );
+    };
+    config.log_level = level.name().to_string();
+    Ok(format!(
+        "Set log_level = {}  ({})",
+        level.name(),
+        match level {
+            crate::util::log::Level::Trace =>
+                "every step, and every entry a move or a reconcile touches",
+            crate::util::log::Level::Debug => "every step, with what each decided",
+            crate::util::log::Level::Info => "every step of every job, and every warning",
+            crate::util::log::Level::Warn => "warnings and errors",
+            crate::util::log::Level::Error => "errors only",
+            crate::util::log::Level::Off => "nothing; a job's own log still keeps its story",
+        }
+    ))
+}
+
+fn set_theme(config: &mut Config, value: &str) -> Result<String> {
+    let Some(choice) = crate::tui::theme::ThemeChoice::parse(value) else {
+        bail!(
+            "expected {}; got '{}'",
+            crate::tui::theme::ThemeChoice::NAMES.join(", "),
+            value.trim()
+        );
+    };
+    config.theme = choice.name().to_string();
+    Ok(format!(
+        "Set theme = {}  ({})",
+        choice.name(),
+        match choice {
+            crate::tui::theme::ThemeChoice::Auto => "follows what the terminal announces",
+            crate::tui::theme::ThemeChoice::Kind(crate::tui::theme::ThemeKind::Mono) =>
+                "no colour, bold and reverse video only",
+            crate::tui::theme::ThemeChoice::Kind(crate::tui::theme::ThemeKind::Ansi) =>
+                "the terminal's sixteen colours",
+            crate::tui::theme::ThemeChoice::Kind(crate::tui::theme::ThemeKind::Rich) =>
+                "24-bit colour, muted, on the terminal's own background",
+            crate::tui::theme::ThemeChoice::Kind(crate::tui::theme::ThemeKind::DoomOne) =>
+                "Doom One: 24-bit colour on its own dark background",
+        }
+    ))
+}
+
+fn set_date_format(config: &mut Config, value: &str) -> Result<String> {
+    let preview = Local::now().format(value).to_string();
+    if preview.is_empty() {
+        bail!(
+            "invalid date format '{}' — must be a valid strftime string (e.g. %Y-%m-%d)",
+            value
+        );
+    }
+    config.date_format = value.to_string();
+    Ok(format!("Set date_format = {}  (today: {})", value, preview))
+}
+
+/// Comma-separated list of extra base directories to index. Empty value clears
+/// the list.
+fn set_bases(config: &mut Config, value: &str) -> Result<String> {
+    let mut resolved = Vec::new();
+    for raw in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        resolved.push(normalize_base_entry(raw)?);
+    }
+    config.bases = resolved;
+    Ok(if config.bases.is_empty() {
+        "Cleared bases".to_string()
+    } else {
+        format!("Set bases = {}", config.bases.join(", "))
+    })
+}
+
+fn set_recent_limit(config: &mut Config, value: &str) -> Result<String> {
+    let n = parse_usize(value)?;
+    if n == 0 {
+        bail!("recent_limit must be at least 1");
+    }
+    config.recent_default_limit = n;
+    Ok(format!(
+        "Set recent_limit = {}",
+        config.recent_default_limit
+    ))
+}
+
+fn set_register_naming_pattern(config: &mut Config, value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("register_naming_pattern cannot be empty");
+    }
+    // `{id}` is the safety net — without it the pattern would silently rename
+    // several registered folders to the same path.
+    if !trimmed.contains("{id}") {
+        bail!(
+            "register_naming_pattern must contain {{id}} so registered folders get unique names; got '{}'",
+            trimmed
+        );
+    }
+    config.register_naming_pattern = trimmed.to_string();
+    Ok(format!(
+        "Set register_naming_pattern = {}",
+        config.register_naming_pattern
+    ))
+}
+
+fn set_on_name_collision(config: &mut Config, value: &str) -> Result<String> {
+    config.on_name_collision = match value.trim().to_lowercase().as_str() {
+        "suffix" => crate::core::config::NameCollision::Suffix,
+        "error" => crate::core::config::NameCollision::Error,
+        // The *setter* is still strict: a typo typed at the command line is a
+        // mistake to report, where a typo already sitting in a config file
+        // must not stop every command.
+        other => bail!("expected 'suffix' or 'error'; got '{other}'"),
+    };
+    Ok(format!(
+        "Set on_name_collision = {}  ({})",
+        config.on_name_collision,
+        if config.suffix_on_name_collision() {
+            "a taken folder name gets _2, _3, …"
+        } else {
+            "a taken folder name is refused"
+        }
+    ))
 }

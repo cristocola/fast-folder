@@ -380,12 +380,12 @@ mod imp {
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
+    use crate::util::win::{
+        ERROR_SHARING_VIOLATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_ALL, OPEN_EXISTING,
+    };
+
     const DELETE: u32 = 0x0001_0000;
-    const SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
-    const OPEN_EXISTING: u32 = 3;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const ERROR_SHARING_VIOLATION: i32 = 32;
 
     /// Whether a program has `folder` open without letting it be deleted —
     /// a console working there does. Only "in use" counts: a folder fastf
@@ -397,7 +397,7 @@ mod imp {
             let handle = CreateFileW(
                 wide.as_ptr(),
                 DELETE,
-                SHARE_ALL,
+                FILE_SHARE_ALL,
                 std::ptr::null_mut(),
                 OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
@@ -673,6 +673,7 @@ mod windows_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        panic!("waited a minute for the program to hold what it was started to hold");
     }
 
     /// A program holding a file — any sharing — is named by the Restart
@@ -724,7 +725,7 @@ mod windows_tests {
     /// holds its working folder — keeps the project folder from being
     /// renamed; the Restart Manager cannot see it, the folder's own open can.
     /// Held here by the test itself: a real console has to start and settle
-    /// first, which a busy CI runner did not always do in time (the console
+    /// first, which a busy CI runner does not always do in time (the console
     /// itself is the VM's scenario).
     #[test]
     fn a_folder_held_without_delete_sharing_is_found() {

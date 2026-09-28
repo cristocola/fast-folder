@@ -1,9 +1,8 @@
 //! The interactive half of variable collection.
 //!
-//! It lived in `core::vars`, which meant `core` owned a terminal and printed to
-//! it. The noninteractive boundary (`core::vars::validated_raw_values`)
-//! stayed where it was: it is what create, apply and register all validate
-//! against.
+//! Here rather than in `core::vars`, because `core` never prompts. The
+//! noninteractive boundary (`core::vars::validated_raw_values`) is `core`'s:
+//! it is what create, apply and register all validate against.
 
 use anyhow::{Result, bail};
 use std::collections::HashMap;

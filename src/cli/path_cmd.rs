@@ -19,7 +19,7 @@ pub fn run(query: &str) -> Result<()> {
     // An ambiguous query asks, when there is a terminal on stderr to ask on —
     // which `cd "$(fastf path lullaby)"` has, its stdout being a pipe. The
     // picker never writes to stdout, so the line below stays the only thing
-    // there. With no terminal at all it is the error it has always been.
+    // there. With no terminal at all it is an error.
     let project = match crate::cli::target::one_project(
         &cfg,
         query,

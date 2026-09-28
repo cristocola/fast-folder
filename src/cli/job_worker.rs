@@ -83,9 +83,10 @@ pub fn run(id: &str) -> i32 {
     crate::util::log::set_job(Some((id.to_string(), dir.join("log"))));
     crate::core::jobs::set_current(id);
     crate::util::log::info(format!(
-        "job {id}: {:?} of {} item(s)",
+        "job {id}: {:?} of {} item{}",
         request.kind,
-        request.items.len()
+        request.items.len(),
+        crate::util::plural::s(request.items.len())
     ));
 
     let cancel: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
@@ -393,7 +394,7 @@ impl Job<'_> {
         if paused > 0 {
             summary.push_str(&format!(
                 ", {paused} paused until {} mount answers",
-                if paused == 1 { "its" } else { "their" }
+                crate::util::plural::of(paused, "its", "their")
             ));
         }
         self.summarise(summary);

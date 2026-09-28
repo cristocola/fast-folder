@@ -61,11 +61,11 @@ fn the_list_is_newest_first_and_sizes_fill_in() {
 
 /// A tag changes one row, and only that row.
 ///
-/// The browser used to answer every mutation by re-running `library::discover`
-/// across every configured base, re-reading every `PROJECT_INFO.md` in the
-/// library to put one word into one cell. The trace file is how that is
-/// observable at all: the rendered list looks the same either way, and the cost
-/// is seconds on a network share and nothing on a local disk.
+/// A mutation never re-runs `library::discover`, which re-reads every
+/// `PROJECT_INFO.md` in every configured base to put one word into one cell.
+/// The trace file is how that is observable at all: the rendered list looks the
+/// same either way, and the cost is seconds on a network share and nothing on
+/// a local disk.
 // Debug-only, like the failpoint suites: `util::trace` compiles to nothing in
 // release, so there would be no counts to compare.
 #[cfg(debug_assertions)]
@@ -283,8 +283,8 @@ fn the_header_reports_the_library_from_the_index_without_scanning() {
     let screen = app_screen(&out);
 
     assert_eq!(code, 0, "the app should open and quit:\n{screen}");
-    // The count lives on the search bar now — shown once, beside the sort and
-    // the marks it belongs with, rather than three times in three formats.
+    // The count lives on the search bar, shown once, beside the sort and the
+    // marks it belongs with.
     assert!(
         screen.contains("2/2"),
         "the bar should report the count:\n{screen}"
@@ -464,8 +464,7 @@ fn copy_path_falls_back_to_showing_the_path() {
 /// **The pane reads the file, and keeps reading it.** A note appended to
 /// `PROJECT_INFO.md` by something that is not fastf — an editor in another
 /// window, here a thread — is on the pane within a couple of seconds, with
-/// no key pressed. The pane used to trust its cache until a verb inside the
-/// app dropped it, so a line added outside never showed.
+/// no key pressed.
 #[test]
 fn a_note_added_outside_the_app_appears_in_the_pane_unasked() {
     let sb = Sandbox::new();
@@ -776,7 +775,7 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
 
     // newest → oldest → name. The cursor followed Zeta through the re-sorts
     // (selection is by path), so it sits on the last row; `g` is the first,
-    // Alpha — a list stops at its ends now, so down would stay on Zeta.
+    // Alpha — a list stops at its ends, so down would stay on Zeta.
     let script = pty::Script::new()
         .pause(1500)
         .key("s")
@@ -816,15 +815,14 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
 
 /// The **other** half of the batch tag: a tag the library already knows, picked
 /// from the list rather than typed. It is the path a real library takes — the
-/// text prompt only appears when no tag exists anywhere — and it was the one
-/// with no coverage.
+/// text prompt only appears when no tag exists anywhere.
 ///
 /// It also pins the two things a finished batch owes: every marked row loses
 /// its mark as its item lands (a mark is the retry list), and the list keeps
-/// working afterwards. The batch used to drop the effects `apply_change`
-/// returned, and `discover` arms `inflight` *before* handing back the effect
-/// that answers it — so a dropped one left the app waiting on a generation
-/// nothing would send, and the list stopped changing for the rest of the run.
+/// working afterwards. A batch passes on every effect `apply_change` returns:
+/// `discover` arms `inflight` *before* handing back the effect that answers
+/// it, so a dropped one leaves the app waiting on a generation nothing will
+/// send, and the list stops changing for the rest of the run.
 #[cfg(debug_assertions)]
 #[test]
 fn a_batch_tag_picked_from_the_list_lands_and_leaves_the_list_working() {
@@ -863,7 +861,7 @@ fn a_batch_tag_picked_from_the_list_lands_and_leaves_the_list_working() {
     // report and the glyphs left on screen cannot disagree.
     //
     // Asked of the **rows**, not of the whole screen: the success status line
-    // wears the theme's tick now, and the mark and the tick are the same glyph.
+    // wears the theme's tick, and the mark and the tick are the same glyph.
     let marked_rows: Vec<&str> = screen
         .lines()
         .filter(|line| line.contains("Pick_") && line.contains('✓'))
@@ -1015,8 +1013,8 @@ fn todos_typed_in_a_row_on_the_add_line_land_in_the_file_in_order() {
 
 /// **Typed faster than a write lands, nothing is lost.** Three todos and their
 /// Enters arrive in one burst — no pause for the first write to land — and all
-/// three are in the file, in order. The line used to refuse keys while its
-/// write was on its way, and dropped the start of the next todo.
+/// three are in the file, in order: the line keeps taking keys while a write
+/// is on its way.
 #[test]
 fn todos_typed_in_one_burst_all_land_in_order() {
     let sb = Sandbox::new();
@@ -1107,9 +1105,9 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
 
 /// **A base on a mount that stopped answering holds up nothing but itself.**
 /// The other base's rows are on screen within a second, the silent base is
-/// named, and `q` leaves at once. Before, the rows waited on every base in
-/// series — each canonicalized, with no timeout, before its probe — and the
-/// quit joined a size worker blocked on the dead mount.
+/// named, and `q` leaves at once: no base waits on another, none is
+/// canonicalized without a deadline, and the quit never joins a size worker
+/// blocked on the dead mount.
 ///
 /// `paths:stall-base` makes every look into a folder holding
 /// `.fastf-test-stall` block while the file is there, the way every call

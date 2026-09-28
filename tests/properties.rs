@@ -61,8 +61,8 @@ fn hostile_text() -> impl Strategy<Value = String> {
 proptest! {
     /// The core guarantee: whatever goes in, what comes out can be created as a
     /// directory on this operating system — or is empty, which
-    /// `ProjectFolderName` refuses. Before the Windows hardening this failed for
-    /// `CON`, for trailing dots, and for control characters.
+    /// `ProjectFolderName` refuses. On Windows `CON`, trailing dots and control
+    /// characters are what break it.
     #[test]
     fn sanitize_name_always_yields_a_creatable_directory(raw in hostile_text()) {
         let safe = naming::sanitize_name(&raw);
@@ -95,11 +95,8 @@ proptest! {
     /// are non-empty and not dot-prefixed, and its accepted value is that output
     /// unchanged.
     ///
-    /// This is the property the suite used to skip. `prop_assume!(!safe
-    /// .is_empty())` came with the comment "callers reject that explicitly",
-    /// which was true of `rename_project_inner` and false of `plan` — so the
-    /// generated empty names, the ones that mattered, were the ones never
-    /// tested.
+    /// The empty outputs are asserted, never `prop_assume!`d away: they are the
+    /// names that matter.
     #[test]
     fn a_project_folder_name_is_exactly_a_visible_sanitized_name(raw in hostile_text()) {
         let safe = naming::sanitize_name(raw.trim());
@@ -136,11 +133,10 @@ proptest! {
     /// Interpolated *names* must stay single components no matter what a
     /// variable contains — this is what stops a value from escaping the project.
     ///
-    /// **Asked of `interpolate_name` itself.** It used to wrap the result in
-    /// `sanitize_name` before asserting, and the property above already proves
+    /// **Asked of `interpolate_name` itself.** The property above proves
     /// `sanitize_name`'s output is a creatable single component for *arbitrary*
-    /// input — so `interpolate_name` could have returned `../../etc` and this
-    /// still passed. What it has to prove is that interpolation does not
+    /// input, so an assertion on the result wrapped in it passes even over
+    /// `../../etc`. What it has to prove is that interpolation does not
     /// *introduce* a separator that its inputs did not have: every variable
     /// value is sanitized on the way in (`plan` does exactly that), and the
     /// pattern itself is the template author's.
@@ -188,10 +184,9 @@ proptest! {
     /// Whatever a user types into a variable, the metadata fastf writes for it
     /// must read back — with the same values.
     ///
-    /// This is the guarantee behind making `render` return a `Result`. It used to
-    /// swallow a serialization failure and write `# yaml-serialize-error: ...`
-    /// between valid `---` delimiters, which parses as an empty document: the
-    /// project was unreadable, and therefore undiscoverable, from birth. Colons,
+    /// This is why `render` returns a `Result`: a serialization failure written
+    /// between valid `---` delimiters parses as an empty document, and the
+    /// project is unreadable, and therefore undiscoverable, from birth. Colons,
     /// quotes, leading dashes, newlines and unicode are all ordinary things to
     /// type into a client name.
     #[test]
@@ -233,7 +228,7 @@ proptest! {
         let rendered = project_info::render(&plan, &tmpl, &[]).expect("render must not fail");
         let (frontmatter, _) = project_info::split_frontmatter_body(&rendered)
             .ok_or_else(|| TestCaseError::fail("rendered file has no frontmatter"))?;
-        let meta: project_info::Metadata = serde_yaml_ng::from_str(frontmatter)
+        let meta: project_info::Metadata = fastf::util::yaml::from_str(frontmatter)
             .map_err(|e| TestCaseError::fail(format!("frontmatter unreadable: {e}\n{frontmatter}")))?;
 
         prop_assert_eq!(&meta.id, "ID0001");
@@ -259,9 +254,9 @@ proptest! {
         };
         prop_assert_eq!(split_body, body.as_str(), "body must survive the split verbatim");
         // The frontmatter half has to parse back into the metadata it was
-        // written from. `contains(&id)` was the assertion here, and the test
-        // formats `id: {id}` into the string it then splits — so it restated
-        // its own setup and would have passed over any parse failure at all.
+        // written from. The test formats `id: {id}` into the string it splits,
+        // so asserting the text contains the id restates the setup and passes
+        // over any parse failure at all.
         let meta: project_info::Metadata = fastf::util::yaml::from_str(frontmatter)
             .map_err(|e| TestCaseError::fail(format!("frontmatter must parse: {e}")))?;
         prop_assert_eq!(meta.id, id);
@@ -275,10 +270,10 @@ proptest! {
 proptest! {
     /// The rendered result does not depend on `HashMap` iteration order.
     ///
-    /// The old implementation ran `String::replace` once per variable, in
-    /// whatever order the map iterated, so a value that happened to contain
-    /// `{another_token}` expanded or did not depending on hashing — two runs of
-    /// the same create could produce different names.
+    /// A `String::replace` per variable, in whatever order the map iterates,
+    /// expands a value that happens to contain `{another_token}` or not
+    /// depending on hashing, and two runs of the same create produce different
+    /// names.
     #[test]
     fn interpolation_does_not_depend_on_map_order(
         values in prop::collection::vec("[a-zA-Z0-9{}_-]{0,12}", 1..6)
@@ -294,7 +289,7 @@ proptest! {
 
         // The same pairs, inserted in two different orders. A `HashMap` does not
         // preserve insertion order, but with a value that itself contains a
-        // token the old code's result depended on which one it replaced first.
+        // token a replace per variable depends on which one it replaces first.
         let mut forward: HashMap<String, String> = HashMap::new();
         for (slug, value) in slugs.iter().zip(values.iter()) {
             forward.insert(slug.clone(), value.clone());

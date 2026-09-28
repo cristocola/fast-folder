@@ -8,13 +8,10 @@
 //!
 //! This module empties that bucket. The list of flags it recognizes is read
 //! from **clap's own declarations** for that subcommand rather than typed out
-//! here: the hand-written version knew five flags, of which `register` declares
-//! none, so `--rename` after the path was reported "unrecognized" and dropped
-//! while the identical flag before the path worked.
+//! here, or a flag that works before the positional is refused after it.
 //!
 //! Everything that is not a declared flag and not a `--key=value` pair is an
-//! error. A bare `--word` used to become a warning followed by a successful
-//! create; a flag typed on the line is a request, and the only honest answers
+//! error: a flag typed on the line is a request, and the only honest answers
 //! are to honour it or to refuse it.
 
 use anyhow::{Result, bail};
@@ -235,8 +232,8 @@ mod tests {
         assert!(err.contains("--bogus"), "{err}");
     }
 
-    /// The shape that used to fail with "no terminal to prompt on": a variable
-    /// written the way an ordinary flag is written.
+    /// A variable written the way an ordinary flag is written is refused with
+    /// the form that works, never left for a prompt to ask.
     #[test]
     fn a_variable_in_space_form_shows_the_equals_form() {
         let err = classify(&["--artist", "Bad Bunny"])

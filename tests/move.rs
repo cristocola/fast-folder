@@ -65,10 +65,9 @@ fn a_move_reports_whether_it_renamed_or_copied() {
             fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
         assert!(!outcome.staged, "one filesystem is a rename");
         assert!(outcome.copied.is_none(), "a rename copies nothing");
-        // The job is over, and says so. `JobStatus` was assigned `Running` at
-        // construction and never changed anywhere in the crate, so the
-        // runtime's "is it done yet" was always false: a finished move kept
-        // emitting progress and a later cancel set the flag on a dead handle.
+        // The job is over, and says so. A status left at `Running` makes the
+        // runtime's "is it done yet" false for ever: a finished move keeps
+        // emitting progress and a later cancel sets the flag on a dead handle.
         let state = progress.lock().unwrap();
         assert_eq!(state.status, fastf::core::assets::JobStatus::Done);
         drop(state);
@@ -110,8 +109,7 @@ fn one_project_two_bases(install: &Path) -> (library::Project, std::path::PathBu
 }
 
 /// **A move keeps what `mv` keeps**: each file's permission bits and times,
-/// and each folder's, a read-only (mode 555) folder included. 3.13 kept
-/// neither, and every moved script lost its `+x`.
+/// and each folder's, a read-only (mode 555) folder included.
 #[cfg(all(unix, debug_assertions))]
 #[test]
 fn a_staged_move_keeps_modes_and_times() {
@@ -159,9 +157,8 @@ fn a_staged_move_keeps_modes_and_times() {
     });
 }
 
-/// **A job that stops says how.** A failed move used to keep `Running` for
-/// ever, so anything watching it — the app polls until it is not — watched a
-/// dead job.
+/// **A job that stops says how**: a failed move left at `Running` has anything
+/// watching it — the app polls until it is not — watching a dead job for ever.
 #[test]
 fn a_move_that_fails_ends_failed_and_says_why() {
     sandboxed(|install| {
@@ -185,8 +182,8 @@ fn a_move_that_fails_ends_failed_and_says_why() {
 
 /// **An empty folder at the target name gives way.** A cloud mount leaves
 /// one behind for a while after a folder is removed — rclone re-creates
-/// directory markers — and moving a project back where it came from then
-/// failed with "move target already exists" over a folder holding nothing.
+/// directory markers — and moving a project back where it came from must not
+/// fail with "move target already exists" over a folder holding nothing.
 #[test]
 fn an_empty_folder_at_the_target_name_gives_way() {
     sandboxed(|install| {
@@ -352,8 +349,7 @@ fn a_copy_lands_verified_and_leaves_the_original_alone() {
         // **Both sides canonicalized.** `outcome.path` is derived from a
         // canonicalized destination, and on a Windows runner the tempdir the
         // test holds is the 8.3 short name (`RUNNER~1`) of the long one the
-        // engine returns — the exact comparison that has broken this suite on
-        // that platform before.
+        // engine returns, so an uncanonicalized comparison fails there.
         let landed = backup
             .canonicalize()
             .unwrap()
@@ -509,12 +505,10 @@ fn two_bases_with_one_id_list_as_two_rows() {
 /// A same-filesystem move preserves a symlink inside the project.
 ///
 /// A rename copies nothing, so it preserves links perfectly; the staged path
-/// now carries them as links too, by their target text. The rename's half of
-/// that guarantee was pinned only by
-/// `windows_semantics.rs`'s `#[cfg(windows)]` junction test and by the opt-in
-/// `windows_live.rs`, and `tests/CLAUDE.md` legislates against exactly that:
-/// "a suite CI never runs cannot be the only guard on a fix". This is the unix
-/// sibling, and it costs three lines.
+/// carries them as links too, by their target text. This is the unix guard on
+/// the rename's half, beside `windows_semantics.rs`'s `#[cfg(windows)]`
+/// junction test and the opt-in `windows_live.rs`: a suite CI never runs cannot
+/// be the only guard on a fix.
 #[cfg(unix)]
 #[test]
 fn a_same_filesystem_move_preserves_a_symlink_inside_the_project() {

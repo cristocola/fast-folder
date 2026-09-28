@@ -125,10 +125,9 @@ fn a_killed_command_line_leaves_its_move_to_finish() {
 
 /// **A second data dir's reconcile leaves a live move alone.** Two fastf data
 /// dirs on one machine — portable mode beside the installed one, a test lab —
-/// share their bases, and 3.13's reconcile asked only its own data dir which
-/// jobs were alive: it took a live move's record for an abandoned one and
-/// discarded the copy while it was being written ("657 of the 1639 recorded
-/// entries missing", found by the mount lab).
+/// share their bases, so a reconcile that asks only its own data dir which
+/// jobs are alive takes a live move's record for an abandoned one and discards
+/// the copy while it is being written.
 #[cfg(unix)]
 #[test]
 fn a_reconcile_from_another_data_dir_leaves_a_live_move_alone() {
@@ -166,8 +165,7 @@ fn a_reconcile_from_another_data_dir_leaves_a_live_move_alone() {
 /// **A delete killed part of the way is finished by reconcile.** The project
 /// left the library in one rename, so what is left is a hidden folder nothing
 /// lists; the next reconcile removes it — the word was typed once, for the
-/// whole delete. A design guard: 3.13 did this too, but this suite, which says
-/// it covers deletes, had no case for one.
+/// whole delete. A design guard.
 #[cfg(unix)]
 #[test]
 fn a_delete_killed_mid_removal_is_finished_by_reconcile() {
@@ -538,7 +536,7 @@ fn a_second_reconcile_leaves_the_first_ones_removals_alone() {
     let out = first.wait_with_output().unwrap();
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{out:?}");
-    assert!(said.contains("1 move(s) finished"), "{said}");
+    assert!(said.contains("1 move finished"), "{said}");
     assert!(hidden_folders(&sb.base).is_empty());
 }
 
@@ -636,12 +634,11 @@ fn a_job_waiting_on_its_filesystem_says_how_long_and_where() {
     assert!(state["progress"]["stalled_ms"].as_u64().unwrap_or(0) == 0);
 }
 
-/// **A staged move looks at each tree as few times as it can** (defect 15):
-/// the original twice — the scan, and the look that settles the copy — the
-/// moved copy twice — verified, then the merge's one walk of it — and the
-/// old copy once, removed by the merge as it is walked. 3.13 walked each of
-/// them three times or more, at two `lstat`s an entry, which on a cloud
-/// mount is minutes. Read from the worker's own trace.
+/// **A staged move looks at each tree as few times as it can**: the original
+/// twice — the scan, and the look that settles the copy — the moved copy
+/// twice — verified, then the merge's one walk of it — and the old copy once,
+/// removed by the merge as it is walked. Every extra walk is two `lstat`s an
+/// entry, which on a cloud mount is minutes. Read from the worker's own trace.
 #[test]
 fn a_staged_move_walks_each_tree_as_few_times_as_it_can() {
     let sb = Sandbox::new();
@@ -669,11 +666,118 @@ fn a_staged_move_walks_each_tree_as_few_times_as_it_can() {
         "nothing was left to count: {lines}"
     );
     // Asked once for the move, not once for every file it looks at, copies
-    // or removes: on a local disk that read cost more than the unlink it
-    // guarded, and a 20 000-file move took 4.5 times as long.
+    // or removes: on a local disk that read costs more than the unlink it
+    // guards, and makes a 20 000-file move take 4.5 times as long.
     let reads = count("mount table");
     assert!(
         reads < 20,
         "the mount table was read {reads} times for a move of 40 files: {lines}"
     );
+}
+
+/// **What a move has published is on disk before its original is touched.**
+/// A file's sync keeps its bytes and only its folder's keeps its name, so
+/// every folder of the moved copy is synced, deepest first, then the copy's
+/// own folder, then the base it is in, and only then does the original leave
+/// the library. Read from the worker's own trace.
+#[cfg(unix)]
+#[test]
+fn a_staged_move_syncs_the_moved_copys_folders_before_the_original_goes() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 4);
+    fs::create_dir_all(original.join("renders/day1")).unwrap();
+    fs::write(original.join("renders/day1/final.mov"), "frames").unwrap();
+    let trace = sb.tmp.path().join("syncs");
+    let out = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env("FASTF_FAULT", "move:force-staged,pool:serial")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists());
+
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let at = |name: &str| {
+        lines
+            .lines()
+            .position(|line| line == name)
+            .unwrap_or_else(|| panic!("no `{name}` in the trace:\n{lines}"))
+    };
+    let order = [
+        at("sync day1"),
+        at("sync renders"),
+        at("sync 2026-01-01_Shoot_ID0001"),
+        lines
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| *line == "sync other")
+            .map(|(index, _)| index)
+            .last()
+            .expect("the base is synced"),
+        at("retire"),
+    ];
+    assert!(
+        order.windows(2).all(|pair| pair[0] < pair[1]),
+        "deepest first, the base last, all before the original goes: {order:?}\n{lines}"
+    );
+    at("sync takes");
+    assert!(at("sync takes") < at("sync 2026-01-01_Shoot_ID0001"));
+}
+
+/// The same when recovery finishes a move: a copy published by a move that
+/// was killed before it set its original aside was never synced, so the
+/// reconcile that retires the original syncs the copy's folders first.
+#[cfg(unix)]
+#[test]
+fn a_reconcile_syncs_a_published_copy_before_it_retires_the_original() {
+    let sb = Sandbox::new();
+    let other = sb.with_bases(&["other"]).remove(0);
+    let original = project(&sb, &sb.base, 4);
+    let killed = sb
+        .command()
+        .args(["move", "ID0001", &other.display().to_string(), "--yes"])
+        .env(
+            "FASTF_FAULT",
+            "move:force-staged,pool:serial,move:after-publication:abort",
+        )
+        .output()
+        .unwrap();
+    assert!(!killed.status.success(), "{killed:?}");
+    assert!(
+        original.join("takes/take0.mov").is_file(),
+        "not retired yet"
+    );
+    assert!(
+        other
+            .join("2026-01-01_Shoot_ID0001/PROJECT_INFO.md")
+            .is_file(),
+        "published"
+    );
+
+    let trace = sb.tmp.path().join("syncs");
+    let out = sb
+        .command()
+        .args(["reconcile"])
+        .env("FASTF_FAULT", "pool:serial")
+        .env("FASTF_TRACE_FILE", &trace)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(!original.exists(), "the move is finished");
+
+    let lines = fs::read_to_string(&trace).unwrap_or_default();
+    let at = |name: &str| {
+        lines
+            .lines()
+            .position(|line| line == name)
+            .unwrap_or_else(|| panic!("no `{name}` in the trace:\n{lines}"))
+    };
+    assert!(
+        at("sync takes") < at("sync 2026-01-01_Shoot_ID0001"),
+        "{lines}"
+    );
+    assert!(at("sync 2026-01-01_Shoot_ID0001") < at("retire"), "{lines}");
 }

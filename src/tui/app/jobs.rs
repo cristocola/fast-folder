@@ -7,13 +7,11 @@
 //! marks carry the retry state: a row whose item failed or never ran keeps its
 //! mark, and one whose item succeeded loses it when its outcome lands.
 //!
-//! Every verb that means the same thing for each of several projects batches:
-//! delete, unregister and move, and the tags and the notes — select three,
-//! add a tag; select five, add the same note. Acting on a run of folders is
-//! what the marks are for. Rename stays single: every row would need its own
-//! name.
-
-use std::path::PathBuf;
+//! Every verb that means the same thing for each of several projects batches
+//! — select three, add a tag; select five, add the same note. Acting on a run
+//! of folders is what the marks are for. This runner carries the quick verbs:
+//! unregister, the tags and the notes. Rename stays single: every row would
+//! need its own name.
 
 use super::App;
 use crate::core::assets::Progress;
@@ -97,8 +95,6 @@ impl JobKind {
 #[derive(Debug)]
 pub struct Job {
     pub kind: JobKind,
-    /// The base every item moves to, for a `Move` job.
-    pub target: Option<PathBuf>,
     /// Items that have not run yet.
     pub pending: Vec<Project>,
     /// The item a worker is running right now.
@@ -107,18 +103,16 @@ pub struct Job {
     pub done: usize,
     /// Items that failed, in order: id, error.
     pub failed: Vec<(String, String)>,
-    /// Clean items that came back with a warning (e.g. a move whose source
-    /// cleanup is pending).
+    /// Clean items that came back with a warning.
     pub warnings: Vec<String>,
     /// The user asked to stop: the current item finishes, the rest stay marked.
     pub cancelled: bool,
 }
 
 impl Job {
-    pub fn new(kind: JobKind, targets: Vec<Project>, target: Option<PathBuf>) -> Self {
+    pub fn new(kind: JobKind, targets: Vec<Project>) -> Self {
         Self {
             kind,
-            target,
             pending: targets,
             inflight: None,
             done: 0,
@@ -176,7 +170,7 @@ impl Job {
         }
     }
 
-    /// The progress modal's line: "moving 2 of 4", plus a live failure count.
+    /// The progress modal's line: "tagging 2 of 4", plus a live failure count.
     pub fn progress_line(&self) -> String {
         let mut line = format!(
             "{} {} of {}",
@@ -200,9 +194,8 @@ impl Job {
                 lines.push(format!("  {id}: {error}"));
             }
         }
-        // A heading, like the failures above. A clean batch that reported
-        // source-cleanup warnings opened its dialog with an indented list
-        // under nothing at all.
+        // A heading, like the failures above, so the indented list never
+        // opens the dialog under nothing at all.
         if !self.warnings.is_empty() {
             if !lines.is_empty() {
                 lines.push(String::new());
@@ -210,7 +203,7 @@ impl Job {
             lines.push(format!(
                 "{} warning{}:",
                 self.warnings.len(),
-                if self.warnings.len() == 1 { "" } else { "s" }
+                crate::util::plural::s(self.warnings.len())
             ));
             for warning in &self.warnings {
                 lines.push(format!("  {warning}"));
@@ -221,11 +214,7 @@ impl Job {
             if left > 0 {
                 lines.push(format!(
                     "cancelled — {left} {} left marked",
-                    if left == 1 {
-                        "project is"
-                    } else {
-                        "projects are"
-                    }
+                    crate::util::plural::of(left, "project is", "projects are")
                 ));
             }
         }
@@ -237,13 +226,20 @@ impl Job {
 }
 
 impl App {
-    /// Run the verb over every marked project, one item at a time.
-    pub(super) fn start_job(&mut self, kind: JobKind, target: Option<PathBuf>) -> Vec<Effect> {
+    /// Run the verb over every marked project, one item at a time — for a
+    /// verb that asks nothing first. One that asked carries what it asked
+    /// about to `start_job_over`.
+    pub(super) fn start_job(&mut self, kind: JobKind) -> Vec<Effect> {
         let targets = self.library.targets();
+        self.start_job_over(kind, targets)
+    }
+
+    /// Run the verb over `targets`, one item at a time.
+    pub(super) fn start_job_over(&mut self, kind: JobKind, targets: Vec<Project>) -> Vec<Effect> {
         if targets.is_empty() {
             return Vec::new();
         }
-        self.job = Some(Job::new(kind, targets, target));
+        self.job = Some(Job::new(kind, targets));
         self.job_advance()
     }
 
@@ -289,20 +285,17 @@ impl App {
                 {
                     job.warnings.push(warning);
                 }
-                // **The effects a change asks for are the job's too.** They
-                // were dropped here, where the single-action path returns them,
-                // and `apply_change`'s `Reload` arm calls `discover`, which
-                // sets `library.inflight` *before* handing back the effect that
-                // would answer it. A dropped one left the app waiting on a
-                // generation nothing would ever send, after which every patch
-                // only set `dirty` and the list stopped changing: a batch
-                // re-derive of tags rewrote every file and showed nothing, and
-                // the list stayed frozen for the rest of the session.
+                // **The effects a change asks for are the job's too**, as the
+                // single-action path returns them: `apply_change`'s `Reload`
+                // arm calls `discover`, which sets `library.inflight` *before*
+                // handing back the effect that answers it. Dropped, it leaves
+                // the app waiting on a generation nothing sends, every later
+                // patch only sets `dirty`, and the list is frozen for the rest
+                // of the session.
                 effects.extend(self.apply_change(outcome.change));
-                // A mark is the retry list. An item that succeeded is not on
-                // it any more, so "3 tagged" and the ✓ glyphs left on screen
-                // cannot disagree — `jobs.rs` has always said so; nothing did
-                // it, because `patch` only drops a mark when the path moved.
+                // A mark is the retry list: an item that succeeded leaves it
+                // here, so "3 tagged" and the ✓ glyphs on screen cannot
+                // disagree. `patch` drops a mark only when the path moved.
                 if let Some(path) = &path {
                     self.library.marks.remove(path);
                 }
@@ -394,7 +387,7 @@ mod tests {
         // The app hands `targets()` over in display order — newest first, as
         // the list shows them — and the job must keep that order.
         let projects = sample_projects(3);
-        let mut job = Job::new(JobKind::Unregister, projects.clone(), None);
+        let mut job = Job::new(JobKind::Unregister, projects.clone());
         let mut order: Vec<String> = Vec::new();
         while let Some(item) = job.begin_next() {
             order.push(item.id.clone());
@@ -408,7 +401,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_job_stops_beginning_items() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3));
         assert!(job.begin_next().is_some());
         job.take_inflight();
         job.cancelled = true;
@@ -421,18 +414,18 @@ mod tests {
         let projects = sample_projects(1);
         let item = projects[0].clone();
         assert!(matches!(
-            Job::new(JobKind::Unregister, projects.clone(), None).action_for(&item),
+            Job::new(JobKind::Unregister, projects.clone()).action_for(&item),
             Action::Unregister(_)
         ));
         // The tag and the note were asked once and ride with the kind.
-        match Job::new(JobKind::AddTag("draft".into()), projects.clone(), None).action_for(&item) {
+        match Job::new(JobKind::AddTag("draft".into()), projects.clone()).action_for(&item) {
             Action::AddTag { project, tag } => {
                 assert_eq!(*project, item);
                 assert_eq!(tag, "draft");
             }
             other => panic!("expected a tag, got {other:?}"),
         }
-        match Job::new(JobKind::Note("first cut".into()), projects, None).action_for(&item) {
+        match Job::new(JobKind::Note("first cut".into()), projects).action_for(&item) {
             Action::AppendNote { project, text } => {
                 assert_eq!(*project, item);
                 assert_eq!(text, "first cut");
@@ -445,7 +438,7 @@ mod tests {
 
     #[test]
     fn the_report_names_failures_and_leftover_marks() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3));
         // One clean, one failed, one never run (cancelled).
         job.begin_next();
         job.take_inflight();
@@ -473,7 +466,7 @@ mod tests {
 
     #[test]
     fn a_clean_job_needs_no_report() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(2), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(2));
         while job.begin_next().is_some() {
             job.take_inflight();
             job.done += 1;

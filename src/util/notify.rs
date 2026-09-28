@@ -2,9 +2,9 @@
 //!
 //! When fastf acts on a request from a launcher there is no terminal to say so
 //! in, and an action nobody can see is indistinguishable from nothing having
-//! happened — the exact complaint that produced `fastf copy`. `notify-send` is
-//! present on every desktop that has a launcher worth the name; where it is
-//! missing, the answer is that the user gets no notification, not an error.
+//! happened. `notify-send` is present on every desktop that has a launcher
+//! worth the name; where it is missing, the answer is that the user gets no
+//! notification, not an error.
 //!
 //! Unix only, and it never prints: a notifier that wrote to stdout would be
 //! doing the thing it exists to work around.

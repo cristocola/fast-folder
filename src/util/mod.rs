@@ -14,6 +14,7 @@ pub mod messages;
 #[cfg(unix)]
 pub mod notify;
 pub mod paths;
+pub mod plural;
 pub mod pool;
 pub(crate) mod process;
 #[cfg(unix)]
@@ -28,6 +29,8 @@ pub mod time;
 pub mod trace;
 pub(crate) mod tree_size;
 pub mod tty;
+#[cfg(windows)]
+pub(crate) mod win;
 #[cfg(windows)]
 pub(crate) mod win_reparse;
 pub mod yaml;

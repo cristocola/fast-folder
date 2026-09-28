@@ -7,9 +7,9 @@ mod common;
 use common::Sandbox;
 use std::fs;
 
-/// `--dry-run` outside `--recursive` was accepted and dropped — the folder was
-/// written for real. It must be refused wherever the flag is typed, including
-/// after the path, where `trailing_var_arg` swallows it.
+/// `--dry-run` outside `--recursive` is refused, not dropped, or the folder is
+/// written for real — wherever the flag is typed, including after the path,
+/// where `trailing_var_arg` swallows it.
 #[test]
 fn register_dry_run_is_refused_and_writes_nothing() {
     let sb = Sandbox::new();
@@ -29,12 +29,13 @@ fn register_dry_run_is_refused_and_writes_nothing() {
     }
 }
 
-/// `--recursive` silently ignored `--rename`, `--apply`, `--created` and
-/// `--yes`: the folder came back unrenamed and stamped with today's date.
+/// `--recursive` refuses `--rename`, `--created` and `--yes` by name, and
+/// registers nothing: bulk registration never prompts, renames or back-dates.
 #[test]
 fn recursive_register_refuses_the_flags_it_cannot_honour() {
     let sb = Sandbox::new();
-    fs::create_dir_all(sb.base.join("child")).unwrap();
+    let child = sb.base.join("child");
+    fs::create_dir_all(&child).unwrap();
     let base = sb.base.display().to_string();
 
     for flag in [
@@ -44,17 +45,24 @@ fn recursive_register_refuses_the_flags_it_cannot_honour() {
     ] {
         let mut args = vec!["register", &base, "--recursive"];
         args.extend(flag.iter().copied());
-        sb.fails(&args);
+        let refused = sb.fails(&args);
+        assert!(
+            refused.contains("--recursive") && refused.contains(flag[0]),
+            "the refusal names both flags ({flag:?}):\n{refused}"
+        );
+        assert!(
+            child.is_dir() && !child.join("PROJECT_INFO.md").exists(),
+            "and nothing was registered ({flag:?})"
+        );
     }
 }
 
-/// The rename prompt computed its preview ID from the legacy data-dir counter
-/// while the commit used the true floor: the confirmation offered
-/// `..._ID0001` and the folder landed as `..._ID0011`. You approve one name and
-/// get another.
+/// The name the rename prompt offers is the name the folder lands as: its
+/// preview ID comes from the floor the commit uses, or you approve one name
+/// and get another.
 ///
 /// This has to go through a pty — `--yes` skips the prompt, and the prompt *is*
-/// the bug.
+/// what is under test.
 #[cfg(unix)]
 #[test]
 fn register_rename_preview_matches_the_committed_name() {
@@ -106,8 +114,8 @@ fn register_rename_preview_matches_the_committed_name() {
     );
 }
 
-/// `register --rename` after the path was reported "unrecognized" and the
-/// folder kept its old name — while the same flag before the path worked.
+/// `register` honours a flag after the path as it does before it: `--rename`
+/// there renames the folder.
 #[test]
 fn register_honours_every_flag_after_the_path() {
     let sb = Sandbox::new();
@@ -137,10 +145,9 @@ fn register_honours_every_flag_after_the_path() {
 }
 
 /// A design guard, not a regression: both flags are declared, and clap keeps
-/// parsing normally until the *first* token it does not know, so these two
-/// survived the old recognizer. Merging clap's fields with the ones lifted out
-/// of `extra` must not change that — the previously-broken shape is
-/// `--recursive` after a `--slug=value`, which is what
+/// parsing normally until the *first* token it does not know. Merging clap's
+/// fields with the ones lifted out of `extra` must not change that — the shape
+/// that reaches `extra` is `--recursive` after a `--slug=value`, which is what
 /// `recursive_register_passes_its_variables_to_every_child` covers.
 #[test]
 fn register_recursive_dry_run_after_the_path_previews_the_children() {
@@ -169,8 +176,8 @@ fn register_recursive_dry_run_after_the_path_previews_the_children() {
     );
 }
 
-/// `--base-dir /path` (space form) split into two unknown tokens and the
-/// project landed in the configured base instead of the one that was asked for.
+/// `--base-dir /path` (space form) is a flag and its value, not two unknown
+/// tokens: the project lands in the base that was asked for.
 #[test]
 fn new_accepts_a_flag_value_as_a_separate_token() {
     let sb = Sandbox::new();
@@ -194,9 +201,9 @@ fn new_accepts_a_flag_value_as_a_separate_token() {
     );
 }
 
-/// A flag fastf does not declare used to be a `warning:` on stderr followed by
-/// a successful create. A typo in a flag name is not a variable and not a
-/// footnote: it stops the command before anything is written.
+/// A flag fastf does not declare is an error, not a warning. A typo in a flag
+/// name is not a variable and not a footnote: it stops the command before
+/// anything is written.
 #[test]
 fn an_unknown_flag_after_the_slug_is_an_error() {
     let sb = Sandbox::new();
@@ -218,9 +225,8 @@ fn an_unknown_flag_after_the_slug_is_an_error() {
 }
 
 /// `--name x` looks like a value flag but `name` is a template variable, and
-/// variables only work in `=` form. It used to become an unknown flag plus a
-/// stray token, then fail with "no terminal to prompt on" — which blames the
-/// terminal for a syntax error.
+/// variables only work in `=` form. The refusal shows the form that works,
+/// rather than blaming the terminal for a syntax error.
 #[test]
 fn a_variable_in_space_form_says_how_to_write_it() {
     let sb = Sandbox::new();
@@ -237,9 +243,9 @@ fn a_variable_in_space_form_says_how_to_write_it() {
     );
 }
 
-/// `apply` declares neither `--no-post` nor `--base-dir`, and never ran
-/// post-create actions in the first place. Silently accepting a flag that does
-/// nothing is the same defect in the other direction.
+/// `apply` declares neither `--no-post` nor `--base-dir`, and runs no
+/// post-create actions. Silently accepting a flag that does nothing is the
+/// same defect as dropping one that does.
 #[test]
 fn apply_refuses_a_flag_it_does_not_declare() {
     let sb = Sandbox::new();
@@ -259,9 +265,9 @@ fn apply_refuses_a_flag_it_does_not_declare() {
     assert!(out.status.success(), "apply -y after the target: {out:?}");
 }
 
-/// Bulk registration accepted `--template` and every `--slug=value` after it,
-/// then passed an empty variable map to every child: a template with a
-/// `naming_pattern` full of tokens produced identical, near-empty folder names.
+/// Bulk registration passes `--template` and every `--slug=value` after it to
+/// every child; with an empty variable map, a template with a `naming_pattern`
+/// full of tokens produces identical, near-empty folder names.
 #[test]
 fn recursive_register_passes_its_variables_to_every_child() {
     let sb = Sandbox::new();
@@ -290,11 +296,51 @@ fn recursive_register_passes_its_variables_to_every_child() {
     }
 }
 
+/// **A bulk register's preview names the ID the run writes.** An ID a folder's
+/// name already carries is recovered, and written with the template's own
+/// number of digits, in the preview as in the run.
+#[test]
+fn a_recursive_dry_run_names_the_id_the_run_writes() {
+    let sb = Sandbox::new();
+    let template = sb.install.join("templates").join("reel");
+    fs::create_dir_all(template.join("files")).unwrap();
+    fs::write(
+        template.join("template.yaml"),
+        "name: Reel\nslug: reel\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: R\n  digits: 6\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n\
+         \x20   required: true\n    transform: none\n",
+    )
+    .unwrap();
+    let base = sb.with_bases(&["legacy-base"]).remove(0);
+    fs::create_dir_all(base.join("R000042_Old_Reel")).unwrap();
+    let base = base.display().to_string();
+
+    let preview = sb.ok(&[
+        "register",
+        &base,
+        "--recursive",
+        "--template=reel",
+        "--name=Old",
+        "--dry-run",
+    ]);
+    assert!(preview.contains("recover R000042"), "{preview}");
+
+    let run = sb.ok(&[
+        "register",
+        &base,
+        "--recursive",
+        "--template=reel",
+        "--name=Old",
+    ]);
+    assert!(run.contains("R000042"), "{run}");
+    assert!(!run.contains("R0042 "), "{run}");
+}
+
 /// Two user-facing lists name the config keys — `config set --help` and the
-/// error an unknown key gets — and nothing kept them in step. `show-frame` was
-/// accepted, documented in `docs/cli.md`, and named in the error's list, but
-/// missing from `--help`: the one place someone looks to find out what they can
-/// set. A key is only really shipped when both lists know about it.
+/// error an unknown key gets — and they must agree. `--help` is the one place
+/// someone looks to find out what they can set, so a key is only really
+/// shipped when both lists know about it.
 #[test]
 fn both_lists_of_config_keys_agree() {
     let sb = Sandbox::new();
@@ -401,11 +447,10 @@ fn the_destructive_verbs_refuse_to_guess_without_a_terminal() {
 
 /// **A query fastf cannot read is refused, not answered.**
 ///
-/// `created<tomorrow` compares lexicographically against `2026-…`, so it
-/// matched every project in the library; `created>`, `tag:` and `=x` printed
-/// "No projects match that query." and exited 0. The guided app's search bar
-/// has named all four by way of `query::diagnose` since it was written — the
-/// command line simply never called it.
+/// `created<tomorrow` compares lexicographically against `2026-…`, so it would
+/// match every project in the library; `created>`, `tag:` and `=x` would print
+/// "No projects match that query." and exit 0. The command line asks
+/// `query::diagnose`, as the guided app's search bar does.
 #[test]
 fn search_refuses_a_clause_it_cannot_read() {
     let sb = Sandbox::new();
@@ -433,7 +478,8 @@ fn search_refuses_a_clause_it_cannot_read() {
 
 /// **`notes --since` refuses what `recent --since` refuses**, in the same
 /// words: both compare the value as text against an ISO-8601 timestamp, so
-/// `2026-6-1` sorted after every note of the year and silently hid them all.
+/// `2026-6-1` sorts after every note of the year and would silently hide them
+/// all.
 #[test]
 fn notes_refuses_a_since_that_is_not_a_date() {
     let sb = Sandbox::new();
@@ -449,12 +495,12 @@ fn notes_refuses_a_since_that_is_not_a_date() {
     assert!(out.contains("began"), "{out}");
 }
 
-/// **`recent` validates its filters, as `--limit 0` already did.**
+/// **`recent` validates its filters, as it does `--limit 0`.**
 ///
 /// A `--since` that is not a date, or a `--base`/`--template` that names
-/// nothing, answered "No projects match those filters" and exited 0.
+/// nothing, can only answer "No projects match those filters" and exit 0.
 /// `--since 2026-6-1` is the sharp one: compared as text it sorts after every
-/// `2026-0…` project, so it silently dropped the whole year.
+/// `2026-0…` project, so it would silently drop the whole year.
 #[test]
 fn recent_refuses_a_filter_that_can_only_match_nothing() {
     let sb = Sandbox::new();

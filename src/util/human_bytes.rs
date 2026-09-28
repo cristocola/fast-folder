@@ -1,9 +1,7 @@
 //! The one byte formatter.
 //!
-//! Two of these existed: the browser's Size cell counted up to terabytes, and
-//! `template show`'s bundle summary stopped at gigabytes and rounded from the
-//! other direction. A project library and a template bundle are measured in the
-//! same units, so they are printed by the same function.
+//! A project library and a template bundle are measured in the same units, so
+//! they are printed by the same function.
 
 /// Render a byte count the way every fastf surface prints one: whole bytes
 /// below a kilobyte, one decimal place above it, binary units throughout.
@@ -41,8 +39,7 @@ mod tests {
         assert_eq!(human_bytes(1024_u64.pow(4)), "1.0 TB");
     }
 
-    /// The boundary the two old formatters disagreed on: one switched unit at
-    /// `>= MB`, the other at `< MB`. They agree here by construction now.
+    /// A unit starts at the unit itself: one byte below a MiB is still `KB`.
     #[test]
     fn the_unit_boundary_is_the_unit_itself() {
         assert_eq!(human_bytes(1024_u64.pow(2) - 1), "1024.0 KB");

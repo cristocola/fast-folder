@@ -256,10 +256,9 @@ tags:
 /// Every template in `examples/templates/` must parse, validate **and plan** —
 /// it is the public gallery users copy from, so a broken one is very visible.
 ///
-/// Named individually rather than counted. The old version asserted
-/// `seen >= 5` against eight templates, so three could rot away without the
-/// suite noticing; and it stopped at `validate`, so the thing the name promised
-/// — that each one can actually plan a project — was never checked.
+/// Named individually rather than counted: a lower bound on the count lets a
+/// template rot away without the suite noticing. And past `validate`, because
+/// what the name promises is that each one can actually plan a project.
 #[test]
 fn every_gallery_template_parses_validates_and_plans() {
     const GALLERY: [&str; 8] = [
@@ -358,10 +357,9 @@ fn a_gallery_template_may_declare_no_files_at_all() {
 
 /// **A wildcard may lead, trail, or do both.**
 ///
-/// `to_pattern` read a trailing `*` only, so `key=*value*` became the prefix
-/// `*value` and matched nothing at all — while `fastf search --help`,
-/// `docs/cli.md` and `cli/search.rs`'s own grammar table all called it a glob.
-/// Three shapes, not a glob engine: a `*` in the middle stays literal.
+/// `fastf search --help`, `docs/cli.md` and `cli/search.rs`'s own grammar
+/// table all call `key=*value*` a glob. Three shapes, not a glob engine: a `*`
+/// in the middle stays literal.
 #[test]
 fn a_wildcard_may_lead_or_trail_or_both() {
     use std::collections::BTreeMap;
@@ -385,7 +383,7 @@ fn a_wildcard_may_lead_or_trail_or_both() {
     let m = meta(&[("artist", "Ariana Grande")], &["client/Acme", "draft"]);
     let matches = |term: &str| query::evaluate(&query::parse(&[term.to_string()]), &m);
 
-    // The one that matched nothing at all.
+    // Both ends at once.
     assert!(matches("artist=*Grande*"));
     assert!(matches("tag:*Acme*"));
 
@@ -396,7 +394,7 @@ fn a_wildcard_may_lead_or_trail_or_both() {
     assert!(!matches("artist=*Ariana"), "a suffix is a suffix");
     assert!(!matches("artist=Grande*"), "and a prefix is a prefix");
 
-    // Case-insensitive in every shape, as the exact match has always been.
+    // Case-insensitive in every shape, as the exact match is.
     assert!(matches("artist=*grande"));
     assert!(matches("tag:CLIENT/*"));
 

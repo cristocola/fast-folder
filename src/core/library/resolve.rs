@@ -174,9 +174,8 @@ pub(crate) fn ambiguous_error(query: &str, candidates: &[Project]) -> anyhow::Er
 /// to call from `plan()` / preview (which must not touch disk). It reads a fresh
 /// cache when present, else scans the base directly.
 pub fn max_id(cfg: &Config) -> u64 {
-    cfg.effective_bases()
+    cfg.answering_bases()
         .iter()
-        .filter(|base| base.is_dir())
         .map(|base| max_id_in_base(base))
         .max()
         .unwrap_or(0)
@@ -198,12 +197,12 @@ pub(crate) fn max_id_in_base(base: &Path) -> u64 {
 /// preview/plan path.
 ///
 /// A **rejected** entry abandons the whole cache and goes back to the folders,
-/// exactly as `discovery::discover_base` does — this used to `filter_map` the
-/// rejected one away and carry on reading the rest, which is the one thing the
-/// rule forbids. `.fastf-index.json` travels with the projects by design, so a
-/// synced folder or an unpacked archive can deliver one; an entry naming
-/// anything but a direct child of its own base means the file is no longer
-/// fastf's own bookkeeping, and the rest of it is not evidence of anything.
+/// exactly as `discovery::discover_base` does, rather than dropping only that
+/// entry and reading on. `.fastf-index.json` travels with the projects by
+/// design, so a synced folder or an unpacked archive can deliver one; an
+/// entry naming anything but a direct child of its own base means the file is
+/// no longer fastf's own bookkeeping, and the rest of it is not evidence of
+/// anything.
 ///
 /// It matters most here, of all places: this is the read behind `max_id_in_base`
 /// and therefore behind `Counters::floor`. Silently dropping the entry that
@@ -213,6 +212,7 @@ pub(crate) fn max_id_in_base(base: &Path) -> u64 {
 /// The difference from `discover_base` is only what happens afterwards: that one
 /// rewrites the cache from the scan, and this one may not write at all.
 pub(crate) fn read_base_readonly(base: &Path) -> Vec<Project> {
+    crate::util::paths::stall_if_marked(base);
     let Some(cache) = load_cache(base) else {
         return scan_base(base);
     };

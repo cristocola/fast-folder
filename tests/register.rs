@@ -437,13 +437,25 @@ fn register_rename_sanitizes_spaces_in_folder_name() {
         register_run(args).unwrap();
 
         let parent = target.parent().unwrap();
-        let renamed = fs::read_dir(parent)
+        let names: Vec<String> = fs::read_dir(parent)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .find(|n| n.contains("Old_Project_With_Spaces"));
+            .collect();
+        let renamed = names
+            .iter()
+            .find(|n| n.ends_with("_Old_Project_With_Spaces_ID0001"))
+            .unwrap_or_else(|| panic!("no folder renamed with underscores among {names:?}"));
+        let date = renamed
+            .strip_suffix("_Old_Project_With_Spaces_ID0001")
+            .unwrap();
         assert!(
-            renamed.is_some(),
-            "expected sanitized folder name with underscores"
+            date.len() == 10 && date.chars().all(|c| c.is_ascii_digit() || c == '-'),
+            "the name is today's date, the words and the id: {renamed}"
+        );
+        assert!(!target.exists(), "nothing is left under the old name");
+        assert!(
+            parent.join(renamed).join("PROJECT_INFO.md").is_file(),
+            "and the renamed folder is the project"
         );
     });
 }
@@ -505,6 +517,30 @@ fn register_rejects_a_duplicate_recovered_id() {
         let err = register_run(register_args(&duplicate)).expect_err("duplicate ID must fail");
         assert!(err.to_string().contains("already used"), "got: {err:#}");
         assert!(!duplicate.join("PROJECT_INFO.md").exists());
+    });
+}
+
+/// What the options rule out is refused whatever the folder holds: a folder
+/// that would be skipped does not answer `Ok` for options that make no sense.
+#[test]
+fn register_refuses_options_that_exclude_each_other_before_it_skips() {
+    sandboxed(|install| {
+        let target = install.join("already-registered");
+        fs::create_dir_all(&target).unwrap();
+        register_run(register_args(&target)).unwrap();
+
+        let err = fastf::core::operations::register(fastf::core::operations::RegisterOptions {
+            path: target.clone(),
+            template_slug: None,
+            vars: HashMap::new(),
+            apply_structure: true,
+            rename: false,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: fastf::core::operations::PinfoConflict::Skip,
+        })
+        .expect_err("--apply without a template is refused");
+        assert!(err.to_string().contains("--apply requires --template"));
     });
 }
 

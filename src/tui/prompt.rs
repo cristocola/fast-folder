@@ -3,11 +3,9 @@
 //! Every prompt outside the guided app goes through here, and it is a thin
 //! layer over [`crate::tui::inline`]: this module owns the *contract* — the
 //! terminal guard, and `Ok(None)` meaning cancelled — while `inline` owns the
-//! drawing. The split is what `tests/layering.rs` enforces, and the defect it
-//! exists for was never a wrong behaviour but an inconsistent one: an earlier
-//! attempt moved twenty-nine prompts to a cancellable form by hand and missed
-//! several, so Esc backed out of some menus and was swallowed by others, which
-//! is worse than Esc never working.
+//! drawing. The split is what `tests/layering.rs` enforces, and what it guards
+//! is consistency: Esc backs out of every prompt, because an Esc that works in
+//! some menus and is swallowed by others is worse than one that never works.
 //!
 //! **`Ok(None)` is a cancelled prompt. It is never an error**, so `cli`'s error
 //! handling keeps classifying a *broken* prompt (no terminal, stdin at EOF) as
@@ -56,12 +54,9 @@ pub fn text(prompt: &str, opts: TextOpts<'_>) -> Result<Option<String>> {
 /// from. `what` completes "Cancelled — _": say what did *not* happen, since the
 /// reassurance is the point ("nothing was created", not "aborted").
 ///
-/// **Every "you cancelled" goes through here.** There were four: this,
-/// `Cancelled — nothing moved.`, a bare `Aborted.` at five confirmations, and a
-/// lowercase `aborted.` for Ctrl-C. `Aborted.` on its own says neither what was
-/// cancelled nor what state the project is in, which is the whole thing this
-/// exists to fix — and answering `n` to `fastf move` printed it while
-/// cancelling the same command's base picker printed the sentence.
+/// **Every "you cancelled" goes through here**, so a command says the same
+/// sentence whichever of its questions was cancelled. A bare `Aborted.` says
+/// neither what was cancelled nor what state the project is in.
 pub fn report_cancelled(what: &str) {
     println!("{}", format!("Cancelled — {what}.").dimmed());
 }

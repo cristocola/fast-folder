@@ -233,10 +233,10 @@ otherwise stop it at the end, and names every problem it finds at once:
 **Why no folder on the target is renamed.** A cloud mount such as rclone with
 a cache uploads in the background, and renaming a folder while its uploads are
 still in flight can land some of them at the old path; the mount's own view
-shows nothing wrong. fastf 3.12.0 renamed its finished copy into place, and on
-a Google Drive mount three files of a moved project ended up under the folder
-it had just left. Writing the copy in its final place, with `PROJECT_INFO.md`
-last, means there is nothing to misplace.
+shows nothing wrong. On a Google Drive mount, a finished copy renamed into
+place left three files of the project under the folder it had just left.
+Writing the copy in its final place, with `PROJECT_INFO.md` last, means there
+is nothing to misplace.
 
 **Why the original leaves in one step before it is removed.** Removing a
 folder is not one step: anything that stops it part of the way — a read-only
@@ -391,7 +391,7 @@ what differs. A move another machine began is reported, never acted on: the
 source path it names means something else here.
 
 Hidden folders fastf leaves beside the projects are handled too. A set-aside
-original with no record left — fastf 3.13 cleared records too early — is
+original with no record left — fastf 3.13 could leave one — is
 finished by content: one holding nothing but empty folders is removed, and
 otherwise everything in it that the project it held (found by its ID) holds the
 same, byte for byte, is removed and the rest kept and named; when fastf cannot

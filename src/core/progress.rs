@@ -18,7 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::assets::{FinishedStep, JobPhase, JobStatus, Progress};
 
-/// The message a job stopped by its cancel flag ends with.
+/// The message a step stopped by the cancel flag ends with, whichever job it
+/// is a step of: the walk, the copy and the removal serve a move, a copy and a
+/// delete alike. **A cancel is known by the flag** ([`Ticker::cancelled`]),
+/// never by this text; the job that was cancelled says so in its own words.
 pub const CANCELLED: &str = "cancelled";
 
 /// A job's progress and cancel flag, borrowed. Copy, so it is passed by value
@@ -167,7 +170,7 @@ impl<'a> Ticker<'a> {
     }
 
     /// Say which folder the steps from here work in, so a stall can name it
-    /// ("no answer from /mnt/cloud"): the mount it is on, when the system
+    /// ("no answer from /mnt/projects"): the mount it is on, when the system
     /// says, else the folder itself.
     pub fn working_in(self, path: &Path) {
         let place = crate::util::fs_kind::mount_identity(path)
@@ -195,8 +198,9 @@ impl<'a> Ticker<'a> {
 /// End a job's progress the way its result says: `Done`, or `Cancelled` when
 /// the cancel flag stopped it, or `Failed` with the reason.
 ///
-/// **Before this, a job that failed stayed `Running` for ever**, so anything
-/// watching it — the app's runtime polls until it is not — watched a dead job.
+/// **Every job's progress ends here**, or a job that failed stays `Running`
+/// for ever, and anything watching it — the app's runtime polls until it is
+/// not — watches a dead job.
 pub fn settle<T>(progress: &Mutex<Progress>, cancel: &AtomicBool, result: &anyhow::Result<T>) {
     let mut state = progress.lock().unwrap_or_else(|error| error.into_inner());
     match result {

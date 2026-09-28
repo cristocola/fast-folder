@@ -10,8 +10,12 @@ use crate::core::template::{
 };
 use crate::util::paths;
 
+/// A text file larger than this is an asset, not an editable file.
 const MAX_TEXT_BYTES: u64 = 64 * 1024;
-const IGNORED_DIRECTORIES: &[&str] = &[
+
+/// The names a scan leaves out wherever they appear. `--help` and the docs
+/// print this list, read from here.
+pub const IGNORED_NAMES: &[&str] = &[
     ".git",
     ".DS_Store",
     "node_modules",
@@ -50,28 +54,86 @@ struct ImportPlan {
     skipped: usize,
 }
 
+/// What a run would generate from a folder, as data. It is read from the scan
+/// the run itself makes, so a preview refuses what the run refuses and lists
+/// what the run takes.
+#[derive(Debug, Default, Clone)]
+pub struct Scan {
+    pub structure: Vec<FolderNode>,
+    /// The files reproduced as editable text, relative to the source.
+    pub text_files: Vec<String>,
+    /// `(path relative to the source, bytes)`.
+    pub assets: Vec<(String, u64)>,
+    pub folders: usize,
+    /// Binary or oversized files left out because bundling was not asked for.
+    pub skipped: usize,
+    pub bundle_bytes: u64,
+}
+
+/// Scan `source` the way [`from_folder`] does, and write nothing.
+pub fn scan(source: &Path, bundle_assets: bool) -> Result<Scan> {
+    require_real_directory(source)?;
+    let (_, plan) = plan_of(source, bundle_assets)?;
+    Ok(Scan {
+        bundle_bytes: plan.assets.iter().map(|asset| asset.bytes).sum(),
+        text_files: plan.text_files.into_iter().map(|file| file.path).collect(),
+        assets: plan
+            .assets
+            .iter()
+            .map(|asset| {
+                (
+                    asset.relative.to_string_lossy().replace('\\', "/"),
+                    asset.bytes,
+                )
+            })
+            .collect(),
+        folders: plan.folders,
+        skipped: plan.skipped,
+        structure: plan.structure,
+    })
+}
+
 pub fn from_folder(
     source: &Path,
     slug: &str,
     force: bool,
     bundle_assets: bool,
 ) -> Result<FromFolderReport> {
-    let metadata = fs::symlink_metadata(source)
-        .with_context(|| format!("source folder does not exist: {}", source.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        bail!("source is not a real directory: {}", source.display());
-    }
+    require_real_directory(source)?;
     crate::core::validated::TemplateSlug::parse(slug)?;
     let destination = paths::template_dir(slug);
     if crate::core::assets::entry_exists(&destination)? && !force {
         bail!("template '{slug}' already exists — re-run with --force to overwrite");
     }
 
-    let source =
-        paths::canonical(source).with_context(|| format!("resolving {}", source.display()))?;
+    let (source, plan) = plan_of(source, bundle_assets)?;
+    materialize(plan, &source, slug, force)
+}
+
+fn require_real_directory(source: &Path) -> Result<()> {
+    paths::require_answer(source)?;
+    let metadata = fs::symlink_metadata(source).with_context(|| {
+        format!(
+            "source folder does not exist: {}",
+            crate::util::paths::display_path(source)
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!(
+            "source is not a real directory: {}",
+            crate::util::paths::display_path(source)
+        );
+    }
+    Ok(())
+}
+
+/// The one scan: the source as resolved, and what was found in it.
+fn plan_of(source: &Path, bundle_assets: bool) -> Result<(PathBuf, ImportPlan)> {
+    let source = paths::canonical(source)
+        .with_context(|| format!("resolving {}", crate::util::paths::display_path(source)))?;
     let mut plan = ImportPlan::default();
     plan.structure = scan_dir(&source, &source, bundle_assets, &mut plan)?;
-    materialize(plan, &source, slug, force)
+    Ok((source, plan))
 }
 
 fn scan_dir(
@@ -83,9 +145,8 @@ fn scan_dir(
     scan_dir_at(root, current, 0, bundle_assets, plan)
 }
 // Depth-0 entry point above. **Nothing else may call it** — the recursive step
-// goes to `scan_dir_at` with `depth + 1`, which it used to do through here
-// instead, resetting the counter at every level and leaving the limit
-// unreachable.
+// goes to `scan_dir_at` with `depth + 1`; recursing through here would reset
+// the counter at every level and leave the limit unreachable.
 
 fn scan_dir_at(
     root: &Path,
@@ -98,15 +159,14 @@ fn scan_dir_at(
         return Err(crate::util::paths::too_deep(current));
     }
     let mut folders = Vec::new();
-    for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(current)))?
+    {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let name = entry.file_name();
         let display_name = name.to_string_lossy();
-        if IGNORED_DIRECTORIES
-            .iter()
-            .any(|ignored| *ignored == display_name)
-        {
+        if IGNORED_NAMES.iter().any(|ignored| *ignored == display_name) {
             continue;
         }
         let path = entry.path();
@@ -135,7 +195,12 @@ fn classify_file(
 ) -> Result<()> {
     let relative = path
         .strip_prefix(root)
-        .with_context(|| format!("deriving relative path for {}", path.display()))?
+        .with_context(|| {
+            format!(
+                "deriving relative path for {}",
+                crate::util::paths::display_path(path)
+            )
+        })?
         .to_path_buf();
     let portable = relative.to_string_lossy().replace('\\', "/");
     crate::core::validated::SafeRelativePath::parse(&portable)?;
@@ -176,11 +241,15 @@ fn materialize(
         if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
             bail!(
                 "refusing to replace a non-directory template path: {}",
-                template_dir.display()
+                crate::util::paths::display_path(&template_dir)
             );
         }
-        crate::util::fs_retry::remove_dir_all(&template_dir)
-            .with_context(|| format!("clearing {}", template_dir.display()))?;
+        crate::util::fs_retry::remove_dir_all(&template_dir).with_context(|| {
+            format!(
+                "clearing {}",
+                crate::util::paths::display_path(&template_dir)
+            )
+        })?;
     }
     fs::create_dir_all(paths::template_files_dir(slug)).context("creating template directory")?;
 
@@ -229,10 +298,16 @@ fn materialize(
         // the bundle out of it.
         let target = crate::util::paths::contained_destination(&files_dir, &asset.relative)?;
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
-        crate::util::atomic::copy(&asset.source, &target)
-            .with_context(|| format!("bundling {}", asset.relative.display()))?;
+        crate::util::atomic::copy(&asset.source, &target).with_context(|| {
+            format!(
+                "bundling {}",
+                crate::util::paths::display_path(&asset.relative)
+            )
+        })?;
         bundled_bytes += asset.bytes;
     }
     Ok(FromFolderReport {
@@ -280,8 +355,51 @@ mod tests {
         plan
     }
 
+    /// **A preview is the run's own scan**: what `scan` counts is what
+    /// `from_folder` then reports having written, with and without bundling.
+    #[test]
+    fn a_scan_counts_what_the_run_reports() {
+        let (_guard, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let source = sandbox.path().join("source");
+        fs::create_dir_all(source.join("docs/drafts")).unwrap();
+        fs::create_dir_all(source.join("node_modules/left-out")).unwrap();
+        fs::write(source.join("README.md"), "# {name}\n").unwrap();
+        fs::write(source.join("docs/brief.txt"), "brief\n").unwrap();
+        fs::write(source.join("docs/logo.bin"), [0xFF, 0x00, 0xFF]).unwrap();
+        fs::write(
+            source.join("docs/drafts/long.md"),
+            vec![b'a'; (MAX_TEXT_BYTES + 1) as usize],
+        )
+        .unwrap();
+        fs::write(source.join("PROJECT_INFO.md"), "---\nid: ID0001\n---\n").unwrap();
+
+        for (slug, bundle) in [("plain", false), ("bundled", true)] {
+            let scan = super::scan(&source, bundle).unwrap();
+            let report = super::from_folder(&source, slug, false, bundle).unwrap();
+            assert_eq!(scan.folders, report.folders, "{slug}");
+            assert_eq!(scan.text_files.len(), report.text_files, "{slug}");
+            assert_eq!(scan.assets.len(), report.bundled, "{slug}");
+            assert_eq!(scan.bundle_bytes, report.bundled_bytes, "{slug}");
+            assert_eq!(scan.skipped, report.skipped, "{slug}");
+        }
+        let scan = super::scan(&source, true).unwrap();
+        assert_eq!(scan.folders, 2);
+        let mut text = scan.text_files.clone();
+        text.sort();
+        assert_eq!(text, ["README.md", "docs/brief.txt"]);
+        let mut assets = scan.assets.clone();
+        assets.sort();
+        assert_eq!(
+            assets,
+            [
+                ("docs/drafts/long.md".to_string(), MAX_TEXT_BYTES + 1),
+                ("docs/logo.bin".to_string(), 3)
+            ]
+        );
+    }
+
     /// The three-way split every from-folder scan makes, and the only place it
-    /// is decided. Nothing tested it before.
+    /// is decided.
     #[test]
     fn text_becomes_editable_binary_is_bundled_or_skipped() {
         let text = classified("NOTES.md", b"# hello\n", false);

@@ -48,18 +48,11 @@ pub struct Config {
     /// Page size for the guided TUI's Projects browser and default `--limit`
     /// for `fastf recent`.
     ///
-    /// **Stored as `recent_limit`, which is what every surface calls it.** The
-    /// field kept its old name and carried no `rename`, so `fastf config set
-    /// recent-limit 50` printed `Set recent_limit = 50` and wrote
-    /// `recent_default_limit = 50`, and `config show` labelled it
-    /// `recent_limit:` — three spellings for one setting, only one of them the
-    /// one in the file. Somebody following the docs and hand-writing
-    /// `recent_limit = 50` got it silently ignored, because `Config` has no
-    /// `deny_unknown_fields`, and fell back to the default.
-    ///
-    /// The `alias` keeps every `config.toml` written before this parsing. The
-    /// Rust field name stays as it is: it is spelled at thirty call sites and
-    /// none of them is a file.
+    /// **Stored as `recent_limit`, which is what every surface calls it.**
+    /// Without the `rename` a hand-written `recent_limit = 50` is silently
+    /// ignored, because `Config` has no `deny_unknown_fields`. The `alias`
+    /// reads a `config.toml` an older fastf wrote as `recent_default_limit`.
+    /// The Rust field name is not a key: only the serde name reaches a file.
     #[serde(
         rename = "recent_limit",
         alias = "recent_default_limit",
@@ -123,10 +116,10 @@ pub struct Config {
     #[serde(default)]
     pub motion: String,
 
-    /// How much the log (`<data dir>/logs/fastf.log`) keeps: `debug` (every
-    /// entry a job touches), `info` (default: every step, every warning),
-    /// `warn`, `error` or `off`. A job's own log keeps everything whatever
-    /// this says. Parsed leniently for the reason `theme` is.
+    /// How much the log (`<data dir>/logs/fastf.log`) keeps: `trace` (every
+    /// entry a job touches), `debug`, `info` (default: every step, every
+    /// warning), `warn`, `error` or `off`. A job's own log keeps debug and
+    /// above whatever this says. Parsed leniently for the reason `theme` is.
     #[serde(default)]
     pub log_level: String,
 
@@ -136,8 +129,8 @@ pub struct Config {
     /// Rarely reached with the bundled patterns, which end in a unique
     /// `{id}` — but a pattern need not contain one, and then two projects
     /// created the same day from the same answers collide for real. Appending a
-    /// suffix is what every file manager does. `"error"` restores the old
-    /// refuse-a-duplicate behaviour for anyone who would rather be stopped.
+    /// suffix is what every file manager does. `"error"` refuses a duplicate
+    /// instead, for anyone who would rather be stopped.
     #[serde(default)]
     pub on_name_collision: NameCollision,
 }
@@ -168,21 +161,30 @@ fn default_register_naming_pattern() -> String {
 }
 /// What a create does when the folder name it computed already exists.
 ///
-/// `#[serde(other)]` on the default keeps the historical contract exactly: the
-/// old code compared case-insensitively against `"error"` and treated *anything
-/// else* — including a typo — as "add a suffix". A stricter enum would turn
-/// somebody's `on_name_collision = "sufix"` into a config that no longer parses,
-/// which is a worse answer than the one they meant.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// *Anything* but `error` — a typo included — means "add a suffix". A
+/// stricter reading would turn somebody's `on_name_collision = "sufix"` into a
+/// config that no longer parses, which is a worse answer than the one they
+/// meant. `error` is read whatever its case and the space around it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NameCollision {
     /// Refuse the create.
     Error,
     /// Try `name_2`, `name_3`, … Each is a single atomic claim. Also what any
-    /// unrecognized value means, which is what it meant before.
+    /// unrecognized value means.
     #[default]
-    #[serde(other)]
     Suffix,
+}
+
+impl<'de> Deserialize<'de> for NameCollision {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let written = String::deserialize(deserializer)?;
+        Ok(if written.trim().eq_ignore_ascii_case("error") {
+            NameCollision::Error
+        } else {
+            NameCollision::Suffix
+        })
+    }
 }
 
 impl NameCollision {
@@ -230,10 +232,10 @@ impl Config {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Self =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+        let cfg: Self = toml::from_str(&raw)
+            .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
         Ok(cfg)
     }
 
@@ -242,7 +244,7 @@ impl Config {
         let path = paths::config_path();
         let raw = toml::to_string_pretty(self).context("serializing config")?;
         crate::util::atomic::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
     }
 
     /// Whether a taken folder name should get a `_2` suffix rather than fail.
@@ -251,6 +253,16 @@ impl Config {
     /// config leaves creates working instead of blocking them.
     pub fn suffix_on_name_collision(&self) -> bool {
         self.on_name_collision == NameCollision::Suffix
+    }
+
+    /// How many projects `fastf recent` lists when it is not told. A limit of
+    /// zero, which only a hand can write, is read as the default: the flag and
+    /// `config set` refuse it, and no list is nobody's wish.
+    pub fn resolve_recent_limit(&self) -> usize {
+        match self.recent_default_limit {
+            0 => default_recent_limit(),
+            limit => limit,
+        }
     }
 
     /// Resolve base directory: configured path, or the user's home directory.
@@ -274,11 +286,11 @@ impl Config {
     /// Non-existent paths are kept (not canonicalizable) so callers can decide
     /// to skip them — discovery does, treating an absent base as honestly empty.
     pub fn effective_bases(&self) -> Vec<std::path::PathBuf> {
-        // Memoized per `Config` instance. One create used to call this six to
-        // eight times, and each call `canonicalize`s every base — which on a
-        // network share is a round trip, not an arithmetic operation. The cell
-        // lives and dies with the loaded config, so a `config set` elsewhere is
-        // picked up by the next load exactly as before.
+        // Memoized per `Config` instance: one create asks six to eight times,
+        // and each answer canonicalizes every base — which on a network share
+        // is a round trip, not an arithmetic operation. The cell lives and
+        // dies with the loaded config, so a `config set` elsewhere is picked
+        // up by the next load.
         let key = (self.base_dir.clone(), self.bases.clone());
         if let Some(memo) = self.bases_cache.get()
             && memo.key == key
@@ -293,6 +305,15 @@ impl Config {
             value: resolved.clone(),
         });
         resolved
+    }
+
+    /// **The bases that answer**, of [`Self::effective_bases`]: each a folder
+    /// that answered inside the deadline, every one asked at once. What a read
+    /// or a mutation walks. One that does not answer is left out, never waited
+    /// for — a call into a mount that stopped answering blocks for the
+    /// kernel's own timeout — and an unplugged one is not there to read.
+    pub fn answering_bases(&self) -> Vec<std::path::PathBuf> {
+        paths::mounted_bases(&self.effective_bases()).0
     }
 
     /// The bases as configured — `base_dir` (or its fallback) first, then
@@ -314,8 +335,8 @@ impl Config {
     fn resolve_effective_bases(&self) -> Vec<std::path::PathBuf> {
         // All at once, under one deadline: `canonicalize` on a mount that
         // stopped answering blocks for the kernel's own timeout, and one such
-        // base held every command — and the app's first rows — behind it. A
-        // base that has not answered keeps the path as configured.
+        // base would hold every command — and the app's first rows — behind
+        // it. A base that has not answered keeps the path as configured.
         let candidates = self.base_candidates();
         let canonical = paths::answer_within(&candidates, paths::PROBE_TIMEOUT, |path| {
             paths::canonical(path).ok()
@@ -370,7 +391,7 @@ impl Config {
 /// Which terminal emulator the headless-GUI relaunch should use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalPreference {
-    /// `terminal = "none"` — never open a window; behave as fastf always has.
+    /// `terminal = "none"` — never open a window.
     Disabled,
     /// A program named by the config or by `$TERMINAL`.
     Named(String),
@@ -401,11 +422,9 @@ pub fn suggested_base_dir() -> Option<std::path::PathBuf> {
 /// `DataLock` is not reentrant, so a validator that locked could not be called
 /// from `config::set`, which already holds it. Every entry point for a base path
 /// goes through here or [`resolve_base_dir_input`]: onboarding, `fastf config
-/// set base-dir` / `bases`, and the same keys in TUI Settings. When only
-/// onboarding validated, `config set base-dir '~/Projects'` stored a literal `~`
-/// and a relative path was accepted outright — which scattered projects, index
-/// caches and a counter file into whatever directory the command happened to
-/// run from.
+/// set base-dir` / `bases`, and the same keys in TUI Settings. One that skips
+/// both stores a literal `~`, or a relative path that scatters projects, index
+/// caches and a counter file into whatever directory a command runs from.
 pub fn expand_base_path(raw: &str) -> Result<std::path::PathBuf> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -443,7 +462,8 @@ pub fn expand_base_path(raw: &str) -> Result<std::path::PathBuf> {
 /// drive it stands for — an absent base is meant to be skipped, not conjured.
 pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
     let expanded = expand_base_path(raw)?;
-    fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
+    fs::create_dir_all(&expanded)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&expanded)))?;
     // Stored canonical, rendered readable at the display sites. Keeping the
     // verbatim form is what preserves long-path support when this base is later
     // used for filesystem work.
@@ -468,13 +488,47 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
 mod tests {
     use super::{Config, NameCollision};
 
-    /// `on_name_collision` became an enum, and its TOML must be byte-identical.
+    /// `on_name_collision` writes the strings a `config.toml` holds
+    /// (`"suffix"`, `"error"`), and reads anything else as suffix.
     ///
-    /// The `#[serde(other)]` case is the load-bearing one: the old code compared
-    /// case-insensitively against `"error"` and treated everything else as
-    /// "suffix", so a config file holding a typo kept working. A stricter enum
-    /// would refuse to parse it, and a config that will not parse is how every
-    /// command stops.
+    /// The `#[serde(other)]` case is the load-bearing one: a config file
+    /// holding a typo keeps working. A stricter enum would refuse to parse it,
+    /// and a config that will not parse is how every command stops.
+    /// A value written by hand is read by what it says, whatever its case and
+    /// the space around it: `"Error"` is `error`, not a typo that means
+    /// `suffix`.
+    #[test]
+    fn name_collision_is_read_whatever_its_case() {
+        for written in ["error", "Error", "ERROR", " error "] {
+            let config: Config =
+                toml::from_str(&format!("on_name_collision = \"{written}\"")).unwrap();
+            assert_eq!(
+                config.on_name_collision,
+                NameCollision::Error,
+                "{written:?}"
+            );
+        }
+        for written in ["suffix", "Suffix", "sufix", ""] {
+            let config: Config =
+                toml::from_str(&format!("on_name_collision = \"{written}\"")).unwrap();
+            assert_eq!(
+                config.on_name_collision,
+                NameCollision::Suffix,
+                "{written:?}"
+            );
+        }
+    }
+
+    /// A limit of nothing is no limit anybody means: read as the default, the
+    /// way every value that cannot be meant is.
+    #[test]
+    fn a_recent_limit_of_zero_is_read_as_the_default() {
+        let config: Config = toml::from_str("recent_limit = 0").unwrap();
+        assert_eq!(config.resolve_recent_limit(), 20);
+        let config: Config = toml::from_str("recent_limit = 5").unwrap();
+        assert_eq!(config.resolve_recent_limit(), 5);
+    }
+
     #[test]
     fn name_collision_round_trips_and_tolerates_a_typo() {
         // Serialized as part of a whole config: TOML has no representation for
@@ -541,8 +595,8 @@ mod tests {
         std::fs::remove_file(stalled.join(paths::STALL_MARKER)).unwrap();
     }
 
-    /// `expand_base_path` is one half of "the only way in" for a base path, and
-    /// had no test of any kind. It expands `~` and requires an absolute path —
+    /// `expand_base_path` is one half of "the only way in" for a base path.
+    /// It expands `~` and requires an absolute path —
     /// and, crucially, **creates nothing**: extra `bases` use it precisely so a
     /// missing one is not conjured into existence at an unmounted mount point,
     /// shadowing the drive it stands for.

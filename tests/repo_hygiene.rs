@@ -1,12 +1,9 @@
 //! The repository is published. Nothing in it may describe the machine it was
 //! written on.
 //!
-//! This exists because `.claude/skills/release/SKILL.md` was once tracked as a
-//! file that was correct, secret-free, and full of one developer's absolute
-//! paths ("the icon lives at `/mnt/proj/00_SYSTEM/...`", "the AUR clones are at
-//! `~/Projects/<dated-folder>/aur`"). Tracking a file in a public repository
-//! publishes it, and a written rule in `CLAUDE.md` would not have caught the
-//! next one. This does.
+//! A file can be correct and secret-free and still be full of one developer's
+//! absolute paths. Tracking a file in a public repository publishes it, and a
+//! written rule in `CLAUDE.md` does not catch the next one. This does.
 //!
 //! Two things are deliberately allowed and must stay allowed:
 //! - **Attribution.** The maintainer's name and contact belong in `LICENSE`,
@@ -48,9 +45,9 @@ fn tracked_text_files() -> Option<Vec<PathBuf>> {
     // the AUR source package unpacks the release tarball into
     // `packaging/aur/fast-folder/src/`, which sits *inside* a real checkout and
     // is ignored by it, so `git ls-files` there succeeds and returns nothing.
-    // That looked like "a checkout with no files" and tripped the vacuous-pass
+    // That reads as "a checkout with no files" and trips the vacuous-pass
     // assertion, which is a failing `check()` for everyone building the AUR
-    // package. Comparing the top level answers the question that was meant:
+    // package. Comparing the top level answers the question that is meant:
     // are these bytes the ones a clone receives?
     let top_level = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])

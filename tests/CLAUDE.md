@@ -5,13 +5,15 @@ for one data directory, `with_sandbox(&SERIAL, …)` where a base is needed too;
 fixtures live in `common::fixtures`. The rules those helpers enforce are at the
 bottom, stated once.
 
-**A file and a binary per subject — except the two app suites.** `cargo test`
+**A file and a binary per subject — except the two app suites and
+`cli_output`.** `cargo test`
 runs binaries sequentially and links each one. The pty tests' fixed keystroke
 schedules overlap only inside one binary (as three binaries they cost nineteen
 more seconds), so `tui_pty.rs` is one binary with modules under `tests/tui_pty/`
-(`app`, `list`, `flows`, plus the screenshot tool and its SVG renderer); and
+(`app`, `list`, `flows`, plus the screenshot tool and its SVG renderer);
 `tui_update.rs` is one binary with a module per subject under
-`tests/tui_update/`, which share `harness.rs`.
+`tests/tui_update/`, which share `harness.rs`; and `cli_output.rs` is one
+binary with a module per command family under `tests/cli_output/`.
 
 What each suite guards — the intent, not the case list:
 - `create.rs`, `metadata.rs`, `search.rs`, `template_engine.rs`, `register.rs`,
@@ -30,6 +32,9 @@ What each suite guards — the intent, not the case list:
 - `log.rs` — the log and the messages: two processes appending at once (this
   binary started again as a writer), `fastf log` and `fastf messages` after a
   real move.
+- `dead_base.rs` — every kind of command beside a base that stopped answering
+  (`paths:stall-base`): each has to be done long before a look into that base
+  would come back. Debug-only.
 - `concurrency.rs` — races real **processes**: a thread test passes against an
   in-process `Mutex` while production stays broken.
 - `tui_update.rs` — the app's state machine with no terminal: a `tui::testing`
@@ -109,7 +114,7 @@ What each suite guards — the intent, not the case list:
 because neither the app nor a prompt draws without a TTY. `#![allow(dead_code)]`,
 since each binary uses a subset.
 
-## Three ways a test passes over the thing it is for
+## Ways a test passes over the thing it is for
 
 **Do not read the artefact through the code that repairs it.** `discover` rescans
 and rewrites the index on the way past, so asking it whether a restore worked can
@@ -124,6 +129,10 @@ Assert a word only that screen has (`frame.contains("one base per line")`) befor
 the id you formatted into it, or wrapping the output in an already-proven
 sanitizer, passes whatever the code returns. Assert the result, in the caller's
 units.
+
+**A property does not assume away the input it exists for.** A `prop_assume!`
+that discards a case because callers reject it holds only while every caller
+does; assert what the function does with that case instead.
 
 **Write the test against the broken build first.** One that passes before the fix
 is a design guard and is labelled so; one that still fails after has found a case

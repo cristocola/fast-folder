@@ -15,9 +15,9 @@ use fastf::core::{library, naming, project_info};
 ///
 /// `folder` is **single-quoted** in the frontmatter. A plain YAML scalar may not
 /// begin with `%` (the directive indicator), and `%USERPROFILE%` is a perfectly
-/// legal Windows folder name — the unquoted fixture made such a project
-/// undiscoverable and looked like a product defect. `project_info::write` quotes
-/// it correctly through `util::yaml`; only this hand-rolled fixture did not.
+/// legal Windows folder name — unquoted, the fixture makes such a project
+/// undiscoverable, which looks like a product defect. `project_info::write`
+/// quotes it through `util::yaml`; this hand-rolled fixture quotes it itself.
 fn write_project(base: &Path, folder: &str, id: &str) -> PathBuf {
     let dir = base.join(folder);
     fs::create_dir_all(&dir).unwrap();
@@ -125,13 +125,11 @@ fn case_only_rename_round_trips() {
 
 /// The same tidy-up, on a name that is not ASCII.
 ///
-/// The test above is the whole of the coverage this had, and it is written in
-/// English — so `eq_ignore_ascii_case`, which finds nothing to fold in
-/// `проект` against `ПРОЕКТ`, passed it. NTFS *is* case-insensitive over
-/// Cyrillic, so the rename was classified as an ordinary one, the existence
-/// check found the source sitting at the target, and the verb refused with
+/// `eq_ignore_ascii_case` finds nothing to fold in `проект` against `ПРОЕКТ`,
+/// but NTFS *is* case-insensitive over Cyrillic: a rename classified as an
+/// ordinary one finds the source sitting at the target and refuses with
 /// `rename target already exists` — naming the very folder it was asked to
-/// rename. Found by driving a real project on a real NTFS volume.
+/// rename.
 #[test]
 fn case_only_rename_round_trips_for_non_ascii_names() {
     let tmp = tempfile::tempdir().unwrap();
@@ -416,11 +414,11 @@ fn long_paths_work_and_display_cleanly() {
 
 /// `cmd.exe` expands `%VAR%` inside the command line it reconstructs, *after*
 /// std has quoted the arguments. A project folder called `%USERPROFILE%` is a
-/// legal folder name, and `cmd /c start "" <path>` opened the user's home
+/// legal folder name, and `cmd /c start "" <path>` opens the user's home
 /// directory instead of it.
 ///
-/// The rewrite means the path never appears in a command line at all: the shell
-/// gets `"%FASTF_PROJECT_PATH%"`, which expands to the variable fastf set, not
+/// So the path never appears in a command line at all: the shell gets
+/// `"%FASTF_PROJECT_PATH%"`, which expands to the variable fastf set, not
 /// to anything in the folder's own name. `&` is the other half of the same
 /// problem — it is `cmd`'s command separator and is legal in a folder name.
 #[cfg(windows)]
@@ -453,8 +451,7 @@ fn a_windows_project_name_with_percent_and_ampersand_cannot_reach_cmd() {
 /// **Not `cfg(windows)`**, even though the syntax it names is cmd's: `%` and `&`
 /// are legal in a folder name on every platform, and the failure this catches —
 /// a `%`-leading name that will not round-trip through frontmatter — is
-/// platform-independent. Gating it to Windows meant it could only fail on CI,
-/// which is exactly what happened.
+/// platform-independent. Gated to Windows, it could only fail on CI.
 #[test]
 fn folder_names_that_are_cmd_syntax_round_trip_through_discovery() {
     let tmp = tempfile::tempdir().unwrap();

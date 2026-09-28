@@ -38,7 +38,7 @@ fn v_refuses_without_an_anchor_and_reaches_both_ways() {
     assert!(app.library.marks.is_empty(), "nothing to reach from");
 
     press(&mut app, Key::ch('G')); // last row
-    press(&mut app, Key::ch(' ')); // mark it (and wrap to the first)
+    press(&mut app, Key::ch(' ')); // mark it (the cursor stays on it)
     press(&mut app, Key::ch('g')); // back to the top
     press(&mut app, Key::ch('v'));
     assert_eq!(app.library.marks.len(), app.library.len());

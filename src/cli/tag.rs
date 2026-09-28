@@ -15,10 +15,9 @@ use crate::core::{config::Config, project_info};
 
 /// What to say when a project's folder has no `PROJECT_INFO.md`.
 ///
-/// `tag` and `note` reach this same condition and said two different things,
-/// and neither named the way out — which is `register`, the command whose whole
-/// job is writing that file into a folder that lacks one. `tag reauto` already
-/// had the right shape: name the cause, then the command.
+/// `tag` and `note` reach this same condition and say the same thing: the
+/// cause, then the way out — `register`, the command whose whole job is
+/// writing that file into a folder that lacks one.
 pub(crate) fn no_metadata_message(id: &str, path: &std::path::Path) -> String {
     format!(
         "no {} in {} — so {} is not a project fastf can read or write.\n  \
@@ -46,7 +45,7 @@ pub fn add(query: &str, new_tags: &[String]) -> Result<()> {
         "{}  Added {} tag{} to {}",
         "✓".green().bold(),
         n,
-        if n == 1 { "" } else { "s" },
+        crate::util::plural::s(n),
         candidate.id.green().bold()
     );
     Ok(())
@@ -73,7 +72,7 @@ pub fn remove(query: &str, remove_tags: &[String]) -> Result<()> {
             "{}  Removed {} tag{} from {}",
             "✓".green().bold(),
             removed_count,
-            if removed_count == 1 { "" } else { "s" },
+            crate::util::plural::s(removed_count),
             candidate.id.green().bold()
         );
     }
@@ -92,7 +91,7 @@ pub fn list(query: &str) -> Result<()> {
     let meta = project_info::read_metadata(&project.path)?.ok_or_else(|| {
         anyhow::anyhow!(
             "{} has no YAML frontmatter — cannot read tags",
-            path.display()
+            crate::util::paths::display_path(&path)
         )
     })?;
 
@@ -113,9 +112,9 @@ pub fn list(query: &str) -> Result<()> {
     Ok(())
 }
 
-/// Re-derive auto-tags from the current frontmatter variables, replacing any
-/// previously derived tags (identified by `slug/` prefix for slugs in
-/// `template.tag_from`) while keeping free-form tags intact.
+/// Re-derive auto-tags from the current frontmatter variables, replacing only
+/// the tags derived before (recorded in `auto_tags`, never matched by a
+/// `slug/` prefix) while keeping free-form tags intact.
 pub fn reauto(query: &str) -> Result<()> {
     let cfg = Config::load()?;
     let project = library::resolve(&cfg, query)?;
@@ -139,7 +138,7 @@ pub fn reauto(query: &str) -> Result<()> {
         "{}  Re-derived {} auto-tag{} for {}",
         "✓".green().bold(),
         new_derived.len(),
-        if new_derived.len() == 1 { "" } else { "s" },
+        crate::util::plural::s(new_derived.len()),
         project.id.green().bold()
     );
     Ok(())

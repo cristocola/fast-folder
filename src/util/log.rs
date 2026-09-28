@@ -35,8 +35,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     /// Every entry a walk, a copy or a removal touches — one line per file of
-    /// a move, so only when asked for: 3.13 wrote these at debug into every
-    /// job's log, 85 MB for one move of twelve projects.
+    /// a move, so only when asked for: written at debug into every job's log,
+    /// they come to 85 MB for one move of twelve projects.
     Trace = 0,
     Debug = 1,
     Info = 2,
@@ -95,8 +95,7 @@ static THRESHOLD: AtomicU8 = AtomicU8::new(Level::Info as u8);
 static JOB: Mutex<Option<(String, PathBuf)>> = Mutex::new(None);
 
 /// The job log, open. Only the job's worker writes it, so it is opened once
-/// rather than for every line (3.13 made a folder, looked twice and opened
-/// the file for each of them), with how long it is, for its rotation.
+/// rather than for every line, with how long it is, for its rotation.
 static JOB_FILE: Mutex<Option<(std::fs::File, u64)>> = Mutex::new(None);
 
 /// Write lines at `level` and above to the central log from now on.
@@ -210,7 +209,10 @@ fn append_job(path: &Path, line: &str) {
         .is_some_and(|(_, length)| *length > JOB_ROTATE_BYTES)
     {
         *slot = None;
-        let _ = std::fs::rename(path, PathBuf::from(format!("{}.1", path.display())));
+        let _ = std::fs::rename(
+            path,
+            PathBuf::from(format!("{}.1", crate::util::paths::display_path(path))),
+        );
         if let Ok(file) = OpenOptions::new().create(true).append(true).open(path) {
             *slot = Some((file, 0));
         }
@@ -261,7 +263,8 @@ pub(crate) fn rotate(path: &Path, rotate_at: u64) {
     if std::fs::metadata(path).map_or(true, |meta| meta.len() <= rotate_at) {
         return;
     }
-    let numbered = |n: usize| PathBuf::from(format!("{}.{n}", path.display()));
+    let numbered =
+        |n: usize| PathBuf::from(format!("{}.{n}", crate::util::paths::display_path(path)));
     let _ = std::fs::remove_file(numbered(KEEP));
     for n in (1..KEEP).rev() {
         let _ = std::fs::rename(numbered(n), numbered(n + 1));

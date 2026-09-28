@@ -15,13 +15,10 @@ fn opening_asks_for_the_summary_and_one_discovery() {
 
 /// A destructive verb runs on the project its dialog named, or on nothing.
 ///
-/// The prompt text was built once from the row under the cursor and the action
-/// was built again at submit time from whatever was selected *then*. A
-/// discovery landing under an open dialog re-filters the list, and
+/// A discovery landing under an open dialog re-filters the list, and
 /// `clamped_selection` moves the cursor when the named row is no longer in the
-/// snapshot — so a delete or an unregister could point at a different project
-/// from the one the question named. The dialog carries its target by path now,
-/// and a target that is gone is a refusal rather than a neighbour.
+/// snapshot, so the dialog carries its target by path: a target that is gone
+/// is a refusal, never a neighbour.
 #[test]
 fn a_delete_whose_project_left_the_library_does_not_delete_a_neighbour() {
     let mut app = fixture(4, 100, 30);
@@ -125,10 +122,9 @@ fn recent_installs_the_rows_without_a_discovery() {
     );
 }
 
-/// **A list stops at its ends.** It wrapped — one `j` too many at the bottom
-/// of a long table and the cursor was back at the top with nothing to say
-/// why, which reads as the cursor escaping rather than as a feature. Every
-/// list shares `nav::step`, so this holds for all of them.
+/// **A list stops at its ends**: a cursor that comes round from the bottom to
+/// the top with nothing to say why reads as the cursor escaping. Every list
+/// shares `nav::step`, so this holds for all of them.
 #[test]
 fn arrows_and_page_keys_stop_at_the_ends() {
     let mut app = fixture(12, 80, 24);
@@ -205,7 +201,7 @@ fn the_search_bar_matches_inside_a_name_and_esc_clears_then_leaves() {
     );
 
     // Letters picked from across the name — and across the id, the template
-    // and the tags — are not a match. This is what "too fuzzy" looked like.
+    // and the tags — are not a match.
     press(&mut app, Key::ctrl('u'));
     type_text(&mut app, "lulrmx");
     assert!(app.library.is_empty(), "{:?}", names(&app));
@@ -399,6 +395,38 @@ fn the_palette_jumps_to_a_project() {
         selected_name(&app)
     );
     assert_eq!(app.focus, Focus::Projects);
+}
+
+/// A project chosen in the palette is shown, whatever was hiding its row: the
+/// query, a filter, the narrowing the app was opened with.
+#[test]
+fn the_palette_jumps_to_a_project_a_filter_hides() {
+    let hidden = sample_projects(6)
+        .into_iter()
+        .find(|project| project.template != "general")
+        .expect("a project of another template");
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Preset {
+                template: Some("general".to_string()),
+                ..Default::default()
+            },
+            initial: sample_projects(6),
+        },
+        Theme::mono(),
+        (120, 40),
+    );
+    assert!(
+        names(&app).iter().all(|name| *name != hidden.name),
+        "the narrowing hides it"
+    );
+
+    press(&mut app, Key::ch('c'));
+    type_text(&mut app, &format!("#{}", hidden.id));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(selected_name(&app), hidden.name);
+    assert!(app.library.preset.is_none(), "what hid it is off");
+    assert_eq!(app.library.len(), 6);
 }
 
 #[test]
@@ -602,10 +630,9 @@ fn the_status_toast_expires_on_its_own() {
     assert!(app.status.text.is_empty());
 }
 
-/// The templates tab carries what the strip used to: every template, the
-/// orphan slugs after them, and the counts. `f` filters the library by the
-/// selected one **and goes back to it** — the strip set the filter and left
-/// you looking at the strip, which is the one place the answer is not.
+/// The templates tab lists every template, the orphan slugs after them, and
+/// the counts. `f` filters the library by the selected one **and goes back to
+/// it**, because the tab is the one place the answer is not.
 #[test]
 fn the_templates_tab_filters_the_library_and_returns_to_it() {
     use fastf::tui::app::Screen;

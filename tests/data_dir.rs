@@ -94,11 +94,11 @@ fn bootstrap_lands_in_user_dir_for_system_install() {
 /// A first run that failed between the two bundled templates is finished by the
 /// next one.
 ///
-/// The guard was "is the templates directory empty" and both templates were
-/// written under it, so a failure after the first — a full disk, a permission,
-/// a Ctrl-C — left the directory non-empty, the guard false ever after, and
-/// `client-project` never written. The user was left with one of the two
-/// templates the README promises and nothing anywhere saying so.
+/// Bootstrap asks after each bundled template, not whether the templates
+/// directory is empty: a failure after the first — a full disk, a permission,
+/// a Ctrl-C — leaves the directory non-empty, and a guard on emptiness would
+/// leave the user with one of the two templates the README promises and
+/// nothing anywhere saying so.
 #[test]
 fn a_half_written_first_run_is_finished_by_the_next_one() {
     with_user_dir_env(|tmp, _guard| {
@@ -190,12 +190,12 @@ fn init_base_dir_shared_onboarding_core() {
 ///
 /// The realistic trigger is two fastf versions over one library: a newer build
 /// writes a key an older build has never heard of, and the older build then runs
-/// `tag add` on Windows. Before this test, `write_frontmatter` parsed into
-/// `Metadata` and re-serialised, so every such key was silently deleted.
+/// `tag add` on Windows. Parsing into `Metadata` and re-serialising would
+/// silently delete every such key.
 ///
 /// The unquoted `year: 2026` is not decoration. It is the value shape that a
-/// `#[serde(flatten)]` catch-all would have started rejecting, which would have
-/// made the project invisible to discovery — the exact failure this phase closes.
+/// `#[serde(flatten)]` catch-all would reject, which would make the project
+/// invisible to discovery.
 #[test]
 fn unknown_frontmatter_keys_survive_every_mutation() {
     sandboxed(|install| {
@@ -308,8 +308,8 @@ fn unknown_frontmatter_keys_survive_every_mutation() {
 
 /// A no-op frontmatter mutation must leave the frontmatter bytes untouched.
 ///
-/// The body has always had this guarantee; the frontmatter did not, which
-/// is what let a rewrite quietly reorder or drop keys with nothing failing.
+/// The body has the same guarantee. Without it a rewrite can quietly reorder
+/// or drop keys with nothing failing.
 #[test]
 fn write_frontmatter_bytes_preserved_on_no_op() {
     sandboxed(|install| {
@@ -343,11 +343,11 @@ fn write_frontmatter_bytes_preserved_on_no_op() {
 /// A template key fastf does not own survives an editor save; a legacy flat
 /// `files:` block still does not.
 ///
-/// `template.yaml` is user-owned and rewritten wholesale by the TUI builder, the
-/// browser editor, and `template from-folder --force`. The `files:` half of this
-/// is the reason preservation cannot be blanket: the `files/`
-/// directory is the spec, and a flat `files:` block is a pre-v0.8 leftover that
-/// must keep being dropped rather than newly resurrected.
+/// `template.yaml` is user-owned and rewritten wholesale by the guided app's
+/// builder and `template from-folder --force`. The `files:` half of this is the
+/// reason preservation cannot be blanket: the `files/` directory is the spec,
+/// and a flat `files:` block is a pre-v0.8 leftover that must keep being
+/// dropped rather than newly resurrected.
 #[test]
 fn unknown_template_keys_survive_a_save_but_legacy_files_do_not() {
     sandboxed(|install| {
@@ -366,8 +366,8 @@ fn unknown_template_keys_survive_a_save_but_legacy_files_do_not() {
 
         let tmpl = template::find_by_slug("test").unwrap();
         // Loaded from `test` and written back to `test`: an edit in place, and
-        // it says so. Passing `None` here claimed to be creating a new
-        // template, which is now refused rather than overwriting one.
+        // it says so. `None` would claim to be creating a new template, which
+        // is refused rather than overwriting one.
         fastf::core::operations::save_template(&tmpl, Some("test")).unwrap();
 
         let saved = fs::read_to_string(&manifest).unwrap();
@@ -434,16 +434,15 @@ show_frame = false
 /// The harness restores the environment on **unwind**, not merely on a clean
 /// return.
 ///
-/// It used to restore with a line after `body()`, so a panicking test skipped
-/// it and the next test in the binary inherited a deleted tempdir as its `HOME`
-/// — and an unconfigured `base_dir` falls back to the home directory, so that
-/// next test scanned a directory that no longer existed. The failure landed on
-/// whichever test happened to run next, never on the one that caused it.
+/// A restore on a line after `body()` is skipped by a panicking test, and the
+/// next test in the binary inherits a deleted tempdir as its `HOME` — and an
+/// unconfigured `base_dir` falls back to the home directory, so that next test
+/// scans a directory that no longer exists. The failure lands on whichever
+/// test runs next, never on the one that caused it.
 #[test]
 fn a_panicking_test_body_still_restores_the_environment() {
     // This binary's own `SERIAL`, not a private one. A second mutex over the
-    // same process-global variables is exactly the defect this phase removes:
-    // it looks like isolation and provides none.
+    // same process-global variables looks like isolation and provides none.
     let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
     // Read under the lock: another test in this binary has its own sandbox

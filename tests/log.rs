@@ -140,11 +140,10 @@ fn the_log_level_is_a_config_key() {
     );
 }
 
-/// **A job's log holds its steps, not its files.** 3.13 wrote a line for every
-/// entry every walk touched into the job's log — 399,000 lines, 85 MB, for one
-/// move of twelve projects — each with a folder made and the file opened again.
-/// At the default level a move of two thousand files leaves a short log, and
-/// its entries are there only when `log-level trace` asks for them.
+/// **A job's log holds its steps, not its files**: a line for every entry every
+/// walk touches is 85 MB for one move of twelve projects. At the default level
+/// a move of two thousand files leaves a short log, and its entries are there
+/// only when `log-level trace` asks for them.
 #[cfg(debug_assertions)]
 #[test]
 fn a_jobs_log_holds_its_steps_and_its_entries_only_at_trace() {

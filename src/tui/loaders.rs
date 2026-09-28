@@ -54,10 +54,8 @@ pub fn summary_local(cfg: &Config) -> SummaryPart {
 /// The header's bases, from the indexes: no base is scanned to draw it.
 /// **Every base is asked at once, under one deadline** — its canonical form,
 /// whether it is a folder, what its index says — so a base on a mount that
-/// stopped answering costs `PROBE_TIMEOUT` once and is called unresponsive,
-/// where asking one base after another, each canonicalized before its probe,
-/// cost a timeout per base and the kernel's own for the first. Also answers
-/// each base's probe, which the attention part reads.
+/// stopped answering costs `PROBE_TIMEOUT` once and is called unresponsive.
+/// Also answers each base's probe, which the attention part reads.
 pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>) {
     let candidates = cfg.base_candidates();
     let answers = paths::answer_within(&candidates, paths::PROBE_TIMEOUT, |configured| {
@@ -113,8 +111,8 @@ pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>
 }
 
 /// What is unfinished, over the bases [`summary_bases`] found answering.
-pub fn summary_attention(cfg: &Config, probed: Vec<(PathBuf, paths::Probe)>) -> SummaryPart {
-    SummaryPart::Attention(crate::core::attention::attention_probed(cfg, probed))
+pub fn summary_attention(probed: Vec<(PathBuf, paths::Probe)>) -> SummaryPart {
+    SummaryPart::Attention(crate::core::attention::attention_probed(probed))
 }
 
 /// Everything the settings screen shows. Read on a worker: the counter floor
@@ -244,7 +242,7 @@ fn preview_from_folder(
     tpl::ensure_slug_available(&request.slug, request.force).map_err(|error| {
         PreviewRefusal::on(crate::tui::app::wizard::FIELD_FORCE, format!("{error:#}"))
     })?;
-    let scan = tpl::scan_for_preview(&root, request.bundle_assets)
+    let scan = crate::core::template_import::scan(&root, request.bundle_assets)
         .map_err(|error| PreviewRefusal::on(FIELD_SOURCE, format!("{error:#}")))?;
     Ok(Preview::FromFolder(Box::new(FromFolderPreview {
         slug: request.slug.clone(),
@@ -399,7 +397,7 @@ fn preview_recursive(
     let base = existing_directory(&request.path, REGISTER_PATH)?;
     let targets = reg::recursive_targets(&base)
         .map_err(|error| PreviewRefusal::on(REGISTER_PATH, format!("{error:#}")))?;
-    let prefix = reg::recursive_prefix(request.template_slug.as_deref());
+    let id = reg::recursive_id(request.template_slug.as_deref());
     let rows = targets
         .iter()
         .map(|path| {
@@ -407,7 +405,7 @@ fn preview_recursive(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let note = reg::recursive_id_note(&name, &prefix);
+            let note = reg::recursive_id_note(&name, &id);
             (name, note)
         })
         .collect();
@@ -417,9 +415,8 @@ fn preview_recursive(
 /// The register form's path field, named once so a refusal can point at it.
 const REGISTER_PATH: &str = crate::tui::app::register::FIELD_PATH;
 
-/// A folder an answer names, checked where it was typed. This is the check
-/// that used to happen after three more questions had been answered, taking
-/// all four answers with it — and the wording is the one those prompts used.
+/// A folder an answer names, checked where it was typed, so the refusal lands
+/// on its own field before any other answer is at stake.
 fn existing_directory(
     path: &std::path::Path,
     field: &'static str,
@@ -427,6 +424,7 @@ fn existing_directory(
     if path.as_os_str().is_empty() {
         return Err(PreviewRefusal::on(field, "enter a folder path"));
     }
+    paths::require_answer(path).map_err(|error| PreviewRefusal::on(field, format!("{error}")))?;
     if !path.exists() {
         return Err(PreviewRefusal::on(
             field,
@@ -457,7 +455,6 @@ fn template_card(t: &template::Template) -> TemplateCard {
     }
 }
 
-/// Every project, newest first, through the caches.
 /// One base's rows for a discovery: `cached` gets what its index holds as
 /// soon as that is read, and the answer is what the base holds. A base that
 /// is not there is empty — the header says why. `configured` is the base as
@@ -688,8 +685,38 @@ fn listing(path: &Path) -> std::io::Result<Vec<Entry>> {
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             Some(Entry { name, is_dir })
         })
-        .take(LISTING_LIMIT)
         .collect();
+    // Sorted, then cut: cut first, a folder of more than the limit shows
+    // whichever entries the filesystem happened to list first.
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(LISTING_LIMIT);
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A folder of more entries than the pane lists shows the first of them
+    /// in the pane's own order, folders first: sorted, then cut.
+    #[test]
+    fn a_long_listing_is_sorted_before_it_is_cut() {
+        let temp = tempfile::tempdir().unwrap();
+        for n in 0..LISTING_LIMIT + 50 {
+            std::fs::write(temp.path().join(format!("take_{n:04}.wav")), "x").unwrap();
+        }
+        std::fs::create_dir(temp.path().join("zz_renders")).unwrap();
+
+        let listed = listing(temp.path()).unwrap();
+        assert_eq!(listed.len(), LISTING_LIMIT);
+        assert_eq!(listed[0].name, "zz_renders", "folders first");
+        let files: Vec<&str> = listed[1..]
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let wanted: Vec<String> = (0..LISTING_LIMIT - 1)
+            .map(|n| format!("take_{n:04}.wav"))
+            .collect();
+        assert_eq!(files, wanted, "then the first files by name");
+    }
 }

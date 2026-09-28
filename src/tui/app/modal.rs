@@ -36,15 +36,16 @@ pub enum MessageLevel {
 pub enum Then {
     SortPick,
     TemplateFilter,
-    /// The picked value is a tag to add, or `NEW_TAG` to type one.
-    AddTag,
-    /// The picked value is a base path to move into.
-    MoveToBase,
+    /// The picked value is a tag to add to these projects, or `NEW_TAG` to
+    /// type one.
+    AddTag(crate::tui::app::actions::Targets),
+    /// The picked value is a base path to move these projects into.
+    MoveToBase(crate::tui::app::actions::Targets),
     /// The picked value is a base path to restrict the list to.
     BaseFilter,
     /// The picked value is a tag; it goes into the search bar as `tag:x`,
-    /// because that is what a tag filter *is* here — the grammar already had
-    /// it, and this is a way to find it without typing it.
+    /// because that is what a tag filter *is* here — the grammar has it, and
+    /// this is a way to find it without typing it.
     TagFilter,
     /// The picked value answers the named field of the open flow's form —
     /// what Space on a choice opens, so a twenty-template list is one fuzzy
@@ -299,47 +300,26 @@ pub fn message_rows(
 /// The jobs page's rows, newest first — when it started, how it stands, what
 /// it is, and its step or its outcome — with the id of each.
 pub fn job_rows(jobs: &[crate::core::jobs::JobView]) -> (Vec<String>, Vec<String>) {
-    use crate::core::assets::JobStatus;
+    use crate::core::jobs::Standing;
     if jobs.is_empty() {
         return (vec!["No jobs yet.".to_string()], Vec::new());
     }
     let mut rows = Vec::new();
     let mut ids = Vec::new();
     for job in jobs {
-        let state = job.state.as_ref();
-        let (word, detail) = if job.interrupted() {
-            (
-                "stopped",
+        let standing = job.standing();
+        let word = standing.word();
+        let detail = match standing {
+            Standing::Stopped => {
                 "its process ended before it said how it went; Reconcile finishes anything it left"
-                    .to_string(),
-            )
-        } else {
-            match state.map(|state| state.status) {
-                Some(JobStatus::Running) | None => {
-                    ("running", crate::tui::app::background::step_of(job))
-                }
-                Some(JobStatus::Done) => {
-                    ("done", state.map(|s| s.summary.clone()).unwrap_or_default())
-                }
-                Some(JobStatus::Failed) => (
-                    "failed",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Cancelled) => (
-                    "cancelled",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Unknown) => (
-                    "ended",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
-                Some(JobStatus::Paused) => (
-                    "paused",
-                    state.map(|s| s.summary.clone()).unwrap_or_default(),
-                ),
+                    .to_string()
             }
+            Standing::Running => crate::tui::app::background::step_of(job),
+            _ => job.summary(),
         };
-        let started = state
+        let started = job
+            .state
+            .as_ref()
             .map(|state| crate::util::time::local_readable(&state.started))
             .unwrap_or_default();
         rows.push(format!(
@@ -384,7 +364,6 @@ pub enum Modal {
     MultiPick(MultiPick),
     /// A flow that builds something: create, apply, register, from-folder.
     Flow(Box<Flow>),
-    /// Every template, with the selected one's details.
     /// A template being written.
     Builder(Box<Builder>),
     /// Every setting, the ID counter and maintenance.
@@ -399,7 +378,7 @@ pub enum Modal {
         level: MessageLevel,
         scroll: usize,
     },
-    /// `L`: messages and the log.
+    /// `L`: messages, jobs and the log.
     Activity(Box<Activity>),
 }
 
@@ -530,30 +509,23 @@ impl App {
                 let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
                 self.set_base_filter(base)
             }
-            Then::AddTag => {
+            Then::AddTag(targets) => {
                 if item.value == crate::tui::app::actions::NEW_TAG {
                     self.modals.push(Modal::TextPrompt(TextPrompt::new(
                         validators::ADD_TAG_PROMPT,
-                        TextThen::AddTag,
+                        TextThen::AddTag(targets.clone()),
                     )));
                     return Vec::new();
                 }
-                self.add_tag(item.value.clone())
+                self.add_tag(item.value.clone(), &targets)
             }
-            Then::MoveToBase => {
+            Then::MoveToBase(targets) => {
                 let target = PathBuf::from(item.value.clone());
-                // `batching()`, not `!marks.is_empty()`: marks are kept
-                // by path and survive a filter change, so a marked row
-                // can be off screen while the verb is aimed at it. Every
-                // other verb asks this question the same way — the raw
-                // mark set is what "batch tagging does nothing" was, and
-                // this was the last caller still asking it.
-                if self.batching() {
-                    let targets = self.library.targets();
-                    self.start_background(crate::core::jobs::JobKind::Move, targets, Some(target))
-                } else {
-                    self.run_move(target)
+                let projects = self.still_here(&targets);
+                if projects.is_empty() {
+                    return self.gone_from_the_library();
                 }
+                self.start_background(crate::core::jobs::JobKind::Move, projects, Some(target))
             }
             Then::Attention => self.on_attention_pick(item.value.clone()),
             Then::AttentionAction(path) => {
@@ -677,7 +649,7 @@ impl App {
             Modal::Message { lines, scroll, .. } => (
                 scroll,
                 // Wrapped rows, not entries — the paragraph wraps, and
-                // `Modal::Help` above has always counted them the same way.
+                // `Modal::Help` above counts them the same way.
                 crate::tui::view::modals::message_rows(
                     lines,
                     crate::tui::view::modals::message_text_width(area),

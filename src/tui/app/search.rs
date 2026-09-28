@@ -4,7 +4,7 @@
 //! `core::query` decides what `tag:draft`, `template=music-video` and
 //! `created>2026-01-01` mean, so the bar and the command agree. Bare terms are
 //! where the two surfaces differ on purpose: the command's substring match is a
-//! scripting contract, and a person typing wants `lulrmx` to find
+//! scripting contract, and a person typing wants `lulaby` to find
 //! `Lullaby_Remix`.
 
 use std::collections::BTreeMap;

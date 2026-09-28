@@ -7,8 +7,8 @@ use std::path::Path;
 /// plus a `files/` subtree.
 ///
 /// For test convenience the fixture YAML may still carry an inline `files:`
-/// block, as pre-v0.8 flat templates did; this splits it onto disk exactly like
-/// the real conversion, so the copy engine — which walks `files/` and never the
+/// block, as pre-v0.8 flat templates did; this splits it onto disk under
+/// `files/`, so the copy engine — which walks `files/` and never the
 /// manifest — sees the files. The `files:` key left in the manifest is an
 /// unknown field that `Template`'s deserializer ignores.
 pub fn write_template(install: &Path, slug: &str, yaml: &str) {

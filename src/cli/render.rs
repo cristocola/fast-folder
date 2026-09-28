@@ -1,10 +1,9 @@
 //! Everything fastf prints about a plan, a create, or an apply.
 //!
-//! This lived in `core::project`, which meant 255 lines of `colored` output sat
-//! under a layer every surface calls — ANSI escapes with no way for a second
-//! surface to say the same thing differently. `core` produces the data now
-//! (`core::project::plan_report`, `apply_report`), and this is the one place
-//! that turns it into text.
+//! `core` produces the data (`core::project::plan_report`, `apply_report`), and
+//! this is the one place that turns it into text: `colored` output under a
+//! layer every surface calls would be ANSI escapes no second surface could say
+//! differently.
 //!
 //! `tests/layering.rs` keeps it that way.
 
@@ -19,9 +18,8 @@ use crate::core::template::{FolderNode, Template};
 /// Which side of the commit a preview is being printed on.
 ///
 /// Both printers are called twice: once for `--dry-run`, which writes nothing,
-/// and once immediately before the real thing. They used to print the same
-/// header either way, so every real create and apply announced that nothing
-/// would be created and then created it.
+/// and once immediately before the real thing, which must not announce that
+/// nothing will be created and then create it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreviewKind {
     /// `--dry-run`: this is the whole command, and nothing is written.
@@ -143,7 +141,7 @@ fn print_file_previews(report: &DryRunReport) {
                 format!(
                     "… {} more line{} hidden",
                     preview.hidden,
-                    if preview.hidden == 1 { "" } else { "s" }
+                    crate::util::plural::s(preview.hidden)
                 )
                 .dimmed()
             );
@@ -212,12 +210,16 @@ pub fn print_apply_plan(actions: &[ApplyAction], kind: PreviewKind) {
     for action in actions {
         match action {
             ApplyAction::CreateFolder(p) | ApplyAction::CreateFile(p) => {
-                println!("  {} {}", "[create]".green().bold(), p.display())
+                println!(
+                    "  {} {}",
+                    "[create]".green().bold(),
+                    crate::util::paths::display_path(p)
+                )
             }
             ApplyAction::SkipFolder(p) | ApplyAction::SkipFile(p) => println!(
                 "  {} {}",
                 "[skip]  ".dimmed(),
-                p.display().to_string().dimmed()
+                crate::util::paths::display_path(p).dimmed()
             ),
         }
     }
@@ -256,7 +258,7 @@ mod tests {
     use super::parent_prefix;
     use std::path::Path;
 
-    /// `new` printed `S:\\2026-…` for a project in a drive-root base.
+    /// A project in a drive-root base prints as `S:\2026-…`, not `S:\\2026-…`.
     #[cfg(unix)]
     #[test]
     fn a_root_parent_is_not_given_a_second_separator() {

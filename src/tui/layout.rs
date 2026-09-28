@@ -131,8 +131,7 @@ pub fn place_shared(body: Rect, needs: TableNeeds, share: u32) -> (Rect, Rect, P
 pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
     // Two lines — the tabs and the bases — and a blank one under them where
-    // there is room to breathe. The templates strip that used to sit above the
-    // status line is a tab of its own now, which gave the table three rows back.
+    // there is room to breathe.
     let header_height = if tall { 3 } else { 2 };
     let bands = Layout::default()
         .direction(Direction::Vertical)
@@ -169,7 +168,7 @@ pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
 /// padding on each side so nothing it says touches a border glyph. **The one
 /// answer**: `App::pane_rows` wraps to its width, the cursor and the scroll
 /// count its height, and the view draws into it — a second spelling of this
-/// arithmetic is how the two came to disagree about the width by two columns.
+/// arithmetic drifts from the first by a column or two.
 pub fn pane_text(pane: Rect) -> Rect {
     let inner_w = pane.width.saturating_sub(2);
     Rect::new(
@@ -214,8 +213,8 @@ pub fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
 }
 
 /// A dialog sized to what it holds — never taller than most of the screen,
-/// never so short that its footer and key line crowd the content. The studio,
-/// the builder and the settings are drawn in one of these.
+/// never so short that its footer and key line crowd the content. The builder
+/// and the settings are drawn in one of these.
 pub fn sized_dialog(area: Rect, body: u16) -> Rect {
     // On a narrow window the margin is what goes: 84 % of forty columns is a
     // settings screen that cuts every value to a word.
@@ -322,7 +321,7 @@ pub fn guide_box(area: Rect) -> Rect {
 
 /// The builder's body, split into the list and the panel that explains it —
 /// or `None` when there is not enough width for both, where the list keeps the
-/// whole body and the footer carries the one-line hint it always did.
+/// whole body and the footer's one-line hint is the whole explanation.
 ///
 /// `fit_between` and `percent_of`, never `Ord::clamp` and never `w * n / 100`:
 /// both of those are documented crashes in this file, and every `max` here is
@@ -370,18 +369,11 @@ pub fn message_box(area: Rect) -> Rect {
     centered(area, 70, 50)
 }
 
-/// A rectangle of at most `width` × `height` cells, centred, never larger than
-/// `area`.
 /// `wanted`, kept inside `min..=max` **even when the room is smaller than the
 /// minimum**.
 ///
 /// `Ord::clamp` asserts `min <= max` and panics otherwise, and every `max` in a
-/// terminal layout is computed from a window somebody can drag. The settings
-/// screen's Bases editor did exactly that — `clamp(4, body.height - row)`, with
-/// `row` walking down the body — and pressing Enter on that row in a window
-/// between 16 and 23 rows tall took the whole app down with `min > max`. It
-/// survived 80×24 by one row, which is why the manual pass at that size never
-/// found it.
+/// terminal layout is computed from a window somebody can drag.
 ///
 /// The available room wins over the wanted minimum: `max` is a hard limit and
 /// `min` is only a preference, so a box in a two-row hole is two rows rather
@@ -394,7 +386,7 @@ pub fn fit_between(wanted: u16, min: u16, max: u16) -> u16 {
 ///
 /// `area.width * 76 / 100` is the obvious spelling and overflows a `u16` above
 /// 862 columns — which release builds, with no overflow checks, wrap instead of
-/// reporting: a 900-column terminal drew a 46-column dialog. A debug build
+/// reporting: a 900-column terminal draws a 46-column dialog. A debug build
 /// panics there instead. Neither is a size.
 pub fn percent_of(whole: u16, share: u32) -> u16 {
     ((whole as u32 * share) / 100).min(u16::MAX as u32) as u16
@@ -413,6 +405,8 @@ pub fn box_at_row(body: Rect, row: u16, wanted: u16, min: u16) -> Rect {
     Rect::new(body.x, y, body.width, height)
 }
 
+/// A rectangle of at most `width` × `height` cells, centred, never larger than
+/// `area`.
 pub fn centered_fixed(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
@@ -433,7 +427,7 @@ mod tests {
         assert_eq!(fit_between(6, 4, 10), 6, "inside the range, unchanged");
         assert_eq!(fit_between(2, 4, 10), 4, "below the minimum, raised");
         assert_eq!(fit_between(20, 4, 10), 10, "above the maximum, cut");
-        // The case that panicked: less room than the minimum is worth.
+        // The case `Ord::clamp` panics on: less room than the minimum is worth.
         assert_eq!(fit_between(6, 4, 1), 1, "the room wins over the preference");
         assert_eq!(fit_between(6, 4, 0), 0);
     }
@@ -441,8 +435,8 @@ mod tests {
     #[test]
     fn a_percentage_of_a_very_wide_terminal_is_still_a_percentage() {
         assert_eq!(percent_of(120, 60), 72);
-        // `900 * 76` wraps a u16; in release that made a 46-column dialog on a
-        // 900-column screen, and in debug it panicked.
+        // `900 * 76` wraps a u16: in release that is a 46-column dialog on a
+        // 900-column screen, and in debug a panic.
         assert_eq!(percent_of(900, 76), 684);
         assert_eq!(percent_of(u16::MAX, 88), 57670);
     }
@@ -527,8 +521,9 @@ mod tests {
         assert!(!too_small(Rect::new(0, 0, 80, 24)));
     }
 
-    /// The templates strip is a tab now, so the three rows it used to take
-    /// along the bottom belong to the table.
+    /// A large terminal gets the tall header and the pane beside the table, and
+    /// the table runs the body's full height: no band sits between it and the
+    /// status line.
     #[test]
     fn a_large_terminal_gets_the_pane_and_the_rows_the_strip_used_to_take() {
         let r = regions(Rect::new(0, 0, 120, 40), true, TableNeeds::default());

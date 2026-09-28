@@ -162,7 +162,59 @@ pub struct JobView {
     pub cancel_asked: bool,
 }
 
+/// Where a job stands, as the one word every list of jobs shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    Running,
+    Done,
+    /// It ended in a state a later fastf wrote.
+    Ended,
+    Failed,
+    Cancelled,
+    Paused,
+    /// Its worker ended without saying how the job ended.
+    Stopped,
+}
+
+impl Standing {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Done => "done",
+            Self::Ended => "ended",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 impl JobView {
+    /// Where the job stands. A job with no state yet is running: it is
+    /// starting.
+    pub fn standing(&self) -> Standing {
+        if self.interrupted() {
+            return Standing::Stopped;
+        }
+        match self.state.as_ref().map(|state| state.status) {
+            Some(JobStatus::Running) | None => Standing::Running,
+            Some(JobStatus::Done) => Standing::Done,
+            Some(JobStatus::Unknown) => Standing::Ended,
+            Some(JobStatus::Failed) => Standing::Failed,
+            Some(JobStatus::Cancelled) => Standing::Cancelled,
+            Some(JobStatus::Paused) => Standing::Paused,
+        }
+    }
+
+    /// What the job said of itself when it ended; nothing, before it has.
+    pub fn summary(&self) -> String {
+        self.state
+            .as_ref()
+            .map(|state| state.summary.clone())
+            .unwrap_or_default()
+    }
+
     /// The worker ended without saying how the job ended: killed.
     pub fn interrupted(&self) -> bool {
         !self.alive
@@ -237,7 +289,8 @@ pub fn start_auto() -> Result<String> {
 
 fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
     let root = root_or_error()?;
-    std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&root)))?;
     for _ in 0..64 {
         let id = crate::core::transactions::next_operation_id();
         let dir = root.join(&id);
@@ -250,17 +303,23 @@ fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
                     auto,
                 };
                 let text = serde_json::to_string_pretty(&request)?;
-                std::fs::write(dir.join("request.json"), text)
-                    .with_context(|| format!("writing {}", dir.display()))?;
+                std::fs::write(dir.join("request.json"), text).with_context(|| {
+                    format!("writing {}", crate::util::paths::display_path(&dir))
+                })?;
                 return Ok(id);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(error).with_context(|| format!("creating {}", dir.display()));
+                return Err(error).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(&dir))
+                });
             }
         }
     }
-    bail!("could not find a free name for a job in {}", root.display())
+    bail!(
+        "could not find a free name for a job in {}",
+        crate::util::paths::display_path(&root)
+    )
 }
 
 /// Start a job: write its request, start its worker, and wait until the
@@ -442,8 +501,8 @@ fn started_in_its_scope(child: &mut std::process::Child, id: &str) -> bool {
 /// std's `Command` asks for inheritance whenever it sets the child's stdio. A
 /// command run with its output captured through a pipe — `$(fastf move …
 /// --detach)`, a test harness — has an inheritable pipe as its stdout, so the
-/// worker held it open, and whoever read the command's output waited until the
-/// job ended. Found on CI's Windows runner; a console never shows it.
+/// worker would hold it open, and whoever reads the command's output would wait
+/// until the job ends. A console never shows it.
 #[cfg(windows)]
 struct StdHandlesNotInherited(Vec<(*mut std::ffi::c_void, u32)>);
 
@@ -534,7 +593,8 @@ const STARTING_FOR: Duration = Duration::from_secs(15);
 /// depends on where it is — see `Progress::committed`.
 pub fn request_cancel(id: &str) -> Result<()> {
     let path = dir(id)?.join("cancel");
-    std::fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+    std::fs::write(&path, b"")
+        .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
 }
 
 pub fn cancel_requested(id: &str) -> bool {
@@ -633,9 +693,8 @@ pub struct Live {
 
 /// Whether `operation` is a live job's own: made by its worker, or claimed —
 /// or made by any fastf still running on this machine, whichever data dir it
-/// works in (`util::process`): a second data dir's reconcile once discarded a
-/// live move's copy while it was being written, because this data dir's jobs
-/// were all it asked.
+/// works in (`util::process`): a reconcile that asked only its own data dir's
+/// jobs would discard a live move's copy while it is being written.
 pub fn owned_by(operation: &str, live: &Live) -> bool {
     if live.operations.contains(operation) {
         return true;
@@ -672,19 +731,25 @@ pub fn set_current(id: &str) {
 /// Make `operation` this process's job's own until the job ends — nothing, in
 /// a process that is not a job's worker. Written before it is needed, while
 /// the caller still holds the data lock, so no reconcile can see the
-/// operation unowned.
-pub fn claim(operation: &str) {
+/// operation unowned. **An error is a claim that was not made**: the caller
+/// keeps the lock for that operation, since past it another reconcile would
+/// take it for nobody's.
+pub fn claim(operation: &str) -> Result<()> {
     let Some(id) = CURRENT.lock().ok().and_then(|current| current.clone()) else {
-        return;
+        return Ok(());
     };
+    claim_for(&id, operation)
+}
+
+/// [`claim`], for job `id`.
+fn claim_for(id: &str, operation: &str) -> Result<()> {
     if !crate::core::transactions::is_operation_id(operation) {
-        return;
+        return Ok(());
     }
-    if let Ok(dir) = dir(&id) {
-        let owns = dir.join("owns");
-        let _ = std::fs::create_dir_all(&owns);
-        let _ = std::fs::write(owns.join(operation), b"");
-    }
+    let owns = dir(id)?.join("owns");
+    std::fs::create_dir_all(&owns)
+        .and_then(|()| std::fs::write(owns.join(operation), b""))
+        .with_context(|| format!("claiming {operation} for job {id}"))
 }
 
 /// A sentence naming the live job that holds the data lock, if one does:
@@ -727,7 +792,7 @@ pub fn prune() {
             && let Ok(dir) = dir(&job.id)
         {
             total = total.saturating_sub(job_bytes(&job.id));
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = crate::util::fs_retry::remove_dir_all(&dir);
         } else {
             kept.push(job.id);
         }
@@ -740,7 +805,7 @@ pub fn prune() {
         }
         if let Ok(dir) = dir(id) {
             total = total.saturating_sub(job_bytes(id));
-            let _ = std::fs::remove_dir_all(dir);
+            let _ = crate::util::fs_retry::remove_dir_all(&dir);
         }
     }
 }
@@ -766,6 +831,24 @@ fn job_bytes(id: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A claim is a file in the job's folder, and one that cannot be written
+    /// is an error, never a claim.
+    #[test]
+    fn a_claim_that_cannot_be_written_is_not_made() {
+        let (_guard, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let (job, operation) = ("18d8983cdf094ce9-7395d-1", "18d8983cdf094ce9-1-2");
+        claim_for(job, operation).unwrap();
+        let owns = sandbox.path().join("jobs").join(job).join("owns");
+        assert!(owns.join(operation).is_file());
+
+        // A file where the folder of claims belongs.
+        let other = "18d8983cdf094ce9-7395d-2";
+        std::fs::create_dir_all(sandbox.path().join("jobs").join(other)).unwrap();
+        std::fs::write(sandbox.path().join("jobs").join(other).join("owns"), b"").unwrap();
+        let refused = claim_for(other, operation).unwrap_err();
+        assert!(format!("{refused:#}").contains("claiming"), "{refused:#}");
+    }
 
     #[test]
     fn an_operation_is_owned_by_the_process_that_made_it() {

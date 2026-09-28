@@ -1,8 +1,8 @@
 //! The template picker, the base picker and the project picker, once each.
 //!
-//! There were two template pickers with different labels and different "no
-//! templates" errors, and three base pickers of which one clamped its labels and
-//! one marked the default. A picker is a picker: these are the three.
+//! A picker is a picker: every command that asks for a template, a base or a
+//! project asks through one of these, so the labels, the clamping and the
+//! "nothing to pick" errors cannot drift apart.
 
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
@@ -94,18 +94,14 @@ pub fn pick_base(
 /// Ask which of several projects was meant.
 ///
 /// This is the ambiguity picker: `fastf copy lullaby` matching three projects
-/// shows them and copies the one chosen. It is deliberately **not** the project
-/// browser — the browser's Enter opens the full action menu, and a picker that
+/// shows them and copies the one chosen. It is deliberately **not** the guided
+/// app — the app's Enter opens the full action menu, and a picker that
 /// interrupted a verb must serve that verb and nothing else. `fastf` and
 /// `fastf recent` are how you reach the action menu.
 ///
 /// `how` is the hint `require_tty` prints when there is no terminal, and must
 /// name the way to answer the same question without being asked. `Ok(None)` is
 /// a cancelled pick, never an error.
-///
-/// Not `live_select`: the candidate list is static — already narrowed by the
-/// query, with no sizes landing later — and `live_select` carries three
-/// load-bearing caller obligations this list has no use for.
 pub fn pick_project(prompt: &str, candidates: &[Project], how: &str) -> Result<Option<Project>> {
     if candidates.is_empty() {
         bail!("no projects to choose from");
@@ -117,12 +113,12 @@ pub fn pick_project(prompt: &str, candidates: &[Project], how: &str) -> Result<O
     let widths = RowWidths::measure(candidates);
     let labels: Vec<String> = candidates
         .iter()
-        .map(|p| clamp_label(&project_row(p, &widths, None, true), columns, ellipsis))
+        .map(|p| clamp_label(&project_row(p, &widths, true), columns, ellipsis))
         .collect();
 
-    // One picker, one look: the selected row is highlighted whole by the same
-    // list widget the app draws, so the project picker no longer needs a theme
-    // of its own to say "this row".
+    // One picker, one look: the selected row is highlighted whole in the
+    // theme's selection style, as in the app, so the project picker needs no
+    // theme of its own to say "this row".
     let Some(idx) = crate::tui::prompt::select(prompt, &labels, 0)? else {
         return Ok(None);
     };

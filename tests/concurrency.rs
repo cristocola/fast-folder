@@ -1,9 +1,9 @@
 //! Cross-process concurrency.
 //!
 //! These spawn **real processes**, not threads, and that is the whole point.
-//! An in-process `Mutex` would pass a thread-based test while production stayed
+//! An in-process `Mutex` would pass a thread-based test while production stays
 //! broken: the actual collision is one `fastf new` racing another in a second
-//! terminal. Ten concurrent creates reliably minted duplicate IDs.
+//! terminal.
 //!
 //! Each test drives the built binary with its own `FASTF_INSTALL_DIR`, so the
 //! only thing shared between the processes is the sandbox on disk — exactly the
@@ -18,8 +18,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Child;
 
-/// How many processes to race. Enough to lose reliably when unsynchronized —
-/// the original bug showed up as 8 distinct IDs out of 10.
+/// How many processes to race. Enough to lose reliably when unsynchronized:
+/// ten unlocked creates mint about eight distinct IDs.
 const RACERS: usize = 10;
 
 /// The racing suite always wants the `race` template installed.
@@ -29,11 +29,10 @@ fn racing_sandbox() -> Sandbox {
     sb
 }
 
-/// The headline regression: ten simultaneous creates must mint ten distinct IDs.
+/// Ten simultaneous creates must mint ten distinct IDs.
 ///
-/// Before the cross-process lock this produced eight — `ID0012` and `ID0015`
-/// each minted twice — silently breaking the tool's central promise that IDs are
-/// unique across every project.
+/// The tool's central promise is that IDs are unique across every project, and
+/// across processes only the data lock keeps it.
 #[test]
 fn concurrent_creates_mint_distinct_ids() {
     let sb = racing_sandbox();
@@ -71,8 +70,8 @@ fn concurrent_creates_mint_distinct_ids() {
     //
     // It lives in the **base**, not the data directory: the projects already sit
     // on a drive every OS on the machine can mount, so the number that indexes
-    // them belongs there too. Keeping it in `%APPDATA%` / `~/.config` is what
-    // forced a dual-boot install to symlink one home directory into the other.
+    // them belongs there too; `%APPDATA%` and `~/.config` are different files
+    // on a dual-boot machine.
     let counters = fs::read_to_string(sb.base.join(".fastf-counter.toml"))
         .expect("the base should carry the counter");
     assert!(
@@ -90,9 +89,10 @@ fn concurrent_creates_mint_distinct_ids() {
 
 /// Racing creates that resolve to the *same* folder name: exactly one may win.
 ///
-/// The old `exists()`-then-`create_dir_all()` pair let two racers both pass the
-/// check and write into one folder, the second overwriting the first's files and
-/// metadata. `create_dir` now fails atomically, so the filesystem arbitrates.
+/// The folder is claimed with `create_dir`, which fails atomically, so the
+/// filesystem arbitrates. An `exists()` check before `create_dir_all()` lets
+/// two racers both pass and write into one folder, the second overwriting the
+/// first's files and metadata.
 #[test]
 fn concurrent_same_name_creates_produce_no_merged_folder() {
     let sb = racing_sandbox();
@@ -125,8 +125,9 @@ fn concurrent_same_name_creates_produce_no_merged_folder() {
 
 /// Concurrent `config set` of different keys must not lose an update.
 ///
-/// `Config::save` was a read-modify-write with a bare `fs::write`; two of these
-/// at once dropped one of the changes and a crash mid-write truncated the file.
+/// `config set` is a read-modify-write: outside the data lock, two at once drop
+/// one of the changes, and a bare `fs::write` in `Config::save` truncates the
+/// file on a crash mid-write.
 #[test]
 fn concurrent_config_writes_do_not_lose_updates() {
     let sb = racing_sandbox();
@@ -149,10 +150,8 @@ fn concurrent_config_writes_do_not_lose_updates() {
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     for (key, value) in &writes {
         // The key `config set` takes, the key `config show` prints and the
-        // key the file holds are one word now. They were three: the Rust field
-        // is still `recent_default_limit`, and it carried no `serde(rename)`,
-        // so this test used to have to translate between them — which is the
-        // shape of a defect, not of a mapping.
+        // key the file holds are one word, so nothing here translates between
+        // them; a translation would be the shape of a defect, not of a mapping.
         let field = key.replace('-', "_");
         let expected_present = config
             .lines()
@@ -253,9 +252,9 @@ fn concurrent_tag_and_note_updates_do_not_lose_metadata() {
 
 /// Deleting a template must wait for whatever fastf operation is in flight.
 ///
-/// `fastf template delete` used to call `fs::remove_dir_all` directly, with no
-/// lock at all: it could remove a template's `files/` out from under a
-/// `fastf new` that was halfway through copying them, in another terminal.
+/// Without the data lock, `fastf template delete` can remove a template's
+/// `files/` out from under a `fastf new` that is halfway through copying them,
+/// in another terminal.
 ///
 /// The holder here is **this test process**, not a second fastf. That is
 /// deliberate: a race between two spawned children is a race, and would pass or

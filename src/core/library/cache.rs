@@ -48,10 +48,9 @@ pub(crate) struct Cache {
     /// returned them. The index is current while a names-only listing of the
     /// base returns exactly these ([`super::discovery::freshness`]): one
     /// request, and the one question an rclone base can answer, whose folder
-    /// times read 2000-01-01 once its directory cache expires. Comparing the
-    /// index file's own time with the base's could not see a project added
-    /// while a scan that missed it was being written, and never fired on
-    /// rclone at all. fastf's own writers keep it current (`cache_upsert`,
+    /// times read 2000-01-01 once its directory cache expires. Times alone
+    /// also miss a project added while a scan that missed it is being
+    /// written. fastf's own writers keep it current (`cache_upsert`,
     /// `cache_remove`). `None` in an index an older fastf wrote, or one
     /// written without a listing: stale once, and the rescan records them.
     /// No version bump: an older fastf ignores the field.
@@ -80,19 +79,19 @@ impl CacheEntry {
     /// Rebuild a `Project` from a cache entry, or drop the entry.
     ///
     /// **A cache entry is a hint, and a hint may not name a path outside its
-    /// own base.** `dir` used to be joined onto the base with no validation at
-    /// all: `Path::join` *replaces* the base when given an absolute path, so an
-    /// entry reading `/etc` produced a "project" at `/etc`, and `../..`
-    /// survived the `strip_prefix` on the next rewrite. Caches travel with the
-    /// projects by design — that is what makes them portable across operating
-    /// systems — so a synced folder or an unpacked archive is a delivery route
-    /// for one, and overwriting the file in place does not bump the base's
-    /// mtime, so a planted cache reads as fresh.
+    /// own base.** `Path::join` *replaces* the base when given an absolute
+    /// path, so an unchecked entry reading `/etc` would be a "project" at
+    /// `/etc`, and `../..` would survive the `strip_prefix` on the next
+    /// rewrite. Caches travel with the projects by design — that is what
+    /// makes them portable across operating systems — so a synced folder or
+    /// an unpacked archive is a delivery route for one, and overwriting the
+    /// file in place does not bump the base's mtime, so a planted cache reads
+    /// as fresh.
     ///
     /// Discovery is depth-1 (`SCAN_DEPTH`), so a legitimate `dir` is exactly
     /// one ordinary path component and never dot-prefixed (`scan_base` skips
-    /// those). Anything else is dropped, which sets the caller's `dropped` flag
-    /// and triggers the rescan that rebuilds the cache from the folders.
+    /// those). Anything else answers `None`, and the caller abandons the whole
+    /// cache for the rescan that rebuilds it from the folders.
     pub(crate) fn into_project(self, base: &Path) -> Option<Project> {
         let dir = crate::core::validated::SafeRelativePath::parse(&self.dir).ok()?;
         let dir = dir.as_str();
@@ -148,10 +147,10 @@ pub(crate) fn load_cache(base: &Path) -> Option<Cache> {
 /// One base's own picture of itself, read from `.fastf-index.json` and nothing
 /// else — no staleness check, no directory scan, no metadata read.
 ///
-/// This exists for the main-menu frame, which must cost nothing. A summary that
-/// scanned would make opening the menu slower the larger the library got, which
-/// is exactly backwards; a summary that is a few minutes out of date is fine as
-/// long as it says so, which is why every surface labels it "from index".
+/// This exists for the guided app's first frame, which must cost nothing. A
+/// summary that scanned would make opening the app slower the larger the
+/// library got, which is exactly backwards; a summary a few minutes out of
+/// date is fine as long as it says so, as the app's "from index" does.
 #[derive(Debug, Clone)]
 pub struct IndexSummary {
     pub projects: usize,
@@ -189,7 +188,7 @@ pub fn index_summary(base: &Path) -> Option<IndexSummary> {
 /// remain the truth.
 ///
 /// Uses the shared [`crate::util::atomic`] writer, whose temp name carries the
-/// process id: two fastf processes refreshing the same base cache no longer
+/// process id: two fastf processes refreshing the same base cache never
 /// collide on a single fixed `.tmp` path.
 pub(crate) fn write_index(
     base: &Path,

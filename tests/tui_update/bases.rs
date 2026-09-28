@@ -68,8 +68,8 @@ fn two_bases_answered() -> Box<SummaryPart> {
     })
 }
 
-/// **The acceptance of the whole phase, as state.** One base answers and its
-/// rows are on screen, measured, while the other is still being asked; the
+/// **A slow base holds up nothing but itself, as state.** One base answers and
+/// its rows are on screen, measured, while the other is still being asked; the
 /// discovery settles at its deadline and names the silent base; its rows
 /// arrive when it answers.
 #[test]

@@ -32,7 +32,8 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   test of it that matters.
 - The legacy Windows console pass for the ASCII alphabet — the hint bar's
   `Right details` and `Up/Down` included — and the wheel on a Windows console's
-  alternate screen; F2, `+`, `<` and `>` there.
+  alternate screen; F2, `+`, `<` and `>` there; and Ctrl-C twice against the
+  app there, which must leave the cursor showing and print no escape as text.
 - Ctrl-Z and `fg`; `kill -INT` twice against the app leaves the shell cooked;
   `ssh localhost -t fastf` picks a theme and `o` says "no display".
 - On Windows, Reveal from the app's action menu and `fastf open` (the
@@ -40,7 +41,7 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   window), plus `fastf term`. A person at a desktop has to say whether the right
   window appeared.
 
-Last reviewed: 2026-09-23.
+Last reviewed: 2026-09-28.
 
 ## Backlog
 
@@ -71,23 +72,52 @@ Unscheduled; nothing here is promised.
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
 
-### The ASCII alphabet on four more screens
+### Known weaknesses in the code, most serious first
+
+None is a wrong result today. Each is a decision somebody has to take, or a
+place where the code is longer or looser than the rest.
+
+**What a person can meet.**
+
+1. `fastf register` on a folder that already is a project, without `--yes`,
+   writes nothing, says so, and exits 0. Whether a script should get a
+   non-zero exit there is undecided.
+2. The flow preview's box is its kind's estimate, topped up to the lines it
+   draws. Sizing every preview to exactly its lines is simpler and changes
+   three frames.
+3. `view::builder::registry_keys` takes a flat twelve columns for the movement
+   pair instead of measuring it, as `view::dashboard`'s hints do.
+
+**Structure.**
+
+4. `src/main.rs` is 1,580 lines, most of them the clap declarations whose
+   `///` lines are the help; `tests/tui_snapshots.rs` is one list of 67
+   frames, and its snapshot files are named after its module path.
+5. Three flat dispatch tables run 150 to 280 lines, an arm a call:
+   `App::run`, `Runtime::perform`, `main::run`. Five steps of the engine run
+   120 to 150: `move_engine::copy_and_publish`, `transactions::copy_file`,
+   `copy_engine::copy_unlocked`, `provisioning::reconcile_pass` and
+   `reconcile_base`.
+6. `cli::job_worker` has three batch loops with one skeleton. They differ in
+   what a cancel, a pause and the housekeeping mean to each, which is why
+   they are three.
+7. `project::create` takes `run_post`, which no surface sets, and about forty
+   tests pass `false`.
+### The ASCII alphabet on three more screens
 
 A console with no `·`, `…` or `→` draws a replacement box. The theme's glyphs
-already answer for the tick, the template editor and the guide; four screens
+already answer for the tick, the template editor and the guide; three screens
 still spell the characters out:
 
 - `app/jobs.rs` — `busy()`'s eight `…` labels and the report's `·` separator.
-- `runtime.rs` — the session lines (`renamed X → Y`, `moved`, `applied`) and
-  `run_action`'s `·`-joined warning.
+- `runtime/actions.rs` — the session lines (`renamed X → Y`, `moved`,
+  `applied`) and `run_action`'s `·`-joined warning.
 - `app/actions.rs` — `NEW_TAG` (`"New tag…"`), a picker row.
-- `rows.rs` — `PENDING_LABEL`, which duplicates `Glyphs::pending` rather than
-  reading it; `view::projects` already asks the theme, so the two can disagree.
 
 Each is a function that builds a display string with no theme in reach, so the
 fix is the one `Builder::summary` and `transform_example` took: hand it the
-`Glyphs`. Worth one phase, with the guard test `guide.rs` already has extended
-over `src/tui/`.
+`Glyphs`. One change, with the guard test `guide.rs` already has extended over
+`src/tui/`.
 
 ### Smaller findings
 

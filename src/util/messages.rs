@@ -80,7 +80,10 @@ pub fn last(count: usize) -> Vec<Message> {
     let Some(path) = path() else {
         return Vec::new();
     };
-    let mut messages = read(&PathBuf::from(format!("{}.1", path.display())));
+    let mut messages = read(&PathBuf::from(format!(
+        "{}.1",
+        crate::util::paths::display_path(&path)
+    )));
     messages.extend(read(&path));
     let skip = messages.len().saturating_sub(count);
     messages.split_off(skip)

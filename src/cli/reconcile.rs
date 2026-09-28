@@ -8,7 +8,8 @@
 //! Version-1 markers contain arbitrary absolute paths, so this command never
 //! parses them, follows them, copies through them, or deletes anything they name.
 //! It reports their own paths for manual inspection and leaves all bytes alone.
-//! Reconciliation is explicit, idempotent, and also available through the UI.
+//! Reconciliation is idempotent; the guided app also starts one by itself when
+//! fastf has something to finish.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -140,10 +141,18 @@ pub fn run(detach: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Not a green tick over a report that may be nothing but "could not
-    // inspect": the tick means something worked, and here it only means the
-    // pass ran.
-    let clean = report.unrecoverable.is_empty() && report.leftovers.is_empty() && !report.cancelled;
+    print_verdict(&report);
+    print_what_it_did(&report);
+    print_what_it_will_not_touch(&report);
+    print_what_is_still_open(&report);
+    Ok(())
+}
+
+fn print_verdict(report: &crate::core::provisioning::ReconcileReport) {
+    // The tick says nothing is left for a person to look at, which is the
+    // report's own question: an item waiting for a base to answer is ordinary
+    // and is listed below, one that could not be inspected is not a tick.
+    let clean = !report.needs_a_look();
     if report.cancelled {
         println!(
             "{}  Reconcile stopped when asked. What it finished is below; what it had \
@@ -159,46 +168,69 @@ pub fn run(detach: bool) -> Result<()> {
             "⚠".yellow().bold()
         }
     );
+}
+
+fn print_what_it_did(report: &crate::core::provisioning::ReconcileReport) {
     if report.resumed > 0 {
         println!(
-            "   {} {} interrupted copy job(s) finished",
+            "   {} {} interrupted copy job{} finished",
             "resumed".dimmed(),
-            report.resumed
+            report.resumed,
+            crate::util::plural::s(report.resumed)
         );
     }
     if report.completed > 0 {
         println!(
-            "   {} {} move(s) finished (original removed)",
+            "   {} {} move{} finished (original removed)",
             "completed".dimmed(),
-            report.completed
+            report.completed,
+            crate::util::plural::s(report.completed)
         );
     }
     if report.cleared > 0 {
         println!(
-            "   {} {} old folder(s) of deleted projects removed",
+            "   {} {} old folder{} of deleted projects removed",
             "cleared".dimmed(),
-            report.cleared
+            report.cleared,
+            crate::util::plural::s(report.cleared)
         );
     }
     if report.restored > 0 {
         println!(
-            "   {} {} project(s) put back where an interrupted rename was taking them",
+            "   {} {} project{} put back where an interrupted rename was taking {}",
             "restored".dimmed(),
-            report.restored
+            report.restored,
+            crate::util::plural::s(report.restored),
+            crate::util::plural::of(report.restored, "it", "them")
         );
     }
     if report.rolled_back > 0 {
         println!(
-            "   {} {} uncommitted move(s) — source left intact",
+            "   {} {} uncommitted move{} — source left intact",
             "rolled back".dimmed(),
-            report.rolled_back
+            report.rolled_back,
+            crate::util::plural::s(report.rolled_back)
         );
     }
+    if !report.repaired.is_empty() {
+        println!(
+            "   {} {} put right, and nothing to do about:",
+            "repaired".dimmed(),
+            report.repaired.len()
+        );
+        for item in &report.repaired {
+            println!("     - {item}");
+        }
+    }
+}
+
+fn print_what_it_will_not_touch(report: &crate::core::provisioning::ReconcileReport) {
     if !report.incomplete.is_empty() {
         println!(
-            "   {} {} project(s) were never finished being created:",
+            "   {} {} {} never finished being created:",
             "incomplete".yellow().bold(),
-            report.incomplete.len()
+            report.incomplete.len(),
+            crate::util::plural::of(report.incomplete.len(), "project was", "projects were")
         );
         for item in &report.incomplete {
             println!("     - {}", item.yellow());
@@ -212,9 +244,10 @@ pub fn run(detach: bool) -> Result<()> {
     }
     if !report.obsolete.is_empty() {
         println!(
-            "   {} {} pre-v2 marker(s) were left untouched:",
+            "   {} {} pre-v2 {} left untouched:",
             "obsolete".yellow().bold(),
-            report.obsolete.len()
+            report.obsolete.len(),
+            crate::util::plural::of(report.obsolete.len(), "marker was", "markers were")
         );
         for item in &report.obsolete {
             println!("     - {}", item.yellow());
@@ -226,11 +259,15 @@ pub fn run(detach: bool) -> Result<()> {
                 .dimmed()
         );
     }
+}
+
+fn print_what_is_still_open(report: &crate::core::provisioning::ReconcileReport) {
     if !report.leftovers.is_empty() {
         println!(
-            "   {} {} old folder(s) not removed yet:",
+            "   {} {} old folder{} not removed yet:",
             "leftover".yellow().bold(),
-            report.leftovers.len()
+            report.leftovers.len(),
+            crate::util::plural::s(report.leftovers.len())
         );
         for item in &report.leftovers {
             println!("     - {}", item.yellow());
@@ -244,9 +281,10 @@ pub fn run(detach: bool) -> Result<()> {
     }
     if !report.waiting.is_empty() {
         println!(
-            "   {} {} item(s) waiting for a base to answer:",
+            "   {} {} item{} waiting for a base to answer:",
             "waiting".cyan().bold(),
-            report.waiting.len()
+            report.waiting.len(),
+            crate::util::plural::s(report.waiting.len())
         );
         for item in &report.waiting {
             println!("     - {}", item.cyan());
@@ -260,16 +298,16 @@ pub fn run(detach: bool) -> Result<()> {
     }
     if !report.unrecoverable.is_empty() {
         println!(
-            "   {} {} item(s) need a look:",
+            "   {} {} {} a look:",
             "attention".yellow().bold(),
-            report.unrecoverable.len()
+            report.unrecoverable.len(),
+            crate::util::plural::of(report.unrecoverable.len(), "item needs", "items need")
         );
         for item in &report.unrecoverable {
             println!("     - {}", item.yellow());
         }
-        // The other two blocks each end with a sentence saying what to do.
-        // This one — the category the user can do least about — ended with the
-        // bare list.
+        // Every block ends with a sentence saying what to do, this one most of
+        // all: it is the category the user can do least about.
         println!(
             "     {}",
             "Each line says what is on disk and what fastf left alone. Where it names a \
@@ -277,5 +315,4 @@ pub fn run(detach: bool) -> Result<()> {
                 .dimmed()
         );
     }
-    Ok(())
 }

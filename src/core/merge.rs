@@ -2,14 +2,12 @@
 //! entry, each removed only once the moved copy provably holds it** — or holds
 //! it because this put it there.
 //!
-//! 3.13 asked one question of the whole old copy — is every entry exactly what
-//! the move recorded? — and on a single "no" kept all of it, for a person, for
-//! ever. A dev server that wrote one log line into the original between the
-//! scan and the retire was enough, and so was a cloud mount whose rename moved
-//! one file's time. The merge asks per entry instead ([`decide`]), and what is
-//! left afterwards is exactly what needs a person: an entry changed both in
-//! the old copy and in the moved one, or one the moved copy holds as something
-//! else.
+//! The merge asks per entry ([`decide`]), never once of the whole old copy:
+//! one log line a dev server wrote into the original between the scan and the
+//! retire, or one file time a cloud mount's rename moved, would otherwise keep
+//! all of it for a person. What is left afterwards is exactly what needs a
+//! person: an entry changed both in the old copy and in the moved one, or one
+//! the moved copy holds as something else.
 //!
 //! **Two policies**, because what may be written into the moved copy depends
 //! on how sure fastf is of what the old copy is:
@@ -319,7 +317,7 @@ pub(crate) fn merge_remove(merge: &Merge) -> Removal {
         .unwrap_or_else(|e| e.into_inner());
     for (marker, relative) in markers {
         if crate::util::paths::presence(&merge.old.join(&relative)).is_absent() {
-            let _ = fs::remove_file(marker);
+            let _ = crate::util::fs_retry::remove_file(&marker);
         }
     }
     removal
@@ -406,7 +404,7 @@ impl MergeJudge<'_> {
                 _ => false,
             };
         }
-        same_bytes(path, &other)
+        transactions::same_bytes(path, &other)
     }
 
     /// Put the old copy's entry into the moved copy — replacing what is
@@ -544,7 +542,7 @@ impl Judge for Identical<'_> {
                 (Ok(here), Ok(there)) if same_but_for_place(&here, &there)
             )
         } else {
-            metadata.len() == there.len() && same_bytes(path, &other)
+            metadata.len() == there.len() && transactions::same_bytes(path, &other)
         };
         if same {
             Verdict::Take
@@ -591,31 +589,6 @@ pub(crate) fn copy_whole(from: &Path, to: &Path, expected: &ManifestEntry) -> Re
         Ok(())
     } else {
         Err("it changed while it was copied".to_string())
-    }
-}
-
-/// Whether two files hold the same bytes, read side by side; `false` when
-/// either cannot be read.
-fn same_bytes(one: &Path, other: &Path) -> bool {
-    let (Ok(mut one), Ok(mut other)) = (fs::File::open(one), fs::File::open(other)) else {
-        return false;
-    };
-    match (one.metadata(), other.metadata()) {
-        (Ok(a), Ok(b)) if a.len() == b.len() => {}
-        _ => return false,
-    }
-    let mut left = vec![0_u8; 256 * 1024];
-    let mut right = vec![0_u8; 256 * 1024];
-    loop {
-        let Ok(count) = one.read(&mut left) else {
-            return false;
-        };
-        if count == 0 {
-            return other.read(&mut right).is_ok_and(|n| n == 0);
-        }
-        if other.read_exact(&mut right[..count]).is_err() || left[..count] != right[..count] {
-            return false;
-        }
     }
 }
 

@@ -101,7 +101,7 @@ fn draw(app: &App, frame: &mut Frame) {
     dashboard::hints(app, frame, regions.hints);
 
     let modal_caret = modals::render(app, frame, area);
-    modals::render_move_progress(app, frame, area);
+    modals::render_job_progress(app, frame, area);
     modals::render_job(app, frame, area);
 
     // The terminal's own cursor goes where typing lands: a dialog's field, the

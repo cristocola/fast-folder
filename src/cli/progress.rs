@@ -107,9 +107,9 @@ pub(crate) fn finished_line(step: &FinishedStep) -> String {
 /// The live line: which item, the step, its count, and bytes while copying.
 ///
 /// One carriage-returned line, single and ANSI-free for the same reason
-/// `recent::clamp_label` exists — the legacy Windows console miscounts wrapped
-/// rows and leaves ghosted characters behind when a redraw spans more than
-/// one.
+/// `tui::rows::clamp_label` exists — the legacy Windows console miscounts
+/// wrapped rows and leaves ghosted characters behind when a redraw spans more
+/// than one.
 pub(crate) fn draw(p: &Progress) {
     let line = format!("  {}", live_line(p));
     let width = ratatui::crossterm::terminal::size()

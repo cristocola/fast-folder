@@ -18,10 +18,15 @@ use std::fs;
 /// child of a currently configured base, and its real `PROJECT_INFO.md` must
 /// carry the same ID as the candidate supplied by the caller.
 pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> {
-    let candidate_base = crate::util::paths::canonical(&candidate.base)
-        .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
+    let candidate_base =
+        crate::util::paths::canonical_in_time(&candidate.base).with_context(|| {
+            format!(
+                "resolving project base {}",
+                crate::util::paths::display_path(&candidate.base)
+            )
+        })?;
     let configured = cfg
-        .effective_bases()
+        .answering_bases()
         .into_iter()
         .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == candidate_base)
@@ -29,7 +34,7 @@ pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> 
             anyhow::anyhow!(
                 "refusing to modify '{}': its base {} is not currently configured",
                 candidate.name,
-                candidate.base.display()
+                crate::util::paths::display_path(&candidate.base)
             )
         })?;
     revalidate_project_in_base(candidate, &configured)
@@ -40,9 +45,8 @@ pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> 
 ///
 /// `fastf open` and the TUI's Reveal spawn the system file manager on a path
 /// that came from a cache, and a cache is a file that travels with the projects
-/// — a synced folder or an unpacked archive can bring one along. The write paths
-/// have always revalidated; these read paths did not, so a forged entry named
-/// the directory that got opened.
+/// — a synced folder or an unpacked archive can bring one along, and a forged
+/// entry would name the directory that gets opened.
 ///
 /// Deliberately *not* the full guard: no canonicalize, no config reload, no id
 /// comparison. Those exist to protect a mutation. Opening a folder needs three
@@ -77,21 +81,29 @@ pub fn revalidate_for_read(project: &Project) -> Result<()> {
 /// The compatibility-library boundary does not own a [`Config`], but it still
 /// refuses stale, forged, linked, or non-child project records.
 pub(crate) fn revalidate_recorded_project(candidate: &Project) -> Result<Project> {
-    let base = crate::util::paths::canonical(&candidate.base)
-        .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
+    let base = crate::util::paths::canonical(&candidate.base).with_context(|| {
+        format!(
+            "resolving project base {}",
+            crate::util::paths::display_path(&candidate.base)
+        )
+    })?;
     revalidate_project_in_base(candidate, &base)
 }
 
 pub(crate) fn revalidate_project_in_base(candidate: &Project, base: &Path) -> Result<Project> {
     crate::util::paths::require_real_directory(base, "project base")?;
     crate::util::paths::require_real_directory(&candidate.path, "project source")?;
-    let path = crate::util::paths::canonical(&candidate.path)
-        .with_context(|| format!("resolving project {}", candidate.path.display()))?;
+    let path = crate::util::paths::canonical(&candidate.path).with_context(|| {
+        format!(
+            "resolving project {}",
+            crate::util::paths::display_path(&candidate.path)
+        )
+    })?;
     if path.parent() != Some(base) {
         anyhow::bail!(
             "refusing to modify: {} is not a direct child of configured base {}",
-            path.display(),
-            base.display()
+            crate::util::paths::display_path(&path),
+            crate::util::paths::display_path(base)
         );
     }
 
@@ -101,22 +113,30 @@ pub(crate) fn revalidate_project_in_base(candidate: &Project, base: &Path) -> Re
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             anyhow::bail!(
                 "refusing to modify: {} has no PROJECT_INFO.md",
-                path.display()
+                crate::util::paths::display_path(&path)
             );
         }
         Err(error) => {
-            return Err(error)
-                .with_context(|| format!("checking project identity at {}", pinfo.display()));
+            return Err(error).with_context(|| {
+                format!(
+                    "checking project identity at {}",
+                    crate::util::paths::display_path(&pinfo)
+                )
+            });
         }
     };
     if pinfo_metadata.file_type().is_symlink() || !pinfo_metadata.file_type().is_file() {
         anyhow::bail!(
             "refusing to modify: {} is not a real PROJECT_INFO.md file",
-            pinfo.display()
+            crate::util::paths::display_path(&pinfo)
         );
     }
-    let metadata = project_info::read_metadata(&path)?
-        .ok_or_else(|| anyhow::anyhow!("{} has no readable project identity", pinfo.display()))?;
+    let metadata = project_info::read_metadata(&path)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} has no readable project identity",
+            crate::util::paths::display_path(&pinfo)
+        )
+    })?;
     if metadata.id != candidate.id {
         anyhow::bail!(
             "refusing to modify '{}': project identity changed (expected {}, found {})",

@@ -127,6 +127,38 @@ fn the_answers_become_a_preview_request_and_then_a_create() {
     assert!(app.modals.is_empty(), "the flow closed when it committed");
 }
 
+/// **A preview's box holds every line it draws, where the window has the
+/// room.** Register's `fill in` row is its last, and a box one row short puts
+/// it under the fold of a dialog that looks complete.
+#[test]
+fn a_preview_with_room_shows_its_last_line() {
+    use fastf::tui::app::wizard::{Preview, RegisterPreview};
+
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('e'));
+    assert!(matches!(app.modals.top(), Some(Modal::Flow(_))));
+    let _ = update(
+        &mut app,
+        Msg::Previewed(Box::new(Preview::Register(Box::new(RegisterPreview {
+            path: "/mnt/projects/Old_Shoot".into(),
+            template: "General".to_string(),
+            id: "ID0249".to_string(),
+            id_note: "from the counter",
+            created: "2026-09-03".to_string(),
+            rename: None,
+            pinfo_exists: false,
+            apply_structure: true,
+        })))),
+    );
+    assert_eq!(flow_step(&app), Step::Preview);
+    let frame = fastf::tui::testing::render_to_string(&app, 120, 40);
+    assert!(frame.contains("rename"), "{frame}");
+    assert!(
+        frame.contains("fill in"),
+        "the last row is on screen without a scroll:\n{frame}"
+    );
+}
+
 #[test]
 fn confirm_create_false_commits_without_showing_the_plan() {
     let mut app = fixture(6, 120, 40);

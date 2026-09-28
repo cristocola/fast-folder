@@ -2,8 +2,7 @@
 //!
 //! Its own module because it sits between two that need it and must not need
 //! each other: `project` builds one, and `project_info` writes a
-//! `PROJECT_INFO.md` from one. With the struct in `project`, those two imported
-//! each other.
+//! `PROJECT_INFO.md` from one.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

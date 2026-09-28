@@ -2,12 +2,12 @@
 //! Left/Right, Home/End, Ctrl-U (clear), Ctrl-W (delete the word before the
 //! cursor), paste.
 //!
-//! Ported from `tui::prompt`'s `LineEditor`, which still drives the CLI's text
-//! prompts until they move here too. The cursor is a **char index**, never a
-//! byte offset — a value can hold any character a folder name can, and slicing
-//! one mid-character panics. A long line is *windowed* around the cursor rather
-//! than wrapped, and the caret is reported as a cell so the frame can park the
-//! terminal's real cursor in the text.
+//! The app's fields and the command line's prompts (`inline.rs`) both edit
+//! through it. The cursor is a **char index**, never a byte offset — a value
+//! can hold any character a folder name can, and slicing one mid-character
+//! panics. A long line is *windowed* around the cursor rather than wrapped, and
+//! the caret is reported as a cell so the frame can park the terminal's real
+//! cursor in the text.
 
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::KeyCode;
@@ -187,7 +187,7 @@ impl LineEdit {
 }
 
 /// Byte offset of char `n`, saturating at the end.
-fn byte_index(text: &str, n: usize) -> usize {
+pub(crate) fn byte_index(text: &str, n: usize) -> usize {
     text.char_indices()
         .nth(n)
         .map(|(i, _)| i)
@@ -210,13 +210,10 @@ pub fn visible_window(
 ) -> (String, usize) {
     use unicode_width::UnicodeWidthChar;
 
-    // **Display columns, not characters.** The window was built from
-    // `chars()` and the offset it returned was a char index, which
-    // `render_line` then adds to `prefix.width()` to place the terminal
-    // cursor — so for a CJK or emoji folder name in a rename prompt the window
-    // was twice as wide as the field and the caret was drawn at roughly half
-    // the column it belonged in. `view::fit` and `view::pad` have always
-    // measured properly; this was the odd one out.
+    // **Display columns, not characters**, as `view::fit` and `view::pad`
+    // measure: `render_line` adds the offset to `prefix.width()` to place the
+    // terminal cursor, so a char count under a CJK or emoji name builds a
+    // window twice as wide as the field and draws the caret at half its column.
     let width_of = |c: char| UnicodeWidthChar::width(c).unwrap_or(0);
     let chars: Vec<char> = text.chars().collect();
     let cursor = cursor.min(chars.len());
@@ -388,13 +385,10 @@ mod tests {
         assert_eq!(offset, 0);
     }
 
-    /// A wide character is two columns, and the caret has to know it.
-    ///
-    /// The window was built from `chars()` and returned a char index, which
-    /// `render_line` adds to `prefix.width()` to place the terminal cursor —
-    /// so a client folder named in Japanese or Cyrillic put the caret at about
-    /// half the column it belonged in, and the window drawn was twice as wide
-    /// as the field it was drawn in.
+    /// A wide character is two columns, and the caret has to know it: the
+    /// window fits the field in display columns, and the caret offset is in
+    /// the units `render_line` adds it to (`prefix.width()`), so a folder
+    /// named in Japanese puts the caret on its own character.
     #[test]
     fn a_window_over_wide_characters_is_measured_in_columns() {
         use unicode_width::UnicodeWidthStr;

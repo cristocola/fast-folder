@@ -21,6 +21,29 @@ tag and the package bump, in that order, and nothing short of that is an answer
 to give. The same goes for work left uncommitted "for now": either the tree is
 clean and the release is out, or the job is not done.
 
+## How work is planned
+
+Plan in plan mode, have the plan approved, then carry the work through to its
+PR. **No plan file is committed**, and nothing in the repository describes work
+in phases. Open work lives in `ROADMAP.md`; a decision lives in the CLAUDE.md
+beside the code it constrains; what happened lives in the release notes and
+the git history.
+
+## What a comment is for
+
+A comment says **what must stay true and what breaks if it does not**, in the
+present tense: what Windows refuses, what a cloud mount misplaces, what a
+release build compiles out, which order must hold. How the code came to be —
+what it used to do, which release had the defect, how it was found — is the
+commit message's. A version number appears in a comment only where it names
+**data an older fastf wrote** that this code still reads ("a record 3.11 wrote
+has no published list"). A measurement that justifies a constant stays, as one
+clause. A decision wider than its function lives in the CLAUDE.md beside the
+code, and the comment is the rule or a pointer. A test's doc says what the test
+guards, in the caller's terms. The `///` lines on the clap types in
+`src/main.rs` are not comments: they are `--help`, the man page and the
+completions.
+
 ## Build commands
 
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows
@@ -84,15 +107,19 @@ tell you.
   settle what needs you),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
-  `transactions.rs` (v2 staged moves), `provisioning.rs` (v2 recovery plus
-  report-only pre-v2 discovery), `template_import.rs` (the from-folder engine),
+  `transactions/` (v2 staged moves, a facade over `journal` / `manifest` /
+  `walk` / `transaction` / `staging` / `copy`), `provisioning/` (v2 recovery
+  plus report-only pre-v2 discovery, a facade over `create` / `incomplete` /
+  `report` / `pass` / `base` / `moves` / `finish` / `recordless`),
+  `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
-  byte-copy), `body.rs` (the grammar of `PROJECT_INFO.md`'s body: sections,
+  byte-copy), `body/` (the grammar of `PROJECT_INFO.md`'s body: sections,
   notes, todos), `validated.rs` (typed slugs, relative paths, tags, project
   folder names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`; says what it waits for
-  after a second), `atomic` (THE atomic write), `fs_retry` (Windows sharing
-  violations, and the read-only attribute a publish must set aside), `interrupt`
+  after a second), `atomic` (THE atomic write), `fs_retry` (the one loop that
+  asks a filesystem again, every schedule it asks on, and the read-only
+  attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
   `pool` (a few threads asking a filesystem several things at once; its width
@@ -111,7 +138,8 @@ tell you.
   starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
   `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
-  cooked mode a signal handler restores).
+  cooked mode a signal handler restores), `win` (Windows only: the error codes
+  and flags more than one module names, each named once).
 - `src/cli/` — `job_worker.rs` is not a subcommand but the worker a job runs
   (`fastf --fastf-job <id>`, taken off argv in `main`); `jobs.rs` starts and
   follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
@@ -123,12 +151,18 @@ tell you.
   read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are named
   around a keyword and `std::path`.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
-  `runtime.rs` (the one owner of the alternate screen, the threads and the loop),
-  `entry.rs` (how the app was opened), `app/` (`App`, `update`, and a module per
+  `runtime/` (the one owner of the alternate screen, the threads and the loop;
+  beside it `actions` — an `Action` carried out — `discovery`, `input` and
+  `detail`, the workers),
+  `entry.rs` (how the app was opened), `app/` (`App` and `update`; the app's own
+  `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`,
+  for the pane `pane_edit` / `pane_add` / `pane_cursor`, and for the templates
+  tab and its builder `templates_tab` / `builder`; and a module per
   flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`), `view/` (renderers only, `&App`
-  in), `command.rs` (**the one registry** every key, palette entry, help line,
-  key line and hint comes from), `guide.rs` (**the one place** an explanation is
+  in; `modals/` is every dialog, by what it is for), `command/` (**the one registry** every key, palette entry, help line,
+  key line and hint comes from: `table` declares, `read` and `help` read),
+  `guide.rs` (**the one place** an explanation is
   written: the builder's panel, the guide, the coach), `motion.rs` (pure motion
   arithmetic over milliseconds it is handed), `msg.rs`/`effect.rs`, `theme.rs`
   (the palette, a pure function of an `Env`), `session.rs` (what a run leaves for
@@ -222,9 +256,9 @@ The helper walks such a path itself and refuses a link it cannot follow;
 **`util::fs_kind` asks a Windows volume by its drive root when the mount
 manager does not know it.** A WinFsp drive — how rclone mounts on Windows —
 gets the path itself back from `GetVolumePathNameW` (1005, the gap `canonical`
-walks around), and a path that is no root has no volume information: rclone's
-`S:` read as a local disk and was renamed aside object by object. Its root
-answers `FUSE-rclone`.
+walks around), and a path that is no root has no volume information: asked
+that way, an rclone drive reads as a local disk and is renamed aside object by
+object. Its root answers `FUSE-rclone`.
 
 **A path that will be stored goes through `util::paths::storable`**, which refuses
 non-UTF-8 rather than recording the `?`-substituted path `display()` produces.
@@ -240,6 +274,12 @@ that look comes back. `effective_bases()` canonicalizes through it and keeps the
 configured path for a base that does not answer; `paths::probe_dirs` is it over
 `probe_blocking`; `Config::base_candidates()` is the list before anything is
 asked of it, for a caller that reads each base on a worker of its own.
+**What walks the bases walks `Config::answering_bases()`** — the counter's
+floor, a mutation finding a project's own base, a register's search for its
+id, reconcile — so a command about a project in one base is never held up by
+another; a base somebody names is resolved with `paths::canonical_in_time`, and
+a path somebody typed passes `paths::require_answer` before the first look at
+it. `tests/dead_base.rs` runs each command beside a base that stopped answering.
 `paths::stall_if_marked` is the suites' dead mount (`paths:stall-base`, a folder
 holding `.fastf-test-stall`), asked where fastf first touches a base.
 
@@ -247,6 +287,14 @@ holding `.fastf-test-stall`), asked where fastf first touches a base.
 show` prints.** `Config` has no `deny_unknown_fields`, so a mismatched spelling is
 silently ignored; a field whose Rust name differs carries `serde(rename)` plus an
 `alias` for older spellings (`recent_default_limit`).
+
+**A value sitting in `config.toml` parses leniently; `config set` is strict.**
+An unknown word reads as the default (`NameCollision`'s own `Deserialize`,
+the lenient parse of `theme`, `motion` and `log_level`,
+`resolve_recent_limit` for a limit of zero), and a known one is read whatever
+its case, because a config that will not parse stops every command. The
+setter refuses the same word, since a typo at the command line is a mistake to
+report.
 
 **Retired keys stay harmless.** `config set` accepts `show_banner`, `show_frame`
 and `mouse` and says each is unused, so no script starts failing;
@@ -270,9 +318,9 @@ authority. **It records the names the base held when its scan listed it**
 (`Cache.seen`), and `discover_base` trusts it only while one names-only listing
 of the base returns exactly those (`discovery::freshness`); that listing is
 also the existence check, and the time gate (base newer than its index) stays
-as a second signal. Comparing times alone hid a project added while a scan that
-missed it was being written, and never fired on rclone, whose folder times read
-2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
+as a second signal. Comparing times alone hides a project added while a scan
+that missed it is being written, and never fires on rclone, whose folder times
+read 2000-01-01. fastf's own writers keep `seen` current — `cache_upsert` adds its
 name, `cache_remove` drops it only once the folder is `Absent` (an unregistered
 project's folder stays) — so a name anybody else added still reads as stale; an
 index without `seen` (an older fastf's) is rescanned once, with no version bump.
@@ -441,6 +489,10 @@ skips the `$EDITOR` fallback `cfg.resolve_editor()` applies.
 - Do not bulk-edit source with PowerShell 5.1 `Get-Content -Raw` +
   `Set-Content`: it reads the ANSI codepage and writes UTF-8, double-encoding every
   `—`, `→`, `…` and `✓` in this repo, `char` literals included.
+- **Windows APIs are declared by hand** (`unsafe extern "system"` beside the one
+  call that needs them; the numbers more than one module names are in
+  `util::win`), and `libc` is the only platform crate. No bindings crate is
+  added for a handful of calls.
 - `util::yaml` is the only module that names the YAML crate, and
   `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins its output: users
   diff, commit and hand-edit these files, so the bytes may not move.

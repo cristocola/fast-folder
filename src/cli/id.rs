@@ -55,7 +55,7 @@ pub fn sync() -> Result<()> {
             "{}  Synced {} base{} up to {}.",
             "✓".green().bold(),
             raised,
-            if raised == 1 { "" } else { "s" },
+            crate::util::plural::s(raised),
             floor.to_string().green().bold()
         );
     }
@@ -79,9 +79,9 @@ pub fn set(value: u64) -> Result<()> {
     Ok(())
 }
 
-/// `fastf id reset` — kept as a subcommand so the old habit gets an explanation
-/// rather than a silent no-op. Resetting to 0 was never possible once the
-/// counter became the highest ID seen anywhere.
+/// `fastf id reset` — kept as a subcommand so the habit gets an explanation
+/// rather than a silent no-op: the counter is the highest ID seen anywhere,
+/// and cannot go back to 0.
 pub fn reset() -> Result<()> {
     let cfg = Config::load()?;
     let floor = Counters::floor(&cfg);
@@ -107,26 +107,17 @@ fn print_counter(cfg: &Config, val: u64) {
         println!("Global ID counter: 0  (no projects created yet)");
     } else {
         // **The counter is a number, and a rendering of it is a template's
-        // business, not the counter's.** This formatted the value with
-        // `templates[0]`'s prefix and digits behind a comment claiming
-        // templates share them — they do not, `load_all` sorts by display
-        // name so `[0]` is whichever template happens to sort first, and the
-        // "next" beside it was printed raw. One line said one number two
-        // ways: `Global project ID: 202001  (next will be 2002)`.
+        // business, not the counter's**: templates need not share a prefix or a
+        // digit count, and the ID a create mints is decided by that create's
+        // template. So it is printed plain, as `fastf id sync` and the
+        // settings screen print it.
         //
-        // Every other place this number is shown already prints it plain:
-        // `fastf id sync` two functions above, and the settings screen. The ID
-        // a create actually mints is decided by that create's template.
-        //
-        // The three answers are different facts and used to be two: a counter
-        // file that would not parse made `load()` an `Err`, which collapsed
-        // into the same `None` as a real overflow and printed "the maximum,
-        // 999999999999, is reached" over a counter reading 1. A question that
-        // cannot be answered is answered with that, not with a number.
+        // The three answers are different facts: a counter file that will not
+        // parse is not a counter at its maximum. A question that cannot be
+        // answered is answered with that, not with a number.
         let next = match Counters::load() {
             // The one expression for "which ID comes next" — never a second
-            // `+ 1` written out here, which is how a preview came to confirm
-            // one number and a commit to write another.
+            // `+ 1` written out here, or a preview and its commit disagree.
             Ok(counters) => match Counters::next_value(cfg, &counters) {
                 Ok(next) => format!("(next project takes {next})"),
                 // `next_value` fails on exactly one thing: the `checked_add`

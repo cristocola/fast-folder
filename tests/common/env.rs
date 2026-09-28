@@ -2,19 +2,18 @@
 //!
 //! `FASTF_INSTALL_DIR`, `HOME` and `FASTF_FAULT` are process-wide, so a test
 //! that sets them must hold a lock while it runs, and every test in the binary
-//! must use the same lock. That much was already true; what was not is that the
-//! *rule* was re-typed in four files. `tests/CLAUDE.md` says every harness
-//! redirects `HOME`, and one of the four could quietly stop doing it — which is
-//! exactly how five register tests came to scan the developer's real home
-//! directory and self-heal the counter from their real projects.
+//! must use the same lock. The *rule* is typed here once: a harness that
+//! re-types it can quietly stop redirecting `HOME`, and its tests then scan the
+//! developer's real home directory and self-heal the counter from their real
+//! projects.
 //!
 //! Each test binary still owns its own `static SERIAL`: separate binaries are
 //! separate processes, so one lock per binary is both necessary and sufficient.
 //!
-//! **Restoration is a `Drop`, not a line after `body()`.** It used to be the
-//! latter, which meant a panicking test skipped it and the next test in the
-//! binary inherited a deleted tempdir as its `HOME`. The failure then landed on
-//! whichever test happened to run next, not on the one that caused it.
+//! **Restoration is a `Drop`, not a line after `body()`**: a panicking test
+//! skips such a line, and the next test in the binary inherits a deleted
+//! tempdir as its `HOME` — a failure that lands on whichever test runs next,
+//! not on the one that caused it.
 
 use std::collections::HashMap;
 use std::ffi::OsString;

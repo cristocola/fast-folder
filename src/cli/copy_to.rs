@@ -1,9 +1,9 @@
 //! `fastf copy-to <query> <destination>` — copy a project to a folder outside
 //! the library, keeping its ID.
 //!
-//! Named `copy-to` because `fastf copy` is the clipboard verb and has been
-//! since v2.1.0: it exists to be instant from a launcher, and taking its name
-//! for something that copies gigabytes would be the worst possible pun. The
+//! Named `copy-to` because `fastf copy` is the clipboard verb: it exists to be
+//! instant from a launcher, and taking its name for something that copies
+//! gigabytes would be the worst possible pun. The
 //! guided app calls this `Copy to…` on `C`, so the two surfaces read the same.
 //!
 //! The copy keeps its `PROJECT_INFO.md` byte for byte — it is the same project

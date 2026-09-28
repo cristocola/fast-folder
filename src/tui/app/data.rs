@@ -28,7 +28,7 @@ impl BaseInfo {
     }
 }
 
-/// One template, as the strip shows it.
+/// One template, as the templates tab lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TemplateCard {
     pub slug: String,
@@ -68,7 +68,7 @@ pub struct Settings {
     pub bases: Vec<String>,
     pub editor: String,
     pub terminal: String,
-    /// `auto`, `mono`, `ansi` or `rich` — empty reads as `auto`.
+    /// `auto`, `doom-one`, `rich`, `ansi` or `mono` — empty reads as `auto`.
     pub theme: String,
     /// `on` or `off` — empty reads as `on`.
     pub motion: String,

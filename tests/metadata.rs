@@ -141,18 +141,15 @@ fn write_frontmatter_body_bytes_preserved() {
 
         let pinfo = project_info::pinfo_path(&plan.root_path);
 
-        // Record the body section before mutation.
         let before = fs::read_to_string(&pinfo).unwrap();
         let (_, body_before) = project_info::split_frontmatter_body(&before).unwrap();
         let body_before = body_before.to_string();
 
-        // Mutate via write_frontmatter.
         project_info::write_frontmatter(&pinfo, |meta| {
             meta.tags.push("draft".to_string());
         })
         .unwrap();
 
-        // Read back and compare body.
         let after = fs::read_to_string(&pinfo).unwrap();
         let (_, body_after) = project_info::split_frontmatter_body(&after).unwrap();
 
@@ -161,7 +158,6 @@ fn write_frontmatter_body_bytes_preserved() {
             "body bytes must be identical after frontmatter mutation"
         );
 
-        // Tag must be present.
         let meta = project_info::read_metadata(&plan.root_path)
             .unwrap()
             .unwrap();
@@ -277,13 +273,11 @@ fn journal_entries_round_trip() {
 /// A note written after a heading the user added is still a note.
 ///
 /// The body below the frontmatter is theirs — `docs/projects.md` says "After
-/// creation the file is yours" — and adding any `##` of their own underneath
-/// the journal used to put every later entry past the point the reader stops
-/// at. `append_journal_entry` wrote at the end of the *file*;
-/// `read_journal_entries` stopped at the next `##`. So the write succeeded, the
-/// CLI printed the entry it had just saved, and it was never seen again. Both
-/// now go through one `body::notes_span` — and for a file written before
-/// v3.6.0 that span is its `## Journal`, so the file keeps its shape.
+/// creation the file is yours" — so a writer and a reader that disagree about
+/// where the notes end lose every note written past a `##` of the user's: the
+/// write succeeds and the note is never read back. Both go through one
+/// `body::notes_span`, and for a file written before v3.6.0 that span is its
+/// `## Journal`, so the file keeps its shape.
 #[test]
 fn a_note_after_a_heading_the_user_added_is_still_readable() {
     sandboxed(|install| {
@@ -386,7 +380,6 @@ fn tag_add_persists() {
             meta.tags
         );
 
-        // Remove.
         project_info::write_frontmatter(&pinfo, |m| m.tags.retain(|t| t != "draft")).unwrap();
         let meta2 = project_info::read_metadata(&plan.root_path)
             .unwrap()

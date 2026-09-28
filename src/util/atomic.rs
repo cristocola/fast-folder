@@ -1,11 +1,6 @@
 //! One atomic file write, shared by every writer that must not leave a
-//! half-written file behind.
-//!
-//! Before this module the same temp-file-plus-rename dance was open-coded in
-//! four places (`provisioning::write_atomic`, `library::write_cache`, and a
-//! variant inside `assets::copy_file`) while `Config::save` and
-//! `Counters::save` did a bare `fs::write` — so a crash mid-write truncated the
-//! config or the ID counter.
+//! half-written file behind. A bare `fs::write` truncates the target when a
+//! crash lands mid-write, which for the config or the ID counter loses it.
 //!
 //! The temp name carries the process id and a per-process counter, so two
 //! processes writing the same target never collide on the temp itself. A
@@ -47,14 +42,18 @@ pub(crate) fn create_temp_for(target: &Path) -> Result<(PathBuf, fs::File)> {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("creating temp file {}", temp.display()));
+                return Err(error).with_context(|| {
+                    format!(
+                        "creating temp file {}",
+                        crate::util::paths::display_path(&temp)
+                    )
+                });
             }
         }
     }
     anyhow::bail!(
         "could not claim a unique temp file for {} after {MAX_ATTEMPTS} attempts",
-        target.display()
+        crate::util::paths::display_path(target)
     )
 }
 
@@ -70,8 +69,12 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dirs for {}", path.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "creating parent dirs for {}",
+                crate::util::paths::display_path(path)
+            )
+        })?;
     }
 
     let (tmp, file) = create_temp_for(path)?;
@@ -81,15 +84,15 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
             let mut writer = std::io::BufWriter::new(&file);
             writer
                 .write_all(contents.as_ref())
-                .with_context(|| format!("writing {}", tmp.display()))?;
+                .with_context(|| format!("writing {}", crate::util::paths::display_path(&tmp)))?;
             writer
                 .flush()
-                .with_context(|| format!("flushing {}", tmp.display()))?;
+                .with_context(|| format!("flushing {}", crate::util::paths::display_path(&tmp)))?;
         }
         // Request an OS flush before publication. Propagate failures, while
         // making no storage-level durability promise.
         file.sync_all()
-            .with_context(|| format!("syncing {}", tmp.display()))?;
+            .with_context(|| format!("syncing {}", crate::util::paths::display_path(&tmp)))?;
         Ok(())
     })();
     drop(file);
@@ -100,7 +103,7 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     }
 
     crate::util::fs_retry::rename(&tmp, path)
-        .with_context(|| format!("finalizing {}", path.display()))
+        .with_context(|| format!("finalizing {}", crate::util::paths::display_path(path)))
         .inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         })
@@ -109,7 +112,7 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
 /// Serialize `value` as pretty JSON and write it atomically.
 pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let raw = serde_json::to_string_pretty(value)
-        .with_context(|| format!("serializing {}", path.display()))?;
+        .with_context(|| format!("serializing {}", crate::util::paths::display_path(path)))?;
     write(path, raw)
 }
 
@@ -119,25 +122,35 @@ pub fn copy(src: &Path, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dirs for {}", path.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "creating parent dirs for {}",
+                crate::util::paths::display_path(path)
+            )
+        })?;
     }
 
     let (tmp, destination) = create_temp_for(path)?;
     let result = (|| -> Result<()> {
-        let source = fs::File::open(src).with_context(|| format!("opening {}", src.display()))?;
+        let source = fs::File::open(src)
+            .with_context(|| format!("opening {}", crate::util::paths::display_path(src)))?;
         let mut reader = std::io::BufReader::with_capacity(1024 * 1024, source);
         let mut writer = std::io::BufWriter::with_capacity(1024 * 1024, &destination);
-        std::io::copy(&mut reader, &mut writer)
-            .with_context(|| format!("copying {} to {}", src.display(), tmp.display()))?;
+        std::io::copy(&mut reader, &mut writer).with_context(|| {
+            format!(
+                "copying {} to {}",
+                crate::util::paths::display_path(src),
+                crate::util::paths::display_path(&tmp)
+            )
+        })?;
         use std::io::Write;
         writer
             .flush()
-            .with_context(|| format!("flushing {}", tmp.display()))?;
+            .with_context(|| format!("flushing {}", crate::util::paths::display_path(&tmp)))?;
         drop(writer);
         destination
             .sync_all()
-            .with_context(|| format!("syncing {}", tmp.display()))?;
+            .with_context(|| format!("syncing {}", crate::util::paths::display_path(&tmp)))?;
         Ok(())
     })();
     drop(destination);
@@ -147,7 +160,7 @@ pub fn copy(src: &Path, path: &Path) -> Result<()> {
         return Err(error);
     }
     crate::util::fs_retry::rename(&tmp, path)
-        .with_context(|| format!("finalizing {}", path.display()))
+        .with_context(|| format!("finalizing {}", crate::util::paths::display_path(path)))
         .inspect_err(|_| {
             let _ = fs::remove_file(&tmp);
         })

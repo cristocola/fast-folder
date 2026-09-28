@@ -1,9 +1,9 @@
 //! The guided app, driven through a real terminal.
 //!
 //! The app cannot draw without a terminal, and the defects this suite exists
-//! for were only ever visible from one: the list drawing before a single
-//! folder had been walked, a mutation patching one row rather than rescanning
-//! the library, a flow that returned to the dashboard instead of ending the
+//! for are visible only from one: the list drawing before a single folder has
+//! been walked, a mutation patching one row rather than rescanning the
+//! library, a flow that returns to the dashboard instead of ending the
 //! session. The pure state machine is covered without a terminal in
 //! `tui_update.rs`; what is left here is the runtime — the screen, the
 //! threads, and the command line's own inline prompts — which a test backend

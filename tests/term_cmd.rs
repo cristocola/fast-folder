@@ -212,12 +212,12 @@ fn a_headless_unambiguous_term_opens_the_terminal_and_notifies() {
     );
 }
 
-/// The other side of that case, and a defect the same inherited variable caused:
-/// a shell carrying `FASTF_RELAUNCHED` is not a window fastf opened. Every shell
-/// in such a window has it, so `fastf term proj` typed there took the exec path
-/// and replaced the user's own shell instead of opening the window they asked
-/// for. An unambiguous `term` never hands off, so it can never be looking at a
-/// relaunched window.
+/// The other side of that case: a shell carrying `FASTF_RELAUNCHED` is not a
+/// window fastf opened. Every shell in such a window has it, so a
+/// `fastf term proj` typed there that trusted the variable would take the exec
+/// path and replace the user's own shell instead of opening the window they
+/// asked for. An unambiguous `term` never hands off, so it can never be looking
+/// at a relaunched window.
 #[test]
 fn an_unambiguous_term_in_a_marked_shell_still_opens_a_window() {
     let sb = Sandbox::new();

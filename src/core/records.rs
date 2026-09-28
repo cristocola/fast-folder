@@ -2,18 +2,18 @@
 //! record is, and when a removed old copy was last seen gone.
 //!
 //! **The record in the target base stays the authority**; this index only
-//! finds it. Reconcile walks the configured bases, so a record anywhere else
-//! was out of its sight: a `copy-to`'s, beside a destination outside every
-//! base, and a move's whose target base was later dropped from `bases`. The
-//! old copy of that move then read as "no record of the move left … delete it
-//! yourself". Written best effort, at `<data dir>/records/<operation>.json`,
-//! read without trusting it: nothing here authorises a removal.
+//! finds it. Reconcile walks the configured bases, and without the index a
+//! record anywhere else is out of its sight: a `copy-to`'s, beside a
+//! destination outside every base, and a move's whose target base was later
+//! dropped from `bases`, whose old copy would then read as having no record.
+//! Written best effort, at `<data dir>/records/<operation>.json`, read without
+//! trusting it: nothing here authorises a removal.
 //!
 //! It also keeps `gone_at` for the **settle**: a cloud mount that uploads in
-//! the background can put a removed folder back a while later (rclone did, on
-//! R2, minutes after a move reported the old copy removed). On such a mount a
-//! removal that ends with the folder gone keeps the record, and the first pass
-//! at least [`SETTLE_SECS`] later that still finds it gone clears it.
+//! the background (rclone) can put a removed folder back minutes later. On
+//! such a mount a removal that ends with the folder gone keeps the record, and
+//! the first pass at least [`SETTLE_SECS`] later that still finds it gone
+//! clears it.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -24,13 +24,21 @@ pub const SETTLE_SECS: i64 = 600;
 
 const VERSION: u32 = 1;
 
+/// What [`Entry::kind`] holds for a move's record.
+pub const MOVE: &str = "move";
+/// For a copy's.
+pub const COPY: &str = "copy";
+/// For a delete that empties its folder in place.
+pub const DELETE: &str = "delete";
+
 /// One record, as the index knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Entry {
     pub version: u32,
     pub operation: String,
-    /// `move` or `copy`.
+    /// [`MOVE`], [`COPY`] or [`DELETE`]. A word, so an index another version
+    /// wrote is read whatever it holds.
     pub kind: String,
     pub project_id: String,
     /// The transaction directory.
@@ -65,6 +73,14 @@ pub fn source_unmounted(operation: &str) -> Option<String> {
             crate::util::paths::display_path(&entry.source_base)
         )
     })
+}
+
+impl Entry {
+    /// A delete's record sits beside its folder, where the base's own walk
+    /// finds it; the index only keeps its settle.
+    pub fn is_delete(&self) -> bool {
+        self.kind == DELETE
+    }
 }
 
 impl Default for Entry {
@@ -125,7 +141,7 @@ pub fn get(operation: &str) -> Option<Entry> {
 /// Forget a record whose transaction is gone.
 pub fn remove(operation: &str) {
     if let Some(path) = path_of(operation) {
-        let _ = std::fs::remove_file(path);
+        let _ = crate::util::fs_retry::remove_file(&path);
     }
 }
 

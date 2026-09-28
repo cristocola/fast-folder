@@ -2,19 +2,19 @@
 //! deleted project, a copy that was never published.
 //!
 //! Not `std::fs::remove_dir_all`: that stops at the first error, and on unix
-//! silently steps over an entry it cannot find, which is the pair that left
-//! the 3.11 husk. This carries on past a failure (everything here is already
-//! somewhere else, or was asked to go), gives a folder it may not write its
-//! owner's permission back, **never follows a link or crosses onto another
-//! filesystem**, and — given the move's record — takes only entries still
-//! exactly as it records them.
+//! silently steps over an entry it cannot find — together they leave a husk
+//! the library still lists. This carries on past a failure (everything here
+//! is already somewhere else, or was asked to go), gives a folder it may not
+//! write its owner's permission back, **never follows a link or crosses onto
+//! another filesystem**, and — given the move's record — takes only entries
+//! still exactly as it records them.
 //!
 //! **On the pool** (`util::pool`), because on a cloud mount each removal is a
-//! request: 3.13 removed an old copy from R2 at about 120 ms an entry, one at
-//! a time. Folders are listed and their entries taken by several workers at
-//! once; each entry is examined and removed by the same worker, one right
-//! after the other, so nothing changes between the look that allows a removal
-//! and the removal. The folders go last, deepest first, a level at a time.
+//! request, about 120 ms an entry on R2 one at a time. Folders are listed and
+//! their entries taken by several workers at once; each entry is examined and
+//! removed by the same worker, one right after the other, so nothing changes
+//! between the look that allows a removal and the removal. The folders go
+//! last, deepest first, a level at a time.
 //!
 //! Three calls an entry at most: its share of a listing, one `lstat`, one
 //! unlink. What is left is counted only when something is.
@@ -110,10 +110,9 @@ impl Judge for Recorded<'_> {
 /// records them; anything else is kept, and so is every folder above it.
 ///
 /// `ticker` counts every entry removed — on a cloud mount each one is an API
-/// call, and 1473 of them took ten minutes that used to show as nothing — and
-/// a cancel it honours stops the removal where it is; what is left is a
-/// redundant leftover the next reconcile finishes. The caller starts the
-/// step, since it knows the total.
+/// call, ten minutes for 1473 of them — and a cancel it honours stops the
+/// removal where it is; what is left is a redundant leftover the next
+/// reconcile finishes. The caller starts the step, since it knows the total.
 pub(crate) fn remove_tree(
     root: &Path,
     recorded: Option<&MoveManifest>,
@@ -175,28 +174,40 @@ pub(crate) fn remove_tree_judged(
     // would read as removed. What it was on at the start is what it must
     // still be on at the end for a removal to count.
     let mount = crate::util::fs_kind::mount_identity(root);
-    let removing = Removing {
-        root,
-        judge,
-        device: transactions::RootDevice::recorded(
-            root,
-            transactions::current_device(root),
-            transactions::current_device,
-        ),
-        purpose,
-        ticker,
-        guard,
-        removed: AtomicUsize::new(0),
-        first: AtomicBool::new(true),
-        stop: AtomicBool::new(false),
-        stopped: Mutex::new(None),
-        kept_on_purpose: AtomicBool::new(false),
-        notes: Mutex::new(Vec::new()),
-        folders: Mutex::new(Vec::new()),
-        holding: Mutex::new(HashSet::new()),
-        first_failure: Mutex::new(None),
-    };
+    let removing = Removing::new(root, judge, purpose, ticker, guard);
     let width = crate::util::pool::width_for(root);
+    take_entries(&removing, root, width);
+    remove_folders(&removing, width);
+    if !removing.stop.load(Ordering::Relaxed) && !removing.is_holding(root) {
+        match crate::util::fs_retry::remove_dir(root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => removing.note(root, &error.to_string()),
+        }
+    }
+    let unmounted = mount.is_some() && crate::util::fs_kind::mount_identity(root) != mount;
+    if unmounted {
+        removing.note(
+            root,
+            "the filesystem it is on is not mounted any more, so what is left there cannot be told",
+        );
+    }
+    match crate::util::paths::presence(root) {
+        crate::util::paths::Presence::Absent if !unmounted => return Removal::Removed,
+        crate::util::paths::Presence::Absent => {}
+        // Not "removed": the mount did not say so. What is left, if anything,
+        // is for the next pass once it answers.
+        crate::util::paths::Presence::Unknown(error) => {
+            removing.note(root, &format!("it does not answer ({error})"));
+        }
+        crate::util::paths::Presence::Present(_) => {}
+    }
+    let remaining = count(root);
+    leftover(removing, remaining)
+}
+
+/// List every folder from `root` down and take what each holds, on the pool.
+fn take_entries(removing: &Removing<'_>, root: &Path, width: usize) {
     let _ = crate::util::pool::expand(
         width,
         vec![Step::List(root.to_path_buf(), 0)],
@@ -211,8 +222,11 @@ pub(crate) fn remove_tree_judged(
             Ok(())
         },
     );
-    // The folders, emptied, deepest first: a level at a time, each on the
-    // pool. A folder something was left in is not asked at all.
+}
+
+/// The folders, emptied, deepest first: a level at a time, each on the
+/// pool. A folder something was left in is not asked at all.
+fn remove_folders(removing: &Removing<'_>, width: usize) {
     let mut levels: Vec<Vec<PathBuf>> = Vec::new();
     for (depth, folder) in removing
         .folders
@@ -239,31 +253,10 @@ pub(crate) fn remove_tree_judged(
             Ok(())
         });
     }
-    if !removing.stop.load(Ordering::Relaxed) && !removing.is_holding(root) {
-        match crate::util::fs_retry::remove_dir(root) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => removing.note(root, &error.to_string()),
-        }
-    }
-    let unmounted = mount.is_some() && crate::util::fs_kind::mount_identity(root) != mount;
-    if unmounted {
-        removing.note(
-            root,
-            "the filesystem it is on is not mounted any more, so what is left there cannot be told",
-        );
-    }
-    match crate::util::paths::presence(root) {
-        crate::util::paths::Presence::Absent if !unmounted => return Removal::Removed,
-        crate::util::paths::Presence::Absent => {}
-        // Not "removed": the mount did not say so. What is left, if anything,
-        // is for the next pass once it answers.
-        crate::util::paths::Presence::Unknown(error) => {
-            removing.note(root, &format!("it does not answer ({error})"));
-        }
-        crate::util::paths::Presence::Present(_) => {}
-    }
-    let remaining = count(root);
+}
+
+/// What a removal that left something says: `remaining` entries, and why.
+fn leftover(removing: Removing<'_>, remaining: usize) -> Removal {
     let stopped = removing
         .stopped
         .into_inner()
@@ -336,6 +329,39 @@ struct Removing<'a> {
     first_failure: Mutex<Option<crate::util::fs_retry::ErrorClass>>,
 }
 
+impl<'a> Removing<'a> {
+    /// A removal of `root` about to start, its device read now.
+    fn new(
+        root: &'a Path,
+        judge: &'a dyn Judge,
+        purpose: Purpose,
+        ticker: Ticker<'a>,
+        guard: Option<(&'a Path, &'a str)>,
+    ) -> Self {
+        Removing {
+            root,
+            judge,
+            device: transactions::RootDevice::recorded(
+                root,
+                transactions::current_device(root),
+                transactions::current_device,
+            ),
+            purpose,
+            ticker,
+            guard,
+            removed: AtomicUsize::new(0),
+            first: AtomicBool::new(true),
+            stop: AtomicBool::new(false),
+            stopped: Mutex::new(None),
+            kept_on_purpose: AtomicBool::new(false),
+            notes: Mutex::new(Vec::new()),
+            folders: Mutex::new(Vec::new()),
+            holding: Mutex::new(HashSet::new()),
+            first_failure: Mutex::new(None),
+        }
+    }
+}
+
 impl Removing<'_> {
     fn note(&self, path: &Path, why: &str) {
         let mut notes = self.notes.lock().unwrap_or_else(|error| error.into_inner());
@@ -346,7 +372,10 @@ impl Removing<'_> {
                 .ok()
                 .filter(|relative| !relative.as_os_str().is_empty())
                 .unwrap_or(path);
-            notes.push(format!("{}: {why}", shown.display()));
+            notes.push(format!(
+                "{}: {why}",
+                crate::util::paths::display_path(shown)
+            ));
         }
     }
 
@@ -571,9 +600,16 @@ impl Removing<'_> {
     /// that appeared in it since. Listed again: what is there goes through the
     /// judge like everything else, and a folder that lists empty is asked
     /// again after a moment, a few times.
+    ///
+    /// Not `fs_retry`'s loop: between two asks the folder is listed and what
+    /// it holds judged. The pauses are its `schedule::LISTING_LAG`, each
+    /// followed by a try.
     fn empty_again(&self, folder: &Path) -> std::io::Result<()> {
         let mut last = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
-        for round in 1..=4u64 {
+        let pauses = crate::util::fs_retry::schedule::LISTING_LAG;
+        // Once, and once more after each pause: the last pause too is
+        // followed by a try.
+        for attempt in 0..=pauses.len() {
             let entries = crate::util::fs_retry::list_dir(folder, || Ok(()))?;
             for path in entries {
                 let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -600,7 +636,9 @@ impl Removing<'_> {
             if self.is_holding(folder) {
                 return Err(last);
             }
-            match crate::util::fs_retry::remove_dir(folder) {
+            let asked = crate::util::faults::check_io("remove:again")
+                .and_then(|()| crate::util::fs_retry::remove_dir(folder));
+            match asked {
                 Ok(()) => return Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(error)
@@ -608,7 +646,9 @@ impl Removing<'_> {
                         == crate::util::fs_retry::ErrorClass::NotEmpty =>
                 {
                     last = error;
-                    std::thread::sleep(std::time::Duration::from_millis(300 * round));
+                    if let Some(pause) = pauses.get(attempt) {
+                        std::thread::sleep(std::time::Duration::from_millis(*pause));
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -689,6 +729,29 @@ mod tests {
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join("a.txt"), "a").unwrap();
         fs::write(root.join("sub/b.txt"), "b").unwrap();
+    }
+
+    /// **The last pause is followed by a last try.** A folder a cloud mount
+    /// still lists as holding something is asked again after each pause of
+    /// the schedule, the last one included: a wait nothing follows is time
+    /// spent for nothing, and the folder that would have gone stays.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_folder_is_asked_once_more_after_the_last_pause() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".fastf-deleted-1-9");
+        fs::create_dir_all(root.join("sub")).unwrap();
+        let pauses = crate::util::fs_retry::schedule::LISTING_LAG.len();
+
+        // The folder's first removal and every one that follows a pause but
+        // the last say "not empty", as a listing that lags does.
+        let fault =
+            format!("pool:serial,remove:unlink:enotempty-1,remove:again:enotempty-{pauses}");
+        let removal = crate::util::faults::with_thread_fault(&fault, || {
+            remove_tree(&root, None, Purpose::Delete, Ticker::none())
+        });
+        assert_eq!(removal, Removal::Removed);
+        assert!(!root.exists());
     }
 
     /// Removal never steps through a link: the link goes, what it points at
@@ -782,8 +845,7 @@ mod tests {
     }
 
     /// A removal is `Removed` only when the folder is provably gone: a mount
-    /// that answers the last look with an error has not said so. 3.13 took
-    /// the error for "gone" and cleared the record.
+    /// that answers the last look with an error has not said so.
     #[cfg(debug_assertions)]
     #[test]
     fn a_removal_is_not_done_until_the_folder_is_provably_gone() {

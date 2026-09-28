@@ -70,8 +70,8 @@ fn a_toggle_writes_its_key_with_no_dialog_at_all() {
     );
 }
 
-/// Motion goes off and comes back on. The row cycled from a value it never
-/// read back, so every press wrote `off` and the second one did nothing.
+/// Motion goes off and comes back on: the row cycles from the value the
+/// settings read back, or every press writes `off`.
 #[test]
 fn motion_turns_off_and_the_next_press_turns_it_back_on() {
     let mut app = fixture(6, 120, 40);
@@ -236,6 +236,32 @@ fn the_counter_is_raised_through_a_prompt_that_names_the_floor() {
         }
         other => panic!("expected the counter prompt, got {other:?}"),
     }
+    type_text(&mut app, "9");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(action_of(&effects), Action::RaiseCounter(2489)));
+}
+
+/// **Typed input is never thrown away by a refusal.** A counter that is not a
+/// number is said under the line, with what was typed still there to correct.
+#[test]
+fn a_counter_that_is_no_number_is_refused_under_the_line() {
+    let mut app = fixture(6, 120, 40);
+    open(&mut app);
+    go_to(&mut app, "Counter");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    type_text(&mut app, "a");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => {
+            assert_eq!(prompt.input.text(), "248a", "the text is kept");
+            let error = prompt.error.as_deref().unwrap_or_default();
+            assert!(error.contains("expected a number"), "{error:?}");
+        }
+        other => panic!("the prompt stays up, got {other:?}"),
+    }
+    // One Backspace fixes it.
+    press(&mut app, Key::plain(KeyCode::Backspace));
     type_text(&mut app, "9");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(action_of(&effects), Action::RaiseCounter(2489)));

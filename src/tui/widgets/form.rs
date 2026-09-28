@@ -1,12 +1,10 @@
 //! A form: labelled fields on one screen, moved through with Tab and the
 //! arrows, edited in place, submitted with Enter.
 //!
-//! It replaces a run of one-at-a-time prompts, and the difference is the point. A
-//! sequence of prompts can only ask one thing at a time, so an answer given
-//! three questions ago is invisible and unreachable, and a value rejected at
-//! the end takes every earlier answer with it. A form shows every answer at
-//! once, lets any of them be corrected without retyping the rest, and puts a
-//! rejection on the field that caused it.
+//! **Every question is on screen at once**: a sequence of prompts hides an
+//! answer given three questions ago, and a value rejected at the end takes
+//! every earlier answer with it. A form lets any answer be corrected without
+//! retyping the rest, and puts a rejection on the field that caused it.
 //!
 //! **A field never validates against a disk here.** `update` performs no I/O,
 //! so a path that must exist is checked by the worker that builds the preview,

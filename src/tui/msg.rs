@@ -25,10 +25,7 @@ pub enum Msg {
     /// something on screen is moving.
     ///
     /// It carries no clock: `App.elapsed_ms` is stamped by the runtime before
-    /// **every** message, not only this one. A clock that only advanced on a
-    /// tick was a stale clock the moment nothing was moving — and a status
-    /// message set against a stale one is a message whose expiry is already in
-    /// the past.
+    /// **every** message, not only this one (`Runtime::dispatch` says why).
     Tick,
     /// Folder sizes that landed since the last tick.
     Sizes(Vec<(PathBuf, Option<u64>)>),
@@ -119,8 +116,9 @@ pub enum Msg {
         messages: Vec<crate::util::messages::Message>,
         log: Vec<String>,
     },
-    /// A read-only view's content landed.
+    /// A read-only view's content landed, for the read `request` numbers.
     ViewLoaded {
+        request: u64,
         title: String,
         lines: Vec<String>,
     },

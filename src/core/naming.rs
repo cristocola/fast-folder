@@ -5,11 +5,11 @@ use chrono::Local;
 /// The values every `{token}` in one operation resolves to.
 ///
 /// Built **once per operation** and threaded through every interpolation it
-/// does. Two reasons, and the first is correctness rather than speed: the clock
-/// used to be sampled inside `interpolate`, which runs per path segment and per
-/// file, so a create that spanned midnight could name the folder with one date
-/// and the files inside it with another, and the plan a user approved could
-/// differ from the plan that was committed.
+/// does. Two reasons, and the first is correctness rather than speed:
+/// interpolation runs per path segment and per file, so a clock sampled there
+/// lets a create that spans midnight name the folder with one date and the
+/// files inside it with another, and the plan a user approved differ from the
+/// plan that is committed.
 ///
 /// The second is that formatting four date strings per file, on a template with
 /// a hundred of them, is a hundred times more work than the answer needs.
@@ -67,11 +67,11 @@ impl RenderContext {
 /// This is the raw form, used for file contents where `__` sequences (e.g.
 /// Python's `__init__`, `__version__`) must be preserved exactly.
 ///
-/// **One left-to-right pass, and a substituted value is never re-scanned.** The
-/// old implementation ran `String::replace` once per variable, in `HashMap`
-/// order, so a value that happened to contain `{another_token}` expanded or did
-/// not depending on which order the map iterated in — different runs of the same
-/// create could produce different names.
+/// **One left-to-right pass, and a substituted value is never re-scanned.** A
+/// `String::replace` per variable, in `HashMap` order, would expand a value
+/// that happens to contain `{another_token}` or not depending on which order
+/// the map iterates in — different runs of the same create could produce
+/// different names.
 pub fn interpolate_with(
     pattern: &str,
     vars: &HashMap<String, String>,
@@ -142,9 +142,6 @@ fn is_name_separator(c: char) -> bool {
 /// out right: in `{user}_{artist}-{title}` with no artist, the `_` belonged to
 /// the variable that vanished and the `-` is the one the author meant to sit
 /// between the surviving parts, so `french_-Seeping` becomes `french-Seeping`.
-///
-/// This used to collapse only `__`, which meant a pattern separated by anything
-/// other than underscores kept the orphaned separator.
 ///
 /// Single separators are never touched, so a date like `2026-07-28` passes
 /// through unchanged.
@@ -314,9 +311,9 @@ mod tests {
         assert_eq!(result, "Project_001");
     }
 
-    /// The reported bug: a pattern whose separators are not all underscores.
-    /// `{artist}` is empty, so the `_` in front of it is orphaned and the `-`
-    /// the author put between artist and title is the one that should survive.
+    /// A pattern whose separators are not all underscores: `{artist}` is
+    /// empty, so the `_` in front of it is orphaned and the `-` the author put
+    /// between artist and title is the one that should survive.
     #[test]
     fn empty_variable_collapses_a_mixed_separator_run() {
         let vars = vars_of(&[("username", "french"), ("artist", ""), ("title", "Seeping")]);

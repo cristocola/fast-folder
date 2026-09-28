@@ -36,8 +36,7 @@ pub fn hand_off_to_a_terminal(cfg: &Config, plain: bool) -> bool {
 ///
 /// (A plain span, not an intra-doc link: `util::relaunch` is `cfg(unix)`, so on
 /// a Windows target the link has no item to resolve to and
-/// `RUSTDOCFLAGS="-D warnings" cargo doc` — a release gate — fails. It only
-/// ever ran on Linux, where the module is there.)
+/// `RUSTDOCFLAGS="-D warnings" cargo doc` — a release gate — fails.)
 pub fn mark_relaunched_window() {
     RELAUNCHED_WINDOW.store(true, Ordering::SeqCst);
 }
@@ -47,9 +46,9 @@ pub fn mark_relaunched_window() {
 /// The claim rides on argv (`--relaunched`), not on `FASTF_RELAUNCHED`, and that
 /// is the whole point: an environment variable is inherited, so every shell in
 /// that window has it and so does everything typed into that shell, none of
-/// which is the rerun. Read the wrong way it made `fastf completions bash` stop
-/// for a keypress in a package build, and `fastf term proj` replace the shell
-/// it was typed into instead of opening a window.
+/// which is the rerun. Read from the variable, `fastf completions bash` would
+/// stop for a keypress in a package build, and `fastf term proj` would replace
+/// the shell it was typed into instead of opening a window.
 ///
 /// The variable keeps the one job inheritance cannot spoil: in
 /// `util::relaunch::headless_gui_session` it only ever *suppresses* a
@@ -106,8 +105,8 @@ pub fn open_terminal_at(cfg: &Config, dir: &std::path::Path) -> anyhow::Result<(
 ///
 /// [`relaunched_window`] is the same guard `main`'s pause needs and for the same
 /// reason: read from the inherited variable instead, `fastf term proj` typed
-/// into any shell that carries one replaced *that* shell rather than opening
-/// the window it was asked for.
+/// into any shell that carries one would replace *that* shell rather than
+/// open the window it was asked for.
 pub fn window_is_ours() -> bool {
     #[cfg(unix)]
     {

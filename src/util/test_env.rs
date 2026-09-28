@@ -1,15 +1,13 @@
 //! One lock and one RAII guard for environment mutation inside the lib's test
 //! binary.
 //!
-//! `setenv` is not thread-safe at the libc level. Two independent mutexes used
-//! to guard it here — `trace::tests::TEST_LOCK` for `FASTF_TRACE_FILE` and
-//! `interrupt::TEST_LOCK`, borrowed as `SERIAL` by `project`'s tests, for
-//! `FASTF_INSTALL_DIR` — which means they raced each other and every `env::var`
-//! in the binary. Two locks over one process-global is one lock too many.
+//! `setenv` is not thread-safe at the libc level, so every variable this
+//! binary's tests change is changed under this one lock: two independent locks
+//! over one process-global race each other and every `env::var` in the binary.
 //!
-//! The guard also **restores on unwind**. The previous pattern was `set_var`,
-//! run the body, `remove_var`: a panicking test skipped the reset, and the next
-//! test in the binary inherited a deleted tempdir as its data directory.
+//! The guard also **restores on unwind**. With `set_var`, the body, then
+//! `remove_var`, a panicking test skips the reset, and the next test in the
+//! binary inherits a deleted tempdir as its data directory.
 //!
 //! ## Lock order
 //!
@@ -136,9 +134,9 @@ mod tests {
 
     /// The guard's whole reason for existing: a unit test that reaches
     /// `DataLock` must lock the sandbox, not the developer's real data
-    /// directory. Before this, `cargo test` could block a `fastf` running in
-    /// another terminal for the full 30-second timeout — and leave a
-    /// `.fastf.lock` behind in their config directory.
+    /// directory, or `cargo test` blocks a `fastf` running in another terminal
+    /// for the full 30-second timeout — and leaves a `.fastf.lock` behind in
+    /// their config directory.
     #[test]
     fn a_sandbox_guard_moves_the_data_lock_into_its_tempdir() {
         let (_guard, dir) = EnvGuard::sandbox();
@@ -151,10 +149,9 @@ mod tests {
         );
     }
 
-    /// The guard restores on **unwind**, not merely on a clean return. The
-    /// pattern it replaces was `set_var`, run the body, `remove_var`: a
-    /// panicking test skipped the reset, and the next test in the binary
-    /// inherited a deleted tempdir as its data directory.
+    /// The guard restores on **unwind**, not merely on a clean return: a
+    /// panicking test that skipped the reset would leave the next test in the
+    /// binary a deleted tempdir as its data directory.
     ///
     /// Guards do not nest: `ENV_LOCK` is a plain `Mutex`, and taking it twice on
     /// one thread deadlocks. One guard per test, always.

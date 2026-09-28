@@ -1,12 +1,12 @@
 //! Copying a project to somewhere outside the library.
 //!
 //! A copy is a move that keeps its source: the same manifest scan, the same
-//! private staging, the same exact path/type/size verification, the same atomic
-//! publish — and then nothing, because the source was never the thing being
-//! given up. `move_engine` and this module share
-//! [`transactions`] rather than each other, so the
-//! one invariant they both live by is stated in one place: **a destination is
-//! published only after it has been copied and verified in full.**
+//! copy made at its final path, the same exact path/type/size verification, the
+//! same publish of `PROJECT_INFO.md` last — and then nothing, because the source
+//! was never the thing being given up. `move_engine` and this module share
+//! [`transactions`] rather than each other, so the one invariant they both live
+//! by is stated in one place: **a destination is published only after it has
+//! been copied and verified in full.**
 //!
 //! **The copy keeps its ID.** It is the same project on another drive, and the
 //! base is what tells two of them apart — which is why the destination may not
@@ -94,7 +94,7 @@ pub const COPY_STEPS: &[JobPhase] = &[
 /// Returns the canonical destination *folder* — `destination/<the project's
 /// folder name>` — which is what gets published.
 pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) -> Result<PathBuf> {
-    let root = crate::util::paths::canonical(destination).with_context(|| {
+    let root = crate::util::paths::canonical_in_time(destination).with_context(|| {
         format!(
             "resolving the copy destination {}",
             crate::util::paths::display_path(destination)
@@ -111,7 +111,23 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
         );
     }
 
-    for base in cfg.effective_bases() {
+    let probed =
+        crate::util::paths::probe_dirs(&cfg.effective_bases(), crate::util::paths::PROBE_TIMEOUT);
+    for (base, probe) in probed {
+        // A base that does not answer is compared as it is written: the
+        // destination answered a moment ago, so it is on no mount that
+        // stopped answering, and only a path spelled inside the base can be
+        // in it.
+        if probe == crate::util::paths::Probe::Unresponsive {
+            if root == base || root.starts_with(&base) {
+                anyhow::bail!(
+                    "'{}' is inside the configured base {}, which does not answer",
+                    crate::util::paths::display_path(&root),
+                    crate::util::paths::display_path(&base)
+                );
+            }
+            continue;
+        }
         // An unplugged base holds nothing to collide with. Any other failure
         // refuses: a base that cannot be resolved cannot be proven apart from
         // the destination, and a skipped check is a copy into the library.
@@ -153,9 +169,10 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
     Ok(target)
 }
 
-/// The staged body. Everything before publication lives in one exclusively
-/// created operation directory under the destination; a cancellation or a
-/// failure removes exactly that and leaves both ends untouched.
+/// The staged body. Before publication there is only the record, one
+/// exclusively created operation directory under the destination, and the
+/// unpublished copy at its final path; a cancellation or a failure removes
+/// exactly those and leaves the source untouched.
 fn copy_unlocked(
     project: &Project,
     target: &Path,
@@ -166,8 +183,12 @@ fn copy_unlocked(
         .parent()
         .map(Path::to_path_buf)
         .context("the copy destination has no parent")?;
-    let source_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving project base {}", project.base.display()))?;
+    let source_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving project base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     let folder = project
         .path
         .file_name()
@@ -218,7 +239,11 @@ fn copy_unlocked(
             }
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("copying '{}' into {}", project.name, root.display())
+                    format!(
+                        "copying '{}' into {}",
+                        project.name,
+                        crate::util::paths::display_path(&root)
+                    )
                 });
             }
         }
@@ -229,34 +254,36 @@ fn copy_unlocked(
         );
         // The copy is of one moment: what changed in the source while it was
         // copied is copied too, until it holds still.
-        let verified =
-            transactions::settle_copy(&mut body, &project.path, &staging, progress, cancel, ticker)
-                .and_then(|root| {
-                    let manifest = body.clone().with_entry(root);
-                    manifest.validate()?;
-                    transaction.write_manifest(&manifest)?;
-                    body.verify_destination_with(&staging, ticker)
-                        .map(|_| manifest)
-                });
+        let verified = transactions::settle_record_verify(
+            &transaction,
+            &mut body,
+            &project.path,
+            &staging,
+            progress,
+            cancel,
+            ticker,
+        );
         if verified.is_err() && ticker.cancelled() {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
-        let manifest = verified?;
+        let (manifest, _) = verified?;
         crate::util::faults::check("copy:after-verify")?;
         if cancel.load(Ordering::Relaxed) {
             anyhow::bail!("copy of '{}' cancelled", project.name);
         }
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
-        transactions::copy_to_staging(
-            &manifest.only_root_metadata(),
-            &project.path,
-            &staging,
-            progress,
-            &AtomicBool::new(false),
-        )
-        .with_context(|| format!("publishing the copy at {}", target.display()))?;
+        transactions::publish(&manifest, &project.path, &staging, progress).with_context(|| {
+            format!(
+                "publishing the copy at {}",
+                crate::util::paths::display_path(target)
+            )
+        })?;
         transactions::keep_folder_attributes(&manifest, &project.path, &staging);
+        transactions::sync_folders(&manifest, &staging);
+        if let Some(parent) = staging.parent() {
+            crate::core::move_cleanup::sync_dir(parent);
+        }
         Ok(totals)
     })();
 

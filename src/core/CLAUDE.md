@@ -42,7 +42,10 @@ flat `files:` block would be preserved instead of dropped.
 is the create spec, and regenerating over it would merge old files under a
 replaced `structure`. `core::template_import` is the from-folder engine and
 `operations::template_from_folder` the locked entry point, which rescans under
-`DataLock` whatever the CLI pre-scanned. Text (UTF-8 ≤ 64 KB) becomes editable
+`DataLock` whatever a surface pre-scanned. **A preview reads
+`template_import::scan`, the scan the run makes** — `--dry-run`, the bundle
+confirmation and the app's preview alike — so there is one depth limit, one
+list of ignored names and one set of refusals. Text (UTF-8 ≤ 64 KB) becomes editable
 files, binary and large files are bundled only on request, and a root
 `PROJECT_INFO.md` is excluded.
 
@@ -131,7 +134,7 @@ in `template::validate_structure`, which every load and save passes through.
 `created`, `folder`, `path`, `tags`, `auto_tags` (the derived subset), and
 `variables: BTreeMap` holding **every** template variable (sorted, for stable
 diffs). The **body** holds a variables table, a `## Notes` section and, after the
-first `add_todo`, a `## Todo` list; its grammar is `core/body.rs`, and outside
+first `add_todo`, a `## Todo` list; its grammar is `core::body`, and outside
 those helpers fastf never touches the file after creation.
 
 `write_frontmatter(path, |meta| …)` reads, splits, parses, applies and writes
@@ -251,26 +254,27 @@ backoff to every cross-drive move.
 (`MoveManifest::without_root_metadata` / `only_root_metadata`,
 `MoveTransaction::staging_path` = the final path for an `in_place` record). Until
 that file lands the folder is not a project, so the publish is one file write and
-**no folder on the target is ever renamed**: 3.12.0 staged under the transaction
-and renamed the tree into place, and rclone's Drive mount put files of a moved
-project back under the staging path it had just left while its cache said all
-was well. `MoveTransaction::remove` takes an unpublished in-place copy with the
-record and leaves a published one (`final_is_published`) alone; a record without
-`in_place` (3.12.0) is finished the old way, and `sweep_strays` moves any file the
-mount put in its old staging folder late into place before the record goes —
-never deleting one.
+**no folder on the target is ever renamed**: a cloud mount misplaces a folder
+rename while uploads are in flight — rclone's Drive mount puts files of a tree
+renamed into place back under the path it has just left, while its cache says
+all is well. `MoveTransaction::remove` takes an unpublished in-place copy with
+the record and leaves a published one (`final_is_published`) alone; a record
+without `in_place` (one 3.12.0 wrote, its copy staged under the transaction) is
+finished the old way, and `sweep_strays` moves any file the mount put in its old
+staging folder late into place before the record goes — never deleting one.
 
 **Nothing in the record is ever renamed either.** `move.json`, `manifest.json`
 and `published.json` are each written once, `create_new` (`write_record_file`),
 and a phase is a marker file `phase.<Name>` created and never touched again
 (`set_phase`; `read_journal` takes the highest marker present over what
-`move.json` says). 3.12.0 rewrote `move.json` through an atomic rename for each
-phase, and the Drive mount kept `Copying` on the remote about a move that had
+`move.json` says). A phase rewritten through an atomic rename is one a cloud
+mount can misplace, keeping `Copying` on the remote about a move that has
 retired its original; the only write a cloud mount cannot misplace is one that
-creates a file. The one rename left is the version-2 → 3 rewrite of a 3.11
-record. `MoveTransaction::remove` waits up to twenty seconds through `EIO`,
-which is a cloud mount still uploading the record's last files, and refuses
-while a published record's old staging folder still holds files.
+creates a file. The one rename left is the version-2 → 3 rewrite of a record
+3.11 wrote. `MoveTransaction::remove` asks again through `EIO`, which is a cloud
+mount still uploading the record's last files (twenty more times, a second
+apart), and refuses while a published record's old staging folder still holds
+files.
 
 The record lives at `.fastf-transactions/<timestamp-pid-counter>/` in the target
 base. `move.json` (version 3; version 2 is read) holds version, operation id,
@@ -297,17 +301,17 @@ fully arrived. No hashes, no advanced metadata. Every walked name is payload —
 there is no transient-suffix filter.
 
 **Links are content** (manifest version 2): recorded by their target text, never
-followed, dangling allowed — what `mv` does, and what the rename always did. The
+followed, dangling allowed — what `mv` does, and what a rename on one filesystem does. The
 walk never descends into one, the names pass makes them last (so no later write
 can pass through one), verification compares `read_link` text, and
-`remove_tree` unlinks them. `transactions::entry_for` is the one classification:
+`remove_tree` unlinks them. `transactions::walk::entry_for` is the one classification:
 every unix symlink is `Symlink`; on Windows the reparse tag decides
 (`util::win_reparse`) — `SYMLINK` is `Symlink` or `DirSymlink` by the link's own
 directory attribute (its target may not exist), `MOUNT_POINT` is `Junction`
 unless it names a volume (`OtherFilesystem`), anything else is
 `UnsupportedLink`. A link whose `read_link` is refused is `LinkNotReadable`, whose
 message names sshfs's `-o no_contain_symlinks`: sshfs's default refuses every link
-that is absolute or climbs with `..`, found against a real mount. The probe judges
+that is absolute or climbs with `..`. The probe judges
 by what `lstat` finds at the link's path, not by what `symlink()` said — on a
 `follow_symlinks` mount the call makes the link on the server and then fails with
 `EIO`. Cloud placeholders are not name surrogates, so `std` reads them
@@ -345,9 +349,10 @@ handed to `Walk::of_with`, `MoveManifest::scan_with`/`verify_*_with`,
 publishing, setting the original aside, checking the old copy (the merge's
 one walk of the moved copy), removing it, clearing the record — each counting
 what it touches, and `Ticker::phase` keeps the finished ones in
-`Progress.finished` with their counts. 3.12 ran everything after the copy under
-one "finalizing" with a full bar, and removing 1473 entries through a Drive
-mount took ten minutes there. **A check never stops for a cancel** (the merge
+`Progress.finished` with their counts. No step hides under another's full
+bar: what follows the copy is where a cloud mount spends its time (removing
+1473 entries through a Drive mount takes ten minutes). **A check never stops
+for a cancel** (the merge
 walks the moved copy on `ticker.uncancellable()`), because a check stopped part
 of the way reads as one that failed; the removal after it stops when its ticker
 honours one, leaving a redundant leftover. The public entry
@@ -370,25 +375,28 @@ in one of two ways chosen when the record is made (`RetireStrategy::for_base`):
   (`RetirePointer`: which record, which folder), then the original's
   `PROJECT_INFO.md` — when it is still what was copied, by time or by text
   (`merge::same_but_for_place`), or older than what was copied (a version a
-  cloud mount put back from an upload still queued: the lab's edit-then-move
-  on R2 got the pre-edit file back after the move removed the edited one) —
+  cloud mount put back from an upload still queued: on R2, a project edited
+  and then moved gets its pre-edit file back after the move removed the edited
+  one) —
   which takes it out of the library. One edited after the copy is a choice
   between two versions (`Retire::Diverged`): the old copy still leaves the
   library, and the record stays with a conflict for a person. The folder
   keeps its name until the merge has emptied it; `transactions::clear_target`
   says so to a move that lands on it. The pointer goes last, after the record.
 
-A tree removal is not one operation; anything that stops `remove_dir_all` part
+A tree removal is not one operation: anything that stops `remove_dir_all` part
 of the way (a mode-555 folder, a file a program holds open, a network drop, an
-entry a mount lists but hides) used to leave a husk that still held
-`PROJECT_INFO.md` and was listed as the project. That is how 3.11 left 13 of
-1473 files behind on an sshfs base and then called the source untouched. The
+entry a mount lists but hides) leaves a husk that still holds
+`PROJECT_INFO.md` and is listed as the project, which is why the original
+leaves the library in one step before anything of it is removed. The
 order is fsync the target base (unix), `CleanupPending`, both copies'
-identities, retire, `Retired` (written *after* the retire; a crash between
+identities, **every folder of the moved copy synced** (`sync_folders`: a
+file's sync keeps its bytes and only its folder's keeps its name, and a copy a
+killed move published was never synced), retire, `Retired` (written *after* the retire; a crash between
 reads the same), bookkeeping, **merge the old copy away**, remove the
-transaction, the pointer. **Nothing is walked before the retire**: 3.13
-checked the whole original and moved copy there and kept the original whole on
-a single difference; the merge proves every removal on its own. Publishing
+transaction, the pointer. **Nothing is walked before the retire**: a check of
+both whole trees there keeps the original whole over a single difference, and
+the merge proves every removal on its own. Publishing
 first is deliberate: a Windows "file in use" at the retire then costs a
 reconcile, not a second copy. `MoveOutcome.source` says what became of it
 (`Removed`, `Leftover`, `KeptWhole`, `Unknown`), and `SourceOutcome::warning` is
@@ -431,9 +439,9 @@ writes `PROJECT_INFO.md`**: the moved copy's is the project's identity, and its
 bookkeeping rewrote it; the old one goes when it is the same but for `path` and
 `folder` (`merge::same_but_for_place`). What the merge keeps is exactly what
 needs a person — changed in both copies, another kind of entry in the moved
-copy — and the record stays with it; everything else goes. **This replaces
-"kept whole"**: 3.13 kept a whole original, listed twice and re-reported by every
-reconcile, over one dev server's log line.
+copy — and the record stays with it; everything else goes. **No original is
+kept whole over a difference**: it would be listed twice and re-reported by
+every reconcile, over one dev server's log line.
 
 **An old copy whose record 3.13 cleared** (`reconcile_recordless`) is finished
 by content: one holding nothing but folders (a directory marker a cloud mount
@@ -463,8 +471,7 @@ Per-entry failpoints — `walk:readdir`, `walk:lstat`, `remove:each-entry`,
 follows a link or crosses a device (`transactions::RootDevice`, as the walk:
 a folder on another device is asked of the root again, because a FUSE mount
 that dropped and came back is a new device for everything under it, the root
-included — the lab's sshfs drop kept 1352 entries "on another filesystem"
-before this), asks a `Judge` of each entry — `Recorded` re-checks it against
+included), asks a `Judge` of each entry — `Recorded` re-checks it against
 the manifest, `Everything` takes all — on the worker that then removes it,
 right after the `lstat` the judge saw, carries on past a failure, gives a
 folder its owner's permission back, never asks a folder that still holds
@@ -477,10 +484,26 @@ EAGAIN…) and Locked back off 0.2 s → 5 s, six tries; NotConnected waits for 
 mount (`wait_for_mount`, up to `MOUNT_WAIT`, two minutes) — **until the same
 mount answers**, since an unmounted mount point is an empty folder on the mount
 above it and answers "nothing there" for everything under it
-(`fs_kind::mount_identity`); Denied, Full, ReadOnly and NameRefused are
-answered at once. The walk, each file's copy (`copy_file_again`: the partial
+(`fs_kind::mount_identity`), and `schedule::MOUNT_LAG` apart while the mount
+answers about the path and the call on it still fails: a FUSE mount whose
+daemon went away answers a look from the kernel's cache for a second or so,
+and asked again at once the call spins and writes a log line each time round,
+megabytes of them, which rotates the log away; Denied, Full, ReadOnly and
+NameRefused are answered at once. The walk, each file's copy (`copy_file_again`: the partial
 file goes, the file is copied again whole), every unlink and rmdir, the
-record's removal and the probe go through it. A removal whose mount is not the
+record's removal and the probe go through it.
+
+**One loop asks again, and every schedule is beside it** (`fs_retry::Retry`,
+`fs_retry::schedule`; the table is the module's doc). A caller names a
+schedule and a judge (`by_class`, contention, `still_uploading`) and never
+writes a loop or a pause of its own: `tests/layering.rs` counts the `sleep`s
+under `src/core` and names what each of the three left waits for, none of
+them a retry. **Waits nest, and multiply**: `with_retry` around
+`fs_retry::remove_file` waits contention out inside every by-class try. So
+**two loops never both wait one error out**: a record's removal waits for an
+upload (`EIO`) on its own schedule, twenty seconds, and takes that error away
+from the by-class loop inside it (`with_retry_judged`), which would otherwise
+spend eleven seconds on it in each of the twenty-one tries — four minutes. A removal whose mount is not the
 one it started on is never `Removed`, and reconcile waits on a record whose
 source base is not on the mount the index recorded (`records::source_mount`,
 `records::source_unmounted`). `fs_retry::explain` is the one sentence a person
@@ -518,10 +541,10 @@ worker sets `Progress.stalled_ms` when nothing has moved for
 "no answer from … for N s".
 
 **Only "nothing there" is absence** (`util::paths::presence`: `Present`,
-`Absent` on ENOENT/ENOTDIR only, `Unknown` for any other error). 3.13 asked
-`symlink_metadata(p).is_ok()`, so an EIO or ENOTCONN from a mount that dropped
-read as "gone": the removal reported `Removed`, the record was cleared, and the
-old copy was left with nothing to finish it. Every decision that removes
+`Absent` on ENOENT/ENOTDIR only, `Unknown` for any other error). Asked as
+`symlink_metadata(p).is_ok()`, an EIO or ENOTCONN from a mount that dropped
+reads as "gone": the removal reports `Removed`, the record is cleared, and the
+old copy is left with nothing to finish it. Every decision that removes
 something or clears a record asks `presence` and treats `Unknown` as a reason
 to wait — reconcile files it under `waiting`, a removal is a `Leftover`, a
 retire refuses to rename past it, `MoveTransaction::remove` refuses to discard
@@ -529,8 +552,8 @@ a copy whose publication it cannot read (`Publication::Unknown`).
 `provisioning::entry_exists_quiet` survives only for *finding* work.
 
 **A publish that reported an error but left its file is a publish**
-(`move_engine`, `publishing`): a `sync_all` that fails after the bytes landed
-used to roll the move back and clear its record, leaving both copies listed.
+(`move_engine`, `publishing`): rolling the move back over a `sync_all` that
+fails after the bytes landed clears its record and leaves both copies listed.
 A record without `PROJECT_INFO.md` in `published.json` (a failed read-back)
 measures that entry against the original's time instead of failing forever.
 
@@ -556,11 +579,11 @@ with every name written into it and a mode-555 folder would refuse its own
 files; the project folder keeps the target's defaults. It
 asks the target once whether it ignores case (`target_ignores_case`, a probe
 pair in staging) and, if so, reads the record for names that differ only in case
-(`case_clashes`) before copying. 3.12.0 made every file empty first and filled
-it in a second pass: on a cloud mount that uploaded each file twice, the second
-write cancelling the first a thousand times over, and with rclone's
-`--vfs-cache-mode off` the second open is refused outright. A file name the
-target will not take is now found when the file is reached (`name_refusal`),
+(`case_clashes`) before copying. Making every file empty first and filling it
+in a second pass uploads each file twice on a cloud mount, the second write
+cancelling the first, and with rclone's `--vfs-cache-mode off` the second open
+is refused outright. A file name the
+target will not take is found when the file is reached (`name_refusal`),
 still before anything is published. **Each file is copied as it is when it is
 reached**, and recorded as copied — its time from the handle it was read
 through, its size the bytes that arrived — and then **the copy is settled**
@@ -572,7 +595,7 @@ every tenth of a second — does not stop the move: after the last round the
 copy is published as the last round left it, consistent with its record, and
 the merge after the retire carries what changed since. That walk is the move's
 second and last look at the original; `verify_source_unchanged` is only
-recovery's now. Reconcile clears a probe
+recovery's. Reconcile clears a probe
 a killed move left, and only the names a probe holds.
 
 **Every removal asks first whether the mount hides links**
@@ -591,29 +614,32 @@ read-only attribute cleared before `RemoveDirectoryW` (`clear_read_only_folder`,
 real folders only — on a link it would reach the target).
 
 **A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
-indexer holding a freshly written tree; the short one discarded a verified staging
-copy at publish. On Windows a refused folder rename means a program has something
-in it open (`describe_rename_error`).
+indexer holding a freshly written tree; the file rename's is a third of a second,
+and a bare `fs::rename` asks once. Nothing in a call says which it renames, so
+`tests/layering.rs` names every other rename under `src/core` with what it
+renames. On Windows a refused folder rename means a program has something in it
+open (`describe_rename_error`).
 
 ## Jobs, and the lock split
 
 **A long operation is a job: a process of its own, described by files in the
-data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` — and,
-from Phase 4 of the plan, the app — write `jobs/<id>/request.json` and start
+data dir** (`core::jobs`). `fastf move`/`copy-to`/`delete`/`reconcile` and the
+app write `jobs/<id>/request.json` and start
 this binary as `fastf --fastf-job <id>` (`core::jobs::WORKER_FLAG`, taken off
 argv in `main` before clap), detached: `setsid` on unix, `DETACHED_PROCESS |
 CREATE_NEW_PROCESS_GROUP` plus a breakaway attempt on Windows, reaped on a
 thread so a long-lived app leaves no zombie. **On Linux with a user bus it goes
 through `systemd-run --user --scope`** (`in_a_scope_of_its_own`), because a
 child inherits its starter's cgroup, and a launcher's service with systemd's
-default `ExitType=main` SIGTERMs the whole group when the app quits — measured:
-the move was cancelled. KDE's launcher asks for `ExitType=cgroup` and waits;
+default `ExitType=main` SIGTERMs the whole group when the app quits, which
+cancels the move. KDE's launcher asks for `ExitType=cgroup` and waits;
 nothing promises another will. `systemd-run` that exits before the worker
 writes its state falls back to the plain start. On Windows the worker is started with
 fastf's own standard handles made non-inheritable for the moment
 (`StdHandlesNotInherited`): Windows hands a child every inheritable handle, so a
-command whose output a script captured through a pipe kept that pipe open for
-the worker's whole life, and `$(fastf move … --detach)` waited for the move. The worker (`cli::job_worker`)
+command whose output a script captures through a pipe would keep that pipe
+open for the worker's whole life, and `$(fastf move … --detach)` would wait
+for the move. The worker (`cli::job_worker`)
 holds `jobs/<id>/lock` for its whole life — **alive means the lock is held**,
 the OS's answer, so a reused pid cannot lie — keeps `state.json` current from a
 watcher thread, turns a `cancel` file into the engine's flag, waits patiently
@@ -639,8 +665,8 @@ folder or probe whose id names a live worker (`jobs::live_workers`,
 told. **Whichever data dir started it**: `owned_by` also asks the operating
 system (`util::process::is_live_fastf_since`) whether the id's pid is a fastf
 still running that started before the id was minted — a second data dir on
-the same machine (portable beside installed, a test lab) otherwise took a live
-move's record for an abandoned one and discarded its copy mid-write. The
+the same machine (portable beside installed, a test lab) otherwise takes a live
+move's record for an abandoned one and discards its copy mid-write. The
 process's own pid is excluded: an in-process reconcile after an in-process
 move is how the library is tested. A job also owns what it **claims** (`jobs::claim`, a file in
 `jobs/<id>/owns/`): a reconcile claims each removal it defers before it drops
@@ -661,10 +687,13 @@ process" (`lockfile::describe_holder_with`, set by `main`).
 ## Copying projects out
 
 `copy_engine::copy_project_configured` is a move that keeps its source: the same
-`MoveManifest::scan`, `MoveTransaction`, `copy_to_staging`, `verify_destination`,
-`verify_source_unchanged` and atomic publish, then nothing. Both engines share
-`transactions`, so **the invariant lives in one place**; a copy has no
-cleanup-pending state.
+`MoveManifest::scan`, `MoveTransaction` and `copy_to_staging`, then the two
+steps both engines call by name — `transactions::settle_record_verify` (settle
+against the original, write the manifest, verify the copy against it, in that
+order) and `transactions::publish` (`PROJECT_INFO.md`, last, uncancellable) —
+then nothing. **The invariant lives in those two**; what each engine keeps for
+itself is its own failpoints, its sentences and, for a move, the probe, the
+holders and the resume. A copy has no cleanup-pending state.
 
 **`resolve_destination` is the whole rule**, checked before any confirmation: a
 real directory, not inside the project (checked first, for the right message), not
@@ -731,12 +760,12 @@ as removed) until a pass `records::SETTLE_SECS` later still finds it gone,
 because rclone put removed folders back from uploads still queued. **A
 settling record is a quiet item** (`attention::A_SETTLE`: `Waiting` until its
 settle is up, not counted by the header's chip, then `Auto`, so the app's own
-reconcile runs the pass that clears it — without an item nothing started that
-pass, and a file an upload put back stayed). **And discovery never lists a
+reconcile runs the pass that clears it — without an item nothing starts that
+pass, and a file an upload put back stays). **And discovery never lists a
 put-back old copy as the project** (`discovery::emptied_by`): a folder an
 in-place pointer or delete record names is skipped while its
-`PROJECT_INFO.md` carries that record's project id — the lab's edit-then-move
-on R2 found the edit's upload landing after the move had removed the file.
+`PROJECT_INFO.md` carries that record's project id — on R2, an edit's upload
+can land after the move has removed the file.
 In unit tests the index is read only by the thread holding
 `test_env::EnvGuard` (`test_env::holds_guard`), since the environment is the
 process's.
@@ -823,8 +852,9 @@ anything but a real directory directly under the templates dir, because
 two bundled templates without the lock, before a lock file exists, into a
 templates directory it has just found empty.
 
-`util::fs_retry` wraps the destructive calls (Windows sharing violations from
-Defender or the indexer; read-only attribute clearing).
+`util::fs_retry` wraps the destructive calls: on Windows it waits out the
+sharing violations of Defender or the indexer and clears the read-only
+attribute; everywhere, `with_retry` asks again by what the error means.
 
 ## Tags
 
@@ -866,7 +896,9 @@ cache stores neither.
 ## Search, and resolving a query
 
 **Search** (`core/query.rs`) ANDs its predicates — no OR, no parens: bare term,
-`key=value`, `key=prefix*`, `key>date`, `key<date`, `tag:value`, `tag:prefix*`.
+`key=value`, `key>date`, `key<date`, `tag:value`. A `key=` or `tag:` value takes
+`*` at either end (`pre*`, `*post`, `*mid*`; a bare `*` is any value); a `*` in
+the middle is literal.
 Fields resolve from `Metadata`, then `meta.variables.<slug>`; an unknown key is
 `false` rather than an error, for forward compatibility. `Predicate::Free` is the
 fallthrough (anything below it is unreachable): a case-insensitive substring over
@@ -891,13 +923,13 @@ saturating.
 
 ## Notes and todos
 
-**`core/body.rs` is the body's grammar, and the journal is the notes.** A note is a
+**`core::body` is the body's grammar, and the journal is the notes.** A note is a
 dated entry under `## Notes` — `- 2026-04-20T14:32:11Z — text`, further lines
-indented two spaces — and `body::notes_span` is **the one definition of where
-notes live, shared by the writer and the reader**: a legacy `## Journal` section
-when the file has one, else `## Notes`. Separate answers lose notes written past
-the point where the reader stops. New files never get a `## Journal`; a legacy
-file keeps its shape.
+indented two spaces. **What the writer writes, the reader reads**:
+`body::notes_span` is where a new note goes — a legacy `## Journal` section when
+the file has one, else `## Notes` — and `notes_in` reads both sections, so a
+note is never written past the point where the reader stops. New files never
+get a `## Journal`; a legacy file keeps its shape.
 
 **`render_entry` indents every line after the first**, so nothing inside a note
 can start an entry or a section, and a one-line note's bytes are unchanged.
@@ -944,8 +976,8 @@ case), or under a new label above `### Other` or at the section's end; `Loose`,
 after the last task that sits under no label, or above the first label when there
 is none; `End`, appended at the end of `## Todo`; each opening the section when
 needed. **It answers the ordinal the first todo got** — read back from what it
-wrote, from where the block starts — because the app's guess at it was wrong
-wherever a label's name repeated or differed in case, and the pane settles its
+wrote, from where the block starts — because a guess at it is wrong
+wherever a label's name repeats or differs in case, and the pane settles its
 cursor on that answer. `add_todos_in`, `add_todo_in` and `add_todo` are it with a
 phase or none, so there is one placement rule. A phase name goes through
 `phase_label` first, which strips every leading `#`/space and trailing `:`/space
@@ -1014,8 +1046,11 @@ also written to the log (`util::log`), whichever surface shows it.
 filesystem call asks `faults::check_io(name)`, whose io modes (`eio`,
 `enotconn`, `enotempty`, `estale`, `eacces`, `ebusy`, `enoent`, each with an
 optional `-<n>`: fail n times, then pass) return that `io::Error`, so the code
-takes the path a real mount would send it down. The crash-recovery registry
-scan knows both `check` and `check_io`. `fs:as-rclone` is a decision point:
+takes the path a real mount would send it down. **A failpoint's error
+propagates; it is never dropped with `.ok()`**: a boundary whose injected error
+is thrown away can never fire, so every test of it passes while the boundary
+goes untested. The crash-recovery registry scan knows both `check` and
+`check_io`. `fs:as-rclone` is a decision point:
 `util::fs_kind` answers `Rclone` for every folder, so the settle runs on a
 local disk.
 
@@ -1026,7 +1061,7 @@ processes interleave whole lines, and rotates past 4 MiB under a try-lock.
 A job's steps reach it through the `Ticker`, which logs each step at info once
 `Ticker::subject` names the job, and each entry at **trace** — built under the
 progress lock, written after it — which only `log-level trace` turns on: at
-debug, 3.13's per-entry lines made one move of twelve projects an 85 MB log. A
+debug, per-entry lines make one move of twelve projects an 85 MB log. A
 job's own log takes debug and above through one handle kept open, and rotates
 to `log.1` past 16 MiB; `jobs::prune` also keeps all jobs under 64 MiB, oldest
 first. `util::messages` keeps

@@ -1,21 +1,20 @@
 //! A cross-process lock over the fastf data directory.
 //!
 //! The global ID counter is a read-modify-write across two files
-//! (`counters.toml` plus a scan of every base), and nothing used to serialize it
-//! between processes. An in-process `Mutex` cannot: a `fastf new` in one
-//! terminal cannot see one in another, which is the documented workflow. Ten
-//! concurrent creates reliably minted duplicate IDs.
+//! (`counters.toml` plus a scan of every base), and an in-process `Mutex`
+//! cannot serialize it: a `fastf new` in one terminal cannot see one in
+//! another, which is the documented workflow, and two creates left unserialized
+//! mint the same ID.
 //!
-//! This lock closes that. It is held across the whole plan→create→save span, so
-//! ID allocation and the folder claim are one indivisible step no matter how
-//! many fastf processes are running.
+//! This lock is held across the whole plan→create→save span, so ID allocation
+//! and the folder claim are one indivisible step no matter how many fastf
+//! processes are running.
 //!
 //! **Implementation:** no FFI on Windows — opening the lock file with
 //! `share_mode(0)` makes `CreateFile` itself the mutual-exclusion primitive, and
 //! the OS drops the lock when the process dies (including a hard kill), so a
 //! crash can never strand it. On Unix the same guarantee comes from `flock`,
-//! which the kernel likewise releases on exit. `libc` is already a Unix-only
-//! dependency; nothing new is pulled in.
+//! which the kernel likewise releases on exit.
 
 use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions};
@@ -91,8 +90,9 @@ impl DataLock {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
 
         let deadline = Instant::now() + timeout;
@@ -120,7 +120,9 @@ impl DataLock {
                 // Held by someone else — wait and retry.
                 Ok(None) => {}
                 Err(err) => {
-                    return Err(err).with_context(|| format!("locking {}", path.display()));
+                    return Err(err).with_context(|| {
+                        format!("locking {}", crate::util::paths::display_path(path))
+                    });
                 }
             }
             if let Some(cancel) = patient {
@@ -142,7 +144,7 @@ impl DataLock {
                      the process, not the file.",
                     holder(),
                     timeout.as_secs(),
-                    path.display()
+                    crate::util::paths::display_path(path)
                 );
             }
             std::thread::sleep(POLL_INTERVAL);
@@ -158,11 +160,12 @@ impl DataLock {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
         Ok(try_lock(path)
-            .with_context(|| format!("locking {}", path.display()))?
+            .with_context(|| format!("locking {}", crate::util::paths::display_path(path)))?
             .map(|file| Self {
                 _file: file,
                 path: path.to_path_buf(),
@@ -191,7 +194,7 @@ pub(crate) fn lock_path() -> PathBuf {
 /// [`try_lock`] on a file that must already exist: an `Err` for a missing one.
 fn try_lock_existing(path: &Path) -> Result<Option<File>> {
     if !path.is_file() {
-        anyhow::bail!("{} does not exist", path.display());
+        anyhow::bail!("{} does not exist", crate::util::paths::display_path(path));
     }
     try_lock_with(path, false)
 }
@@ -206,12 +209,10 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
 /// same path fails with `ERROR_SHARING_VIOLATION` while we hold it.
 #[cfg(windows)]
 fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
+    // Held: the file is open in another process and shares nothing, or
+    // another handle on it has an incompatible sharing mode.
+    use crate::util::win::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
     use std::os::windows::fs::OpenOptionsExt;
-
-    /// The file is open in another process and shares nothing.
-    const ERROR_SHARING_VIOLATION: i32 = 32;
-    /// Another handle exists with an incompatible sharing mode.
-    const ERROR_ACCESS_DENIED: i32 = 5;
 
     match OpenOptions::new()
         .create(create)
@@ -301,10 +302,10 @@ mod tests {
             .expect("lock must be available once released");
     }
 
-    /// The timeout message used to end "delete the lock file and retry", which
-    /// is advice that breaks the lock: `flock` is held on the inode, so the
-    /// deleter and the next process end up locking two different files and both
-    /// believing they hold it.
+    /// The timeout message never tells anyone to delete the lock file, which
+    /// breaks the lock: `flock` is held on the inode, so the deleter and the
+    /// next process end up locking two different files and both believing they
+    /// hold it.
     #[test]
     fn the_timeout_message_never_suggests_deleting_the_lock_file() {
         let dir = tempfile::tempdir().unwrap();

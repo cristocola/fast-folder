@@ -1,14 +1,12 @@
 //! Settings, the ID counter and maintenance, as one screen.
 //!
-//! The menu this replaces was seven submenus deep: every value was one item of
-//! one list of one submenu, so seeing what fastf was configured to do meant
-//! walking the whole tree and remembering. Here every setting is a row with its
-//! current value beside it, and the rows are grouped by heading rather than
-//! hidden behind one.
+//! Every setting is a row with its current value beside it, and the rows are
+//! grouped by heading rather than hidden behind one, so what fastf is
+//! configured to do is seen without walking a tree.
 //!
 //! **A row's key is the configuration key**, so a row is written by the same
 //! `cli::config::apply` the command line calls, and a refusal is the refusal
-//! `config set` has always made. Nothing here validates a value itself.
+//! `config set` makes. Nothing here validates a value itself.
 
 use std::path::PathBuf;
 
@@ -37,8 +35,7 @@ pub enum Kind {
     /// A configuration key cycled through a fixed set.
     Choice(&'static str, &'static [&'static str]),
     /// The library bases, edited as lines of text: one base per line, which is
-    /// what the list *is*. The old menu added and removed them one prompt at a
-    /// time and could not show you the set you were building.
+    /// what the list *is*, so the whole set is in view while it is built.
     Bases,
     /// Something that runs rather than something that is set.
     Run(Job),
@@ -56,8 +53,7 @@ impl Kind {
     }
 }
 
-/// The maintenance verbs, which the command line had and the menu reached only
-/// by leaving it.
+/// The maintenance verbs the command line has, run from a row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Job {
     /// Raise the global counter (it never goes down).
@@ -182,17 +178,15 @@ impl SettingsState {
         }
     }
 
-    /// Rebuild after a write, keeping the cursor on the row it was on — or,
-    /// for the first read, on the first row there is.
     /// Open the list's filter.
     pub fn begin_filter(&mut self) {
         self.editing = Some(Editing::Filter);
     }
 
     /// Rebuild the list against the filter. **A plain case-insensitive
-    /// substring over the label and the key**, not a fuzzy match, for the
-    /// reason the templates tab gives: this is tens of rows with known names,
-    /// and a fuzzy hit over tens of rows says yes to almost all of them.
+    /// substring over the label, the value and the key**, not a fuzzy match,
+    /// for the reason the templates tab gives: this is tens of rows with known
+    /// names, and a fuzzy hit over tens of rows says yes to almost all of them.
     ///
     /// A heading survives only if something under it did — a screen of
     /// headings with nothing beneath them is a list that looks broken.
@@ -233,6 +227,8 @@ impl SettingsState {
         self.offset = 0;
     }
 
+    /// Rebuild after a write, keeping the cursor on the row it was on — or,
+    /// for the first read, on the first row there is.
     pub fn refresh(&mut self, settings: Settings) {
         let first = self.rows.is_empty();
         let keep = self.selected;
@@ -463,6 +459,19 @@ const LOG_LEVELS: &[&str] = &crate::util::log::Level::NAMES;
 
 /// Every setting fastf has, grouped, with what it is set to now.
 pub fn rows(s: &Settings) -> Vec<Row> {
+    [
+        project_basics(s),
+        creating_a_project(s),
+        appearance(s),
+        library_bases(s),
+        after_creation(s),
+        id_counter(s),
+        maintenance(s),
+    ]
+    .concat()
+}
+
+fn project_basics(s: &Settings) -> Vec<Row> {
     vec![
         heading("Project basics"),
         text(
@@ -501,6 +510,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.register_naming_pattern.clone(),
             "what `register --rename` names a folder with no template; must contain {id}",
         ),
+    ]
+}
+
+fn creating_a_project(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Creating a project"),
         toggle(
             "Confirm before creating",
@@ -526,6 +540,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             hint: "suffix gives a taken folder name _2, _3, …; error refuses it",
             kind: Kind::Choice("on-name-collision", COLLISION),
         },
+    ]
+}
+
+fn appearance(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Appearance"),
         Row {
             label: "Theme",
@@ -539,6 +558,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             hint: "a row a verb just changed lights up and fades, the focus eases between the panes, a message arrives and dims on its way out — off makes every frame a hard cut; a theme with no colour is always off",
             kind: Kind::Choice("motion", MOTION),
         },
+    ]
+}
+
+fn library_bases(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Library bases"),
         Row {
             label: "Bases",
@@ -556,6 +580,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.recent_default_limit.to_string(),
             "the default --limit for `fastf recent`",
         ),
+    ]
+}
+
+fn after_creation(s: &Settings) -> Vec<Row> {
+    vec![
         heading("After a project is created"),
         toggle(
             "git init",
@@ -581,6 +610,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             s.print_path,
             "print the absolute path on its own line, for `cd \\\"$(fastf new …)\\\"`",
         ),
+    ]
+}
+
+fn id_counter(s: &Settings) -> Vec<Row> {
+    vec![
         heading("ID counter"),
         run(
             "Counter",
@@ -594,6 +628,11 @@ pub fn rows(s: &Settings) -> Vec<Row> {
             String::new(),
             "make every mounted base agree on that number — after copying projects in from elsewhere",
         ),
+    ]
+}
+
+fn maintenance(s: &Settings) -> Vec<Row> {
+    vec![
         heading("Maintenance"),
         Row {
             label: "Log level",
@@ -669,10 +708,9 @@ impl App {
         let Some(Modal::Settings(state)) = self.modals.top_mut() else {
             return Vec::new();
         };
-        // Esc leaves the value alone, which is what "Esc in a settings field →
-        // the value unchanged" has always meant. On the filter it means the
-        // whole screen back, since a filter left behind is a screen missing
-        // rows for a reason nobody can see.
+        // Esc leaves the value alone. On the filter it means the whole screen
+        // back, since a filter left behind is a screen missing rows for a
+        // reason nobody can see.
         if key.code == KeyCode::Esc && !key.ctrl {
             if matches!(state.editing, Some(Editing::Filter)) {
                 state.filter.clear();
@@ -759,11 +797,9 @@ impl App {
 
     /// Ask where projects should live, before the first frame.
     ///
-    /// The old flow asked on the main screen before the app opened, because
-    /// there was no app to ask in. This is a modal over the dashboard: the
-    /// suggestion is editable, Enter creates the folder and records it, and an
-    /// empty answer skips — the question returns next launch until a base is
-    /// set.
+    /// A modal over the dashboard: the suggestion is editable, Enter creates
+    /// the folder and records it, and an empty answer skips — the question
+    /// returns next launch until a base is set.
     pub fn request_onboarding(&mut self, suggested: String) {
         self.modals
             .push(Modal::Onboarding(Onboarding::new(suggested)));
@@ -863,8 +899,8 @@ mod tests {
     }
 
     /// A choice finds where it is by the value `raw_value` reads back, so a
-    /// key missing there cycles from nowhere: Motion wrote `off` on every
-    /// press and could never be turned back on.
+    /// key missing there cycles from nowhere and writes the same answer on
+    /// every press.
     #[test]
     fn every_toggle_and_choice_reads_back_as_one_of_its_answers() {
         let mut settings = sample();

@@ -5,8 +5,10 @@
 //! has the letters somewhere in order, and over a project name that is almost
 //! every row: `lrmx` finds `Lullaby_Remix` and a dozen others. So a word is
 //! first tried as a **substring** (case and accents folded), and only then as a
-//! fuzzy match whose hit characters sit **close together** — a missing or
-//! doubled letter, not letters picked from across the name. Every word of a
+//! fuzzy match whose hit characters sit **close together** — a letter left out
+//! of the word typed (`lulaby`), not letters picked from across the name. A
+//! fuzzy match is still a subsequence: a letter typed that the name does not
+//! have (`lulllaby`) matches nothing. Every word of a
 //! query must match, each on its own, inside the one text it is matched
 //! against; the callers keep fields apart so a word cannot match half in the
 //! id and half in a tag.
@@ -14,8 +16,8 @@
 //! **Two kinds of word are never fuzzy at all** ([`Word::is_literal`]):
 //!
 //! - A word of **digits**. Every folder name carries a date, and a date is a
-//!   pile of digits in order: `45` found `2026-04-15` as a fuzzy hit — the `4`
-//!   of the month and the `5` of the day — which is not what anyone typing a
+//!   pile of digits in order: fuzzed, `45` finds `2026-04-15` — the `4` of
+//!   the month and the `5` of the day — which is not what anyone typing a
 //!   number means. A number means an ID, so `45` is a substring and finds
 //!   `ID0045` and `ID0450` and nothing else.
 //! - A word containing a **path separator**, which is what a hierarchical tag
@@ -45,7 +47,7 @@ pub struct Word {
 
 impl Word {
     /// How far apart a fuzzy hit's characters may sit: the word's own length
-    /// plus a third of it, at least one — a dropped or doubled letter, and no
+    /// plus a third of it, at least one — a letter or two left out, and no
     /// more.
     fn max_span(&self) -> usize {
         self.chars + (self.chars / 3).max(1)
@@ -211,10 +213,11 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_or_doubled_letter_still_finds_the_name() {
+    fn a_letter_left_out_still_finds_the_name_and_one_too_many_does_not() {
         assert!(matches("lulaby", "Lullaby_Remix"));
-        assert!(matches("lulllaby", "Lullaby_Remix") || !matches("lulllaby", "Lullaby_Remix"));
         assert!(matches("onbording", "Client_Onboarding_Acme"));
+        // A third `l` is a letter the name does not have.
+        assert!(!matches("lulllaby", "Lullaby_Remix"));
     }
 
     #[test]
@@ -233,7 +236,7 @@ mod tests {
         assert!(matches("45", "ID0450"));
         assert!(matches("248", "2026-09-01_Lullaby_Remix_ID0248"));
         // Not the 4 of a month and the 5 of a day, which is what fuzzing a
-        // number over a dated folder name used to find.
+        // number over a dated folder name finds.
         assert!(!matches("45", "2026-04-15_Spring_Campaign_ID0107"));
         assert!(!matches("45", "2026-04-05_Old_Shoot_ID0107"));
         assert!(Fuzzy::words("45")[0].is_literal());
@@ -244,7 +247,7 @@ mod tests {
     fn a_hierarchical_tag_is_matched_literally() {
         assert!(matches("client/Acme", "client/Acme"));
         assert!(matches("client/", "client/Acme"));
-        // Fuzzed, this reached every slashed tag there is.
+        // Fuzzed, this would reach every slashed tag there is.
         assert!(!matches("c/A", "client/Acme"));
         assert!(!matches("client/acm", "client-work/acme"));
         assert!(Fuzzy::words("client/Acme")[0].is_literal());

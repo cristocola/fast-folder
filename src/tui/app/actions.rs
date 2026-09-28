@@ -1,7 +1,7 @@
 //! The single-project actions as native dialogs: the action-menu modal,
 //! the text prompt, the yes/no confirm, the multi-pick for tags, and the pure
 //! lookups that feed them. The verbs themselves are declared once in
-//! `command.rs`; this module holds the modal state a verb opens and the lists
+//! `tui::command`; this module holds the modal state a verb opens and the lists
 //! its pickers show, so `update` stays a function of data and not of closures.
 
 use std::path::PathBuf;
@@ -40,37 +40,58 @@ impl ActionsState {
     }
 }
 
+/// The projects a dialog was opened about: the marks in view, or the
+/// selection, by path.
+///
+/// **A dialog carries its targets rather than re-reading the selection**: a
+/// discovery arriving under an open dialog takes a marked row out of the list,
+/// or moves the cursor when the named row is no longer in the snapshot, and a
+/// verb built from the selection at Enter would land on a project other than
+/// the ones on screen. `App::targets_now` takes them as the dialog opens and
+/// `App::still_here` resolves them at its answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Targets {
+    pub paths: Vec<PathBuf>,
+    /// Asked over marks, so the verb runs as a batch over what is left of
+    /// them — one project included.
+    pub batch: bool,
+}
+
+impl Targets {
+    pub fn one(path: PathBuf) -> Self {
+        Self {
+            paths: vec![path],
+            batch: false,
+        }
+    }
+}
+
 /// What a text prompt's answer does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextThen {
-    /// Rename the project the prompt named, carried by path.
-    ///
-    /// **The dialog carries its target rather than re-reading the selection.**
-    /// The prompt text is built once from the row under the cursor, and the
-    /// action used to be built from whatever was selected when Enter landed —
-    /// so a discovery arriving under an open dialog, which moves the cursor
-    /// when the named row is no longer in the snapshot, could point a
-    /// destructive verb at a different project from the one on screen.
+    /// Rename the project the prompt named, carried by path ([`Targets`]
+    /// says why).
     Rename(std::path::PathBuf),
-    AddTag,
-    /// A todo for the selected project, where the pane cannot show its list:
-    /// written at `TodoPlace`, under a phase when one was named first.
-    AddTodo(crate::core::body::TodoPlace),
-    /// A new phase's name, where the pane cannot show the list; its first
-    /// todo is asked for next, and the two are written together.
-    AddPhase,
+    AddTag(Targets),
+    /// A todo for the project at `project`, where the pane cannot show its
+    /// list: written at `place`, under a phase when one was named first.
+    AddTodo {
+        place: crate::core::body::TodoPlace,
+        project: PathBuf,
+    },
+    /// A new phase's name for the project at this path, where the pane cannot
+    /// show the list; its first todo is asked for next, and the two are
+    /// written together.
+    AddPhase(PathBuf),
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
-    ///
-    /// Carries the single project's path for the same reason `Rename` does;
-    /// a batch delete goes by the marks, which are kept by path already.
-    Delete(std::path::PathBuf),
+    Delete(Targets),
     /// Raise the global ID counter to the number typed.
     RaiseCounter,
     /// The folder to copy into. Refused by the engine rather than here, so the
     /// command line and the app say the same words about the same rule.
-    CopyTo,
+    CopyTo(Targets),
     /// Type the word `discard` to settle an unfinished item by removing it
     /// (`core::attention::Action::Discard`); carries the item's path.
     DiscardAttention(std::path::PathBuf),
@@ -82,16 +103,21 @@ pub enum TextThen {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteState {
     pub area: crate::tui::widgets::text_area::TextArea,
-    /// How many projects the note goes to: the marks, or the one selected.
-    pub count: usize,
+    /// The projects the note goes to: the marks, or the one selected.
+    pub targets: Targets,
 }
 
 impl NoteState {
-    pub fn new(count: usize) -> Self {
+    pub fn new(targets: Targets) -> Self {
         Self {
             area: crate::tui::widgets::text_area::TextArea::new(),
-            count,
+            targets,
         }
+    }
+
+    /// How many projects the note goes to.
+    pub fn count(&self) -> usize {
+        self.targets.paths.len()
     }
 }
 
@@ -120,9 +146,8 @@ impl TextPrompt {
 /// What a yes/no confirm answers. A bare `y`/`n` answers without Enter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfirmThen {
-    /// Unregister the project the question named, carried by path — see
-    /// [`TextThen::Rename`].
-    Unregister(std::path::PathBuf),
+    /// Unregister the projects the question named.
+    Unregister(Targets),
     /// Delete the named template and everything bundled with it.
     DeleteTemplate(String),
     /// Leave the builder, throwing away a template that has been worked on.
@@ -133,10 +158,6 @@ pub enum ConfirmThen {
     DiscardTemplate {
         then_quit: Option<crate::tui::effect::Exit>,
     },
-    /// Delete every marked project (the marks are the batch).
-    DeleteBatch,
-    /// Unregister every marked project (the marks are the batch).
-    UnregisterBatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,9 +167,9 @@ pub struct Confirm {
 }
 
 /// What a multi-pick answers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MultiThen {
-    RemoveTags,
+    RemoveTags(Targets),
 }
 
 /// A list where Space toggles and Enter confirms the picked set.
@@ -258,171 +279,202 @@ impl App {
             _ => return Vec::new(),
         };
         match then {
-            TextThen::Rename(path) => {
-                if let Err(error) = validators::folder_name(&text) {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(error);
-                    }
-                    return Vec::new();
+            TextThen::Rename(path) => self.rename_to(path, text),
+            TextThen::AddPhase(path) => self.add_phase_named(path, text),
+            TextThen::AddTodo { place, project } => self.add_typed_todo(place, project, text),
+            TextThen::AddTag(targets) => self.add_typed_tag(targets, text),
+            TextThen::CopyTo(targets) => self.copy_to_typed(targets, text),
+            TextThen::RaiseCounter => self.raise_counter_to(text),
+            TextThen::DiscardAttention(path) => self.discard_when_typed(path, text),
+            TextThen::Delete(targets) => self.delete_when_typed(targets, text),
+        }
+    }
+
+    fn rename_to(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if let Err(error) = validators::folder_name(&text) {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(error);
+            }
+            return Vec::new();
+        }
+        self.modals.pop();
+        let Some(project) = self.project_at(&path) else {
+            return self.gone_from_the_library();
+        };
+        self.run_action(
+            "renaming…",
+            Action::Rename {
+                project: Box::new(project),
+                name: text,
+            },
+        )
+    }
+
+    fn add_phase_named(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if text.trim().is_empty() {
+            self.modals.pop();
+            return Vec::new();
+        }
+        let Some(name) = crate::core::body::phase_label(&text) else {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(validators::PHASE_NAMELESS.to_string());
+            }
+            return Vec::new();
+        };
+        self.modals.pop();
+        if !self.is_selected(&path) {
+            return self.gone_from_the_library();
+        }
+        self.start_adding(crate::core::body::TodoPlace::Phase(name))
+    }
+
+    fn add_typed_todo(
+        &mut self,
+        place: crate::core::body::TodoPlace,
+        project: PathBuf,
+        text: String,
+    ) -> Vec<Effect> {
+        self.modals.pop();
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        let Some(project) = self.project_at(&project) else {
+            return self.gone_from_the_library();
+        };
+        let next = self
+            .details
+            .get(&project.path)
+            .map(|detail| detail.todos.len())
+            .unwrap_or(0);
+        let effects = self.run_action(
+            "writing…",
+            Action::AddTodos {
+                project: Box::new(project),
+                texts: vec![text],
+                place,
+            },
+        );
+        if !effects.is_empty() {
+            self.pane_pending = Some(pane::PaneTarget::Todo(next));
+        }
+        effects
+    }
+
+    fn add_typed_tag(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        if text.trim().is_empty() {
+            self.modals.pop();
+            return Vec::new();
+        }
+        // Refused under the line, with the rule named, while the
+        // text is still there to correct — the same shape a rename
+        // takes.
+        let tag = match validators::tag(&text) {
+            Ok(tag) => tag,
+            Err(error) => {
+                if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                    prompt.error = Some(error);
                 }
+                return Vec::new();
+            }
+        };
+        self.modals.pop();
+        self.add_tag(tag, &targets)
+    }
+
+    fn copy_to_typed(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        let typed = text.trim().to_string();
+        if typed.is_empty() {
+            self.modals.pop();
+            return Vec::new();
+        }
+        // Expanded here, refused in the engine: `~/backups` has to mean
+        // the same thing it means in `config set bases`, and the rule
+        // about bases is stated once, in `copy_engine`.
+        let destination = match crate::core::config::expand_base_path(&typed) {
+            Ok(path) => path,
+            Err(error) => {
+                self.refuse_under_the_line(format!("{error:#}"));
+                return Vec::new();
+            }
+        };
+        self.modals.pop();
+        let projects = self.still_here(&targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        self.start_background(
+            crate::core::jobs::JobKind::Copy,
+            projects,
+            Some(destination),
+        )
+    }
+
+    fn raise_counter_to(&mut self, text: String) -> Vec<Effect> {
+        match text.trim().parse::<u64>() {
+            Ok(value) => {
                 self.modals.pop();
-                let Some(project) = self.project_at(&path) else {
-                    return self.gone_from_the_library();
-                };
                 self.run_action(
-                    "renaming…",
-                    Action::Rename {
-                        project: Box::new(project),
-                        name: text,
-                    },
+                    settings::Job::RaiseCounter.busy(),
+                    Action::RaiseCounter(value),
                 )
             }
-            TextThen::AddPhase => {
-                if text.trim().is_empty() {
-                    self.modals.pop();
-                    return Vec::new();
-                }
-                let Some(name) = crate::core::body::phase_label(&text) else {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(validators::PHASE_NAMELESS.to_string());
-                    }
-                    return Vec::new();
-                };
-                self.modals.pop();
-                self.start_adding(crate::core::body::TodoPlace::Phase(name))
-            }
-            TextThen::AddTodo(place) => {
-                let place = place.clone();
-                self.modals.pop();
-                if text.trim().is_empty() {
-                    return Vec::new();
-                }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
-                let next = self
-                    .details
-                    .get(&project.path)
-                    .map(|detail| detail.todos.len())
-                    .unwrap_or(0);
-                let effects = self.run_action(
-                    "writing…",
-                    Action::AddTodos {
-                        project: Box::new(project),
-                        texts: vec![text],
-                        place,
-                    },
-                );
-                if !effects.is_empty() {
-                    self.pane_pending = Some(pane::PaneTarget::Todo(next));
-                }
-                effects
-            }
-            TextThen::AddTag => {
-                if text.trim().is_empty() {
-                    self.modals.pop();
-                    return Vec::new();
-                }
-                // Refused under the line, with the rule named, while the
-                // text is still there to correct — the same shape a rename
-                // takes.
-                let tag = match validators::tag(&text) {
-                    Ok(tag) => tag,
-                    Err(error) => {
-                        if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                            prompt.error = Some(error);
-                        }
-                        return Vec::new();
-                    }
-                };
-                self.modals.pop();
-                self.add_tag(tag)
-            }
-            TextThen::CopyTo => {
-                let typed = text.trim().to_string();
-                if typed.is_empty() {
-                    return Vec::new();
-                }
-                self.modals.pop();
-                // Expanded here, refused in the engine: `~/backups` has to mean
-                // the same thing it means in `config set bases`, and the rule
-                // about bases is stated once, in `copy_engine`.
-                let destination = match crate::core::config::expand_base_path(&typed) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        self.warn(format!("{error:#}"));
-                        return Vec::new();
-                    }
-                };
-                let targets = if self.batching() {
-                    self.library.targets()
-                } else {
-                    match self.library.selected().cloned() {
-                        Some(project) => vec![project],
-                        None => return Vec::new(),
-                    }
-                };
-                self.start_background(crate::core::jobs::JobKind::Copy, targets, Some(destination))
-            }
-            TextThen::RaiseCounter => {
-                self.modals.pop();
-                match text.trim().parse::<u64>() {
-                    Ok(value) => self.run_action(
-                        settings::Job::RaiseCounter.busy(),
-                        Action::RaiseCounter(value),
-                    ),
-                    Err(_) => {
-                        self.warn(format!("expected a number, got '{}'", text.trim()));
-                        Vec::new()
-                    }
-                }
-            }
-            TextThen::DiscardAttention(path) => {
-                if !text
-                    .trim()
-                    .eq_ignore_ascii_case(super::attention::DISCARD_WORD)
-                {
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(super::attention::DISCARD_MISMATCH.to_string());
-                    }
-                    return Vec::new();
-                }
-                self.modals.pop();
-                self.resolve_attention(path, crate::core::attention::Action::Discard)
-            }
-            TextThen::Delete(path) => {
-                if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
-                    // The text stays: one Backspace fixes a typo.
-                    if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
-                        prompt.error = Some(validators::DELETE_MISMATCH.to_string());
-                    }
-                    return Vec::new();
-                }
-                self.modals.pop();
-                if self.batching() {
-                    let targets = self.library.targets();
-                    return self.start_background(
-                        crate::core::jobs::JobKind::Delete,
-                        targets,
-                        None,
-                    );
-                }
-                let Some(project) = self.project_at(&path) else {
-                    return self.gone_from_the_library();
-                };
-                self.start_background(crate::core::jobs::JobKind::Delete, vec![project], None)
+            Err(_) => {
+                self.refuse_under_the_line(format!("expected a number, got '{}'", text.trim()));
+                Vec::new()
             }
         }
     }
 
-    /// One tag, on the selection or on every mark.
-    pub(super) fn add_tag(&mut self, tag: String) -> Vec<Effect> {
-        if self.batching() {
-            return self.start_job(jobs::JobKind::AddTag(tag), None);
+    /// A refusal of what was typed: under the prompt's line, with the text
+    /// still there to correct.
+    fn refuse_under_the_line(&mut self, error: String) {
+        if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+            prompt.error = Some(error);
         }
-        let Some(project) = self.library.selected().cloned() else {
+    }
+
+    fn discard_when_typed(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        if !text
+            .trim()
+            .eq_ignore_ascii_case(super::attention::DISCARD_WORD)
+        {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(super::attention::DISCARD_MISMATCH.to_string());
+            }
             return Vec::new();
-        };
+        }
+        self.modals.pop();
+        self.resolve_attention(path, crate::core::attention::Action::Discard)
+    }
+
+    fn delete_when_typed(&mut self, targets: Targets, text: String) -> Vec<Effect> {
+        if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
+            // The text stays: one Backspace fixes a typo.
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(validators::DELETE_MISMATCH.to_string());
+            }
+            return Vec::new();
+        }
+        self.modals.pop();
+        // What is left of what the question named, and nothing else:
+        // the word was typed about those folders.
+        let projects = self.still_here(&targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        self.start_background(crate::core::jobs::JobKind::Delete, projects, None)
+    }
+
+    /// One tag, on the projects its question was about.
+    pub(super) fn add_tag(&mut self, tag: String, targets: &Targets) -> Vec<Effect> {
+        let mut projects = self.still_here(targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        if targets.batch {
+            return self.start_job_over(jobs::JobKind::AddTag(tag), projects);
+        }
+        let project = projects.remove(0);
         self.run_action(
             "tagging…",
             Action::AddTag {
@@ -432,14 +484,16 @@ impl App {
         )
     }
 
-    /// One note, on the selection or on every mark.
-    fn add_note(&mut self, text: String) -> Vec<Effect> {
-        if self.batching() {
-            return self.start_job(jobs::JobKind::Note(text), None);
+    /// One note, on the projects its question was about.
+    pub(super) fn add_note(&mut self, text: String, targets: &Targets) -> Vec<Effect> {
+        let mut projects = self.still_here(targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
         }
-        let Some(project) = self.library.selected().cloned() else {
-            return Vec::new();
-        };
+        if targets.batch {
+            return self.start_job_over(jobs::JobKind::Note(text), projects);
+        }
+        let project = projects.remove(0);
         // From the pane, the cursor follows the note to where it lands: the
         // end of the list. From the list, the pane's cursor is not in play.
         let next = self
@@ -484,7 +538,7 @@ impl App {
             self.info("no note written");
             return Vec::new();
         }
-        self.add_note(text)
+        self.add_note(text, &note.targets)
     }
 
     pub(super) fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
@@ -494,11 +548,10 @@ impl App {
                 self.modals.pop();
                 Vec::new()
             }
-            // Enter is the commonest reflex there is on a two-button dialog,
-            // and nothing bound it in `Context::Modal` — so it fell through to
-            // the registry and produced silence. It answers `y`, which is the
-            // key line's first entry and the default every `confirm` in this
-            // app already offers.
+            // Enter, the commonest reflex on a two-button dialog, answers `y`:
+            // the key line's first entry and the default every `confirm` in
+            // this app offers. Nothing binds it in `Context::Modal`, so without
+            // this arm it falls through to the registry and does nothing.
             KeyCode::Enter => self.answer_confirm(true),
             _ => self.lookup_and_run(key),
         }
@@ -514,10 +567,15 @@ impl App {
             return Vec::new();
         }
         match then {
-            ConfirmThen::Unregister(path) => {
-                let Some(project) = self.project_at(&path) else {
+            ConfirmThen::Unregister(targets) => {
+                let mut projects = self.still_here(&targets);
+                if projects.is_empty() {
                     return self.gone_from_the_library();
-                };
+                }
+                if targets.batch {
+                    return self.start_job_over(jobs::JobKind::Unregister, projects);
+                }
+                let project = projects.remove(0);
                 self.run_action("unregistering…", Action::Unregister(Box::new(project)))
             }
             ConfirmThen::DeleteTemplate(slug) => {
@@ -532,11 +590,6 @@ impl App {
                     None => Vec::new(),
                 }
             }
-            ConfirmThen::DeleteBatch => {
-                let targets = self.library.targets();
-                self.start_background(crate::core::jobs::JobKind::Delete, targets, None)
-            }
-            ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
         }
     }
 
@@ -559,21 +612,23 @@ impl App {
 
     pub(super) fn submit_multi_pick(&mut self) -> Vec<Effect> {
         let (chosen, then) = match self.modals.top() {
-            Some(Modal::MultiPick(pick)) => (pick.chosen(), pick.then),
+            Some(Modal::MultiPick(pick)) => (pick.chosen(), pick.then.clone()),
             _ => return Vec::new(),
         };
         self.modals.pop();
         match then {
-            MultiThen::RemoveTags => {
+            MultiThen::RemoveTags(targets) => {
                 if chosen.is_empty() {
                     return Vec::new();
                 }
-                if self.batching() {
-                    return self.start_job(jobs::JobKind::RemoveTags(chosen), None);
+                let mut projects = self.still_here(&targets);
+                if projects.is_empty() {
+                    return self.gone_from_the_library();
                 }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
+                if targets.batch {
+                    return self.start_job_over(jobs::JobKind::RemoveTags(chosen), projects);
+                }
+                let project = projects.remove(0);
                 self.run_action(
                     "removing tags…",
                     Action::RemoveTags {
@@ -593,6 +648,7 @@ impl App {
         if targets.is_empty() {
             return Vec::new();
         }
+        let asked = self.targets_now();
         let available: Vec<String> = self
             .library
             .known_tags
@@ -608,7 +664,7 @@ impl App {
         if available.is_empty() {
             self.modals.push(Modal::TextPrompt(TextPrompt::new(
                 validators::ADD_TAG_PROMPT,
-                TextThen::AddTag,
+                TextThen::AddTag(asked),
             )));
             return Vec::new();
         }
@@ -626,8 +682,11 @@ impl App {
             detail: String::new(),
             value: crate::tui::app::actions::NEW_TAG.to_string(),
         });
-        self.modals
-            .push(Modal::Pick(PickState::new(title, items, Then::AddTag)));
+        self.modals.push(Modal::Pick(PickState::new(
+            title,
+            items,
+            Then::AddTag(asked),
+        )));
         Vec::new()
     }
 
@@ -645,24 +704,13 @@ impl App {
                 value: path.display().to_string(),
             })
             .collect();
+        let asked = self.targets_now();
         self.modals.push(Modal::Pick(PickState::new(
             "Move to which base?",
             items,
-            Then::MoveToBase,
+            Then::MoveToBase(asked),
         )));
         Vec::new()
-    }
-
-    /// A move as a one-item job, with the progress modal up while it runs.
-    pub(super) fn run_move(&mut self, target: PathBuf) -> Vec<Effect> {
-        let Some(project) = self.library.selected().cloned() else {
-            return Vec::new();
-        };
-        self.start_background(
-            crate::core::jobs::JobKind::Move,
-            vec![project],
-            Some(target),
-        )
     }
 
     /// `M`/`J`: read the full metadata or journal on a worker, then show it.
@@ -696,11 +744,25 @@ impl App {
         path: PathBuf,
         kind: ViewKind,
     ) -> Vec<Effect> {
-        self.modals.push(Modal::message(
-            title.clone(),
-            "reading…",
-            MessageLevel::Info,
-        ));
-        vec![Effect::LoadView { title, path, kind }]
+        let request = self.open_reading(&title);
+        vec![Effect::LoadView {
+            request,
+            title,
+            path,
+            kind,
+        }]
+    }
+
+    /// Put up the dialog a worker's read will fill, and number the read.
+    ///
+    /// **The answer names its question by that number, not by the title**:
+    /// two projects can carry one id (`copy-to` keeps it), so two dialogs can
+    /// carry one title, and a slow read of the first would land as the
+    /// second's contents.
+    pub(super) fn open_reading(&mut self, title: &str) -> u64 {
+        self.modals
+            .push(Modal::message(title, "reading…", MessageLevel::Info));
+        self.view_request += 1;
+        self.view_request
     }
 }

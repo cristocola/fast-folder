@@ -10,8 +10,8 @@ use std::fs;
 
 /// Bulk register: the preview first, then the commit, both in the app.
 ///
-/// `--recursive` was command-line only, so onboarding a folder of legacy
-/// projects meant leaving the tool the whole flow was designed for.
+/// Onboarding a folder of legacy projects never means leaving the app for
+/// `--recursive`.
 #[test]
 fn the_app_can_register_a_whole_base_after_previewing_it() {
     let sb = Sandbox::new();
@@ -92,8 +92,7 @@ fn escaping_the_bulk_register_preview_writes_nothing() {
     );
 }
 
-/// Registering with "today" as the created date, which the old menu could not
-/// say at all.
+/// Registering with "today" as the created date.
 #[test]
 fn the_app_can_register_with_todays_date() {
     let sb = Sandbox::new();
@@ -179,8 +178,8 @@ fn the_wizard_creates_a_project_and_selects_it() {
     );
 }
 
-/// Apply asked template, target, dry-run and every variable, then rejected the
-/// target. The target is a field now, and it is checked where it was typed.
+/// Apply's target is a field, checked where it is typed, and the refused text
+/// stays on the line to be corrected.
 #[test]
 fn apply_refuses_a_missing_target_where_it_was_typed() {
     let sb = Sandbox::new();
@@ -242,8 +241,8 @@ fn apply_fills_in_a_folder_from_the_preview() {
     );
 }
 
-/// Maintenance: the three commands the menu could only reach by leaving it —
-/// reindex, reconcile, and where fastf keeps its things.
+/// Maintenance, from the settings screen: reindex, reconcile, and where fastf
+/// keeps its things.
 #[test]
 fn maintenance_runs_reindex_recover_and_data_locations() {
     let sb = Sandbox::new();
@@ -252,10 +251,9 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(900)
-        // **Named, not counted.** These used to be `.down(19)` and two more
-        // steps, so inserting one row anywhere above Maintenance broke three
-        // assertions about something else entirely. `/` narrows the list to
-        // the row this is about, which is what the screen is for.
+        // **Named, not counted.** A `.down(n)` breaks on any row inserted
+        // above its target; `/` narrows the list to the row this is about,
+        // which is what the screen is for.
         .key("/")
         .key("reindex")
         .enter() // keep the filter, back on the list
@@ -294,14 +292,11 @@ fn maintenance_runs_reindex_recover_and_data_locations() {
     );
 }
 
-/// The template builder, end to end through the menu: build one, notice the
-/// folder is wrong on the review summary, fix it there, and save.
+/// The template builder, end to end: build one section by section, correct a
+/// folder name in place, and save.
 ///
-/// New mode used to end at a bare "Save template?" — noticing anything wrong
-/// meant answering no and starting the six steps again. This is also the first
 /// The builder is one list of sections, entered in any order, and Save says
-/// what `Template::validate` refuses. The six-step linear pass is gone: it
-/// made noticing a wrong folder name on the summary mean starting again.
+/// what `Template::validate` refuses.
 #[test]
 fn the_builder_saves_a_template_built_section_by_section() {
     let sb = Sandbox::new();
@@ -331,8 +326,8 @@ fn the_builder_saves_a_template_built_section_by_section() {
         .enter()
         // The builder stays up until the write lands — a refusal from under
         // the data lock has to have something to land on — so this pause is
-        // load-bearing now rather than slack: the Esc below belongs to the
-        // tab, and while a save is in flight the builder ignores it.
+        // load-bearing, not slack: the Esc below belongs to the tab, and while
+        // a save is in flight the builder ignores it.
         .pause(2500)
         .esc() // the tab → the dashboard
         .pause(400)
@@ -360,6 +355,17 @@ fn the_builder_refuses_to_save_a_template_that_would_not_load() {
     // The guide offers itself the first time templates come up; this test
     // is about the editor, not the offer.
     sb.guide_seen();
+    let templates = || {
+        let mut names: Vec<String> = fs::read_dir(sb.install.join("templates"))
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let before = templates();
+    assert!(!before.is_empty(), "the bundled templates are there");
 
     let script = pty::Script::new()
         .key(KEY_TEMPLATES)
@@ -377,14 +383,10 @@ fn the_builder_refuses_to_save_a_template_that_would_not_load() {
         screen.contains("Cannot save:"),
         "an invalid template must be refused, not written:\n{screen}"
     );
-    assert!(
-        !sb.install.join("templates/template.yaml").exists(),
-        "nothing was written"
-    );
+    assert_eq!(templates(), before, "nothing was written");
 }
 
-/// A marker file: a path and no contents at all. The old builder could not
-/// declare one — its content loop only ended once a line had been typed.
+/// The builder declares a marker file: a path and no contents at all.
 #[test]
 fn the_builder_can_declare_an_empty_file() {
     let sb = Sandbox::new();
@@ -604,12 +606,11 @@ fn a_relaunched_run_with_nothing_interactive_waits_for_enter() {
     );
 }
 
-/// The third case, and the one that cost a release: `FASTF_RELAUNCHED` is
-/// **inherited**. Every shell in a window fastf opened carries it until that
-/// window is closed, and so does everything started from that shell — a package
-/// build among them. `fastf completions bash` in a PKGBUILD's `package()` then
-/// found the variable set, a terminal on stdin and stderr, and stopped to wait
-/// for an Enter nobody was there to press.
+/// `FASTF_RELAUNCHED` is **inherited**: every shell in a window fastf opened
+/// carries it until that window is closed, and so does everything started from
+/// that shell — a package build among them. A `fastf completions bash` there
+/// has the variable set and a terminal on stdin and stderr, and nobody to press
+/// Enter.
 ///
 /// So the variable is deliberately *all* this run is given: no `--relaunched`,
 /// because nothing inherits that, which is exactly why the claim lives there.
@@ -666,7 +667,7 @@ fn a_relaunched_run_that_showed_a_picker_does_not_wait() {
         DEADLINE,
     );
 
-    assert_eq!(code, 0, "leaving the browser is not a failure:\n{out}");
+    assert_eq!(code, 0, "leaving the app is not a failure:\n{out}");
     assert!(
         !out.contains("press Enter to close"),
         "a window that already waited for the user must not wait again:\n{out}"
@@ -789,9 +790,8 @@ fn run_cli(sb: &Sandbox, args: &[&str], script: Vec<pty::Keystroke>) -> (String,
     )
 }
 
-/// `q` cancels the ambiguity picker, the same as Esc. Both were dialoguer's
-/// contract and both are kept: the picker interrupted a verb, and getting out
-/// of it must not need a key anyone has to look up.
+/// `q` cancels the ambiguity picker, the same as Esc: the picker interrupted a
+/// verb, and getting out of it must not need a key anyone has to look up.
 #[test]
 fn q_cancels_the_ambiguity_picker_like_esc() {
     let sb = Sandbox::new();

@@ -1,10 +1,10 @@
-//! Background logical-size snapshots for the guided projects browser.
+//! Background logical-size snapshots for the guided app's project list.
 //!
 //! Sizing a project means walking its whole tree, and on a network share that
-//! takes seconds. The browser used to do it inline, so the list only appeared
-//! once every visible row had been walked. Here the walks happen on worker
-//! threads and the browser draws immediately from whatever has landed, so a slow
-//! filesystem costs a filling-in column instead of a frozen interface.
+//! takes seconds. Done inline, the list would appear only once every visible
+//! row had been walked. Here the walks happen on worker threads and the app
+//! draws immediately from whatever has landed, so a slow filesystem costs a
+//! filling-in column instead of a frozen interface.
 //!
 //! Nothing is persisted: snapshots live in the scanner and die with it. What a
 //! size does and does not mean is `util::tree_size`'s business.
@@ -23,7 +23,7 @@ use std::thread::JoinHandle;
 /// make a spinning disk seek against itself.
 const WORKERS: usize = 2;
 
-/// What the browser knows about one project's size at this instant.
+/// What the app knows about one project's size at this instant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SizeCell {
     /// Not measured yet. The scanner may not even have started this one.
@@ -58,8 +58,8 @@ impl Default for SizeScanner {
 }
 
 /// 4 MiB, matching `tui::runtime::spawn_worker`. The default a Windows thread
-/// gets is 1 MiB, and 256 frames of a `read_dir` iterator already overflowed
-/// one — which is why `paths::MAX_WALK_DEPTH` is 64 rather than 256.
+/// gets is 1 MiB, and 256 frames of a `read_dir` iterator overflow one —
+/// which is why `paths::MAX_WALK_DEPTH` is 64 rather than 256.
 const WORKER_STACK: usize = 4 * 1024 * 1024;
 
 impl SizeScanner {
@@ -143,7 +143,7 @@ impl SizeScanner {
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
-        // A panicking worker must not take the browser down with it: the data
+        // A panicking worker must not take the app down with it: the data
         // behind the lock is a disposable cache of measurements.
         self.state.lock().unwrap_or_else(|err| err.into_inner())
     }
@@ -163,7 +163,7 @@ impl Drop for SizeScanner {
         // **At most `DROP_WAIT`, then detached.** A walk reads the flag between
         // entries, and a worker blocked inside one — a stat on a mount that
         // stopped answering — reads nothing until the kernel gives up on it:
-        // joining it held the quit for as long. Its thread goes with the
+        // joining it would hold the quit for as long. Its thread goes with the
         // process.
         let deadline = std::time::Instant::now() + DROP_WAIT;
         while self.workers.iter().any(|worker| !worker.is_finished())
@@ -273,7 +273,7 @@ mod tests {
     }
 
     /// Re-requesting a visible page happens several times a second while the
-    /// browser is open, so a measured project must not be walked again.
+    /// app is open, so a measured project must not be walked again.
     #[test]
     fn a_measured_path_is_not_queued_again() {
         let tmp = tempfile::tempdir().unwrap();
@@ -354,6 +354,12 @@ mod tests {
             .collect();
         let scanner = SizeScanner::new();
         scanner.request(&dirs);
+        let started = std::time::Instant::now();
         drop(scanner);
+        assert!(
+            started.elapsed() < super::DROP_WAIT + std::time::Duration::from_secs(2),
+            "the drop waits `DROP_WAIT` for its workers and no longer: {:?}",
+            started.elapsed()
+        );
     }
 }

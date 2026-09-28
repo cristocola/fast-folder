@@ -84,9 +84,9 @@ fn existing_project_fails_cleanly() {
         write_template(install, "test", &minimal_template_yaml("test"));
         let mut cfg = Config::default();
         cfg.base_dir = install.join("projects").display().to_string();
-        // The default is now to append `_2`, since a naming pattern need not
-        // contain `{id}`. `error` restores the old refuse-a-duplicate guard,
-        // which is what this test is about.
+        // The default appends `_2`, since a naming pattern need not contain
+        // `{id}`. `error` refuses a duplicate, which is what this test is
+        // about.
         cfg.on_name_collision = fastf::core::config::NameCollision::Error;
         fs::create_dir_all(&cfg.base_dir).unwrap();
 
@@ -119,7 +119,7 @@ fn existing_project_fails_cleanly() {
 #[test]
 fn a_repeated_name_gets_a_numbered_suffix() {
     sandboxed(|install| {
-        // A pattern with no `{id}`, like the bundled templates now ship.
+        // A pattern with no `{id}`, like the gallery templates ship.
         write_template(
             install,
             "noid",
@@ -172,12 +172,8 @@ structure:
     });
 }
 
-/// `on_name_collision = "error"` restores refuse-a-duplicate.
-///
-/// The suffix policy is the default and the one that was covered; the other
-/// branch had no test anywhere, so a create that should have been refused would
-/// have quietly landed on `_2` instead — the exact outcome someone sets this
-/// key to prevent.
+/// `on_name_collision = "error"` refuses a duplicate: quietly landing on `_2`
+/// is the exact outcome someone sets this key to prevent.
 #[test]
 fn on_name_collision_error_refuses_instead_of_suffixing() {
     sandboxed(|install| {
@@ -317,10 +313,10 @@ fn counter_self_heals_from_existing_projects() {
     });
 }
 
-/// The point of the move: the counter lives with the projects, so a second
-/// machine reading the same base sees the same number without any shared
-/// config. Simulated by pointing a *fresh* data directory at the same base —
-/// which is exactly what the other half of a dual-boot install looks like.
+/// The counter lives with the projects, so a second machine reading the same
+/// base sees the same number without any shared config. Simulated by pointing
+/// a *fresh* data directory at the same base — which is exactly what the other
+/// half of a dual-boot install looks like.
 #[test]
 fn the_counter_travels_with_the_base_not_the_data_dir() {
     sandboxed(|install| {
@@ -486,9 +482,9 @@ files:
 
 #[test]
 fn template_validate_rejects_absolute_file_path() {
-    // `validate()` still guards `self.files` against escaping paths — the safety
-    // net for templates built in memory (e.g. the UI's save path), which never
-    // touch the folder-form disk scan.
+    // `validate()` guards `self.files` against escaping paths too — the safety
+    // net for a template built in memory, which never touches the folder-form
+    // disk scan.
     let mut t = template::Template::default();
     t.name = "bad".to_string();
     t.slug = "bad".to_string();
@@ -781,8 +777,8 @@ fn project_info_md_written_on_new_with_resolved_variables() {
 #[test]
 fn project_info_metadata_round_trips_via_yaml() {
     // Parsing the file back via read_metadata should reconstruct the typed
-    // Metadata struct cleanly — this is the contract that future search /
-    // index tools will rely on.
+    // Metadata struct cleanly — this is the contract discovery and search
+    // rely on.
     sandboxed(|install| {
         write_template(install, "test", &minimal_template_yaml("test"));
 
@@ -872,38 +868,64 @@ structure:
     });
 }
 
+/// fastf writes `PROJECT_INFO.md` itself, so no template it ships holds one at
+/// the root of its `files/`: neither of the two a first run writes, nor any in
+/// the gallery. Read from the folder, since the loader strips a root-level
+/// declaration from what it hands back.
 #[test]
 fn bundled_templates_do_not_emit_duplicate_project_info() {
-    // Auto-gen owns PROJECT_INFO.md — bundled templates must not also
-    // declare it as a content file (would conflict / overwrite). This guards
-    // against accidental re-introduction.
-    use fastf::core::template::Template;
-    let bundled_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples")
-        .join("templates");
-    // Also check the strings baked into bootstrap.rs by parsing each file
-    // currently shipped in the gallery.
-    for entry in fs::read_dir(&bundled_dir).unwrap() {
-        let entry = entry.unwrap();
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let manifest = dir.join("template.yaml");
-        if !manifest.exists() {
-            continue;
-        }
-        let tmpl = Template::load_from_file(&manifest)
-            .unwrap_or_else(|e| panic!("parse {}: {}", manifest.display(), e));
-        for f in &tmpl.files {
-            assert_ne!(
-                f.path,
-                "PROJECT_INFO.md",
-                "{} declares PROJECT_INFO.md but auto-gen now owns it",
-                manifest.display()
-            );
-        }
+    fn roots_of(templates: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = fs::read_dir(templates)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|dir| dir.join("template.yaml").is_file())
+            .collect();
+        found.sort();
+        found
     }
+    fn holds_the_reserved_file(template: &Path) -> bool {
+        fs::read_dir(template.join("files")).is_ok_and(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("PROJECT_INFO.md")
+            })
+        })
+    }
+
+    let gallery = roots_of(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("templates"),
+    );
+    assert!(gallery.len() > 2, "the gallery was found: {gallery:?}");
+    let first_run = sandboxed(|install| {
+        fastf::bootstrap::ensure_bootstrapped().unwrap();
+        let written = roots_of(&install.join("templates"));
+        assert_eq!(written.len(), 2, "a first run writes two: {written:?}");
+        written
+            .iter()
+            .map(|template| (template.clone(), holds_the_reserved_file(template)))
+            .collect::<Vec<_>>()
+    });
+    for (template, holds) in first_run {
+        assert!(!holds, "{} ships a PROJECT_INFO.md", template.display());
+    }
+    for template in gallery {
+        assert!(
+            !holds_the_reserved_file(&template),
+            "{} ships a PROJECT_INFO.md",
+            template.display()
+        );
+    }
+
+    // And the check sees one when it is there.
+    let planted = tempfile::tempdir().unwrap();
+    fs::create_dir_all(planted.path().join("files")).unwrap();
+    fs::write(planted.path().join("files/project_info.md"), "x").unwrap();
+    assert!(holds_the_reserved_file(planted.path()));
 }
 
 // ---------------------------------------------------------------------------
@@ -932,14 +954,13 @@ variables:
     )
 }
 
-/// `--name=.hidden` used to create a project fastf could not see: discovery
-/// skips dot-prefixed directories, so the folder showed up once from the
-/// write-through cache and then vanished at the next rescan.
+/// `--name=.hidden` would create a project fastf cannot see: discovery skips
+/// dot-prefixed directories, so the folder shows up once from the
+/// write-through cache and vanishes at the next rescan.
 ///
-/// `--name=..` was worse. It sanitizes to `""`, `base.join("")` is the base,
-/// which `exists()` answers yes to, so the collision loop moved on to `_2` — and
-/// `create_inner` resolved that against the base's *parent*, planting `_2`
-/// one level above the library.
+/// `--name=..` sanitizes to `""`, and `base.join("")` is the base, which
+/// `exists()` answers yes to — so the collision loop moves on to `_2`, which
+/// resolves against the base's *parent*, one level above the library.
 ///
 /// Both must fail in `plan`, before a single directory is created.
 #[test]
@@ -1041,13 +1062,12 @@ fn a_template_whose_pattern_starts_with_a_dot_cannot_be_saved() {
 // Post-create: the project path is data, never source
 // ---------------------------------------------------------------------------
 
-/// A post-create command used to be `raw.replace("{path}", &path)` and then
-/// `sh -c`. `sanitize_name` leaves `;`, `&`, `$`, `(`, `)`, backtick and `^`
-/// alone — they are all legal in a folder name — so a project called
-/// `Live; touch pwned` split the command in two, and the second half ran.
-///
-/// After the rewrite the shell sees `"$FASTF_PROJECT_PATH"`: one argument, no
-/// re-parsing, whatever the folder is called.
+/// `{path}` in a post-create command reaches the shell as
+/// `"$FASTF_PROJECT_PATH"`: one argument, no re-parsing, whatever the folder is
+/// called. `sanitize_name` leaves `;`, `&`, `$`, `(`, `)`, backtick and `^`
+/// alone — they are all legal in a folder name — so a path pasted into the
+/// command text lets a project called `Live; touch pwned` split the command in
+/// two and run the second half.
 #[cfg(unix)]
 #[test]
 fn a_project_name_full_of_shell_syntax_cannot_split_a_post_create_command() {

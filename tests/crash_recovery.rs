@@ -28,8 +28,8 @@ use std::sync::Mutex;
 use fastf::core::{config::Config, counter::Counters, library, project, provisioning, template};
 // Every use of this is inside `#[cfg(debug_assertions)]` — failpoints are
 // compiled out of release builds, so in a release test build the import itself
-// is dead. The AUR source package's `check()` is a release test build, which is
-// where the warning showed up.
+// is dead. The AUR source package's `check()` is a release test build, where an
+// unguarded import warns.
 #[cfg(debug_assertions)]
 use fastf::util::faults::FAULT_ENV;
 
@@ -356,7 +356,7 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
                 );
                 // Killed before its journal was written, the record holds
                 // nothing a move gets past its first write to: it is removed,
-                // not reported as invalid on every pass for ever (3.13 did).
+                // not reported as invalid on every pass for ever.
                 assert_eq!(
                     state_after.2, 0,
                     "[{point}] the empty record is removed: {first:?}"
@@ -424,12 +424,11 @@ fn hard_killed_staged_moves_reconcile_without_data_loss() {
     }
 }
 
-/// The scenario that motivated all of this: a create killed outright, mid-copy,
-/// with no chance to clean up.
+/// A create killed outright, mid-copy, with no chance to clean up.
 ///
-/// Before, this stranded a folder with no metadata — invisible to `recent`,
-/// `search` and `reindex`, while `reconcile` reported "all projects fully
-/// provisioned". The folder must now be *visible* and *honestly reported*.
+/// The folder it leaves must be *visible* to `recent`, `search` and `reindex`,
+/// and *honestly reported* by `reconcile`: a folder with no metadata is
+/// invisible, and "all projects fully provisioned" over it is a lie.
 /// Debug-only: failpoints are compiled out of release builds, so these have
 /// nothing to trip there.
 #[cfg(debug_assertions)]
@@ -532,11 +531,10 @@ fn hard_kill_before_metadata_does_not_produce_a_phantom_project() {
 
 /// A failpoint that cannot fire is a boundary nobody is testing.
 ///
-/// `reconcile`'s source-cleanup boundary called `faults::check(...).ok()`, which
-/// throws the injected error away — so every other `check` in the file could be
-/// trusted and this one silently could not. The failure it models is real: the
-/// source is gone, the destination is published, and the transaction that records
-/// the remaining bookkeeping cannot be settled yet. Recovery must keep that
+/// `reconcile`'s source-cleanup boundary propagates the injected error rather
+/// than dropping it with `.ok()`. The failure it models is real: the source is
+/// gone, the destination is published, and the transaction that records the
+/// remaining bookkeeping cannot be settled yet. Recovery must keep that
 /// transaction and report it, not declare the move complete.
 #[cfg(debug_assertions)]
 #[test]
@@ -614,14 +612,13 @@ fn a_fault_after_source_cleanup_retains_the_transaction_for_the_next_pass() {
 /// A template save killed outright must leave a manifest that still loads.
 ///
 /// `template.yaml` is what every create reads, so a truncated one takes the
-/// template out of service entirely — the same class of damage the bare
-/// `fs::write` on `config.toml` and `counters.toml` caused before `util::atomic`
-/// existed. The manifest write now goes through the same atomic writer, and the
-/// scratch file it uses is a uniquely named sibling that no loader ever reads.
+/// template out of service entirely. The manifest write goes through
+/// `util::atomic`, and the scratch file it uses is a uniquely named sibling
+/// that no loader ever reads.
 ///
 /// **Design guard, not a regression test** (see `tests/CLAUDE.md`): it passes
-/// against the pre-fix build too, because a failpoint can only be placed
-/// *around* `fs::write`, never inside the window where it had truncated the file
+/// against a bare `fs::write` too, because a failpoint can only be placed
+/// *around* that call, never inside the window where it has truncated the file
 /// and not yet written the bytes. What is genuinely pinned here is that a hard
 /// kill at this boundary leaves a loadable template and no scaffolding behind.
 #[cfg(debug_assertions)]
@@ -682,12 +679,10 @@ fn a_hard_killed_template_save_leaves_a_loadable_manifest() {
 
 /// `ALL_FAULT_POINTS` must list exactly the names the source actually trips.
 ///
-/// The list's own documentation says an invariant test iterates it and asserts
-/// agreement with the call sites; until now nothing referenced the list at all,
-/// so a boundary could gain a failpoint that no list, and therefore no reader,
-/// knew about — and a name could be deleted from the code while the list went on
-/// advertising it. Scanning the source is the only way to check this, since a
-/// failpoint's name is a string literal by design.
+/// Otherwise a boundary can gain a failpoint that no list, and therefore no
+/// reader, knows about — and a name can be deleted from the code while the list
+/// goes on advertising it. Scanning the source is the only way to check this,
+/// since a failpoint's name is a string literal by design.
 #[test]
 fn every_failpoint_in_the_source_is_declared_and_vice_versa() {
     fn collect(dir: &Path, found: &mut Vec<String>) {
@@ -832,10 +827,9 @@ fn force_staged_reaches_the_staged_path_on_one_volume() {
 /// exist?" with "yes, it is the file you are renaming". Every *error* path puts
 /// it back and a failed rollback says where it left it — but a `kill -9` or a
 /// power loss between the two renames reaches neither, and `scan_base` skips
-/// dot-prefixed directories, so the project is simply gone from `recent`,
-/// `search`, `reindex`, `resolve` and the app with nothing recording that it
-/// happened. It was the one multi-step mutation in the crate with no recovery
-/// story.
+/// dot-prefixed directories, so without recovery the project is simply gone
+/// from `recent`, `search`, `reindex`, `resolve` and the app with nothing
+/// recording that it happened.
 ///
 /// The state is planted literally rather than driven through a failpoint, the
 /// same way the pre-v2 marker tests plant their bytes: what is under test is
@@ -877,8 +871,8 @@ fn reconcile_finishes_a_case_rename_that_was_killed_half_way() {
         // the staleness gate to notice: a rename within a directory does not
         // reliably move that directory's mtime on Windows, and `write_cache`
         // re-stamps the index after the rename that publishes it — so the
-        // project stayed missing from a library it had just been put back into.
-        // The Windows leg of CI found that on a green Linux run.
+        // project would stay missing from a library it had just been put back
+        // into.
         let index = fs::read_to_string(base.join(library::CACHE_FILENAME)).unwrap();
         assert!(
             index.contains("ALBUM"),

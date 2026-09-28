@@ -40,6 +40,8 @@ mod movement;
 mod pane_cursor;
 #[path = "tui_update/pane_editor.rs"]
 mod pane_editor;
+#[path = "tui_update/pane_todos.rs"]
+mod pane_todos;
 #[path = "tui_update/registry.rs"]
 mod registry;
 #[path = "tui_update/session.rs"]

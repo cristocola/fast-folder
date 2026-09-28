@@ -7,9 +7,8 @@ mod common;
 use common::{Sandbox, ids_in};
 use std::fs;
 
-/// `fastf id set` used to write one file that `Counters::floor` then ignored,
-/// print "Global ID counter set to 0", and hand the next project ID0005.
-/// The counter only moves up, so the honest answer to a lower value is a refusal.
+/// The counter only moves up, so `fastf id set` below the floor is refused and
+/// names the floor, rather than reporting a change `Counters::floor` ignores.
 #[test]
 fn id_set_below_the_floor_is_refused() {
     let sb = Sandbox::new();
@@ -37,13 +36,12 @@ fn id_set_below_the_floor_is_refused() {
 /// `docs/cli.md` names digits-only prefixes as a supported case — it is why
 /// the numeric lookup tier sits below exact-id. But `Counters::format_id` is a
 /// lossy encoder: prefix `20` with two digits renders project 1 as `2001`, and
-/// reading the number back by parsing the trailing digits answered two
-/// thousand and one. That fed the counter's self-heal floor, and the counter
-/// never descends — so one create from such a template renumbered every
-/// project after it, permanently, and `fastf path 1` could not find the
-/// project numbered 1.
+/// parsing the trailing digits back answers two thousand and one. That feeds
+/// the counter's self-heal floor, and the counter never descends — so one
+/// create from such a template would renumber every project after it,
+/// permanently, and `fastf path 1` could not find the project numbered 1.
 ///
-/// The number is recorded in `PROJECT_INFO.md` now rather than re-derived.
+/// The number is recorded in `PROJECT_INFO.md`, never re-derived from the id.
 #[test]
 fn a_digits_only_id_prefix_does_not_jump_the_counter() {
     let sb = Sandbox::new();
@@ -65,11 +63,9 @@ fn a_digits_only_id_prefix_does_not_jump_the_counter() {
     );
 
     // **One number, said once.** The counter is a number; rendering it as an
-    // id is a template's business, and this line has no template. It used to
-    // format the value with `templates[0]`'s prefix and digits and then print
-    // "next" raw beside it, so a digits-only prefix produced
-    // `Global project ID: 2001  (next will be 2)` — the same quantity twice,
-    // spelled two ways, on one line.
+    // id is a template's business, and this line has no template: a rendered
+    // `2001` beside a raw "next" of 2 is the same quantity twice, spelled two
+    // ways, on one line.
     let headline = shown
         .lines()
         .find(|line| line.contains("Global project ID:"))
@@ -106,8 +102,9 @@ fn a_digits_only_id_prefix_does_not_jump_the_counter() {
     );
 }
 
-/// Deleting every project must not let the counter fall back and reissue IDs.
-/// `fastf id reset` used to report success and change nothing at all.
+/// Deleting every project must not let the counter fall back and reissue IDs,
+/// so there is no `fastf id reset`: the command refuses and points at
+/// `id sync`.
 #[test]
 fn id_reset_is_gone_and_says_why() {
     let sb = Sandbox::new();
@@ -146,8 +143,8 @@ fn id_sync_propagates_the_highest_id_to_every_base() {
 /// A base whose counter file outranks its own projects is authoritative — that
 /// is what carries the number across a machine that cannot see the other bases.
 ///
-/// Not a regression the floor could have caught (it already consulted base counters); this
-/// pins the rule down so a future simplification of `floor` cannot drop it.
+/// A design guard: it pins the rule so a simplification of `floor` cannot drop
+/// it.
 #[test]
 fn a_base_counter_above_its_projects_is_authoritative() {
     let sb = Sandbox::new();
@@ -168,8 +165,7 @@ fn a_base_counter_above_its_projects_is_authoritative() {
 /// Without re-stamping the cache, every create would force a full rescan of
 /// every base, defeating the cache entirely.
 ///
-/// Guards the cost of propagation rather than an old bug: propagation never
-/// wrote other bases at all, so it passed this vacuously.
+/// A design guard on the cost of propagation.
 #[test]
 fn propagating_the_counter_does_not_invalidate_other_bases_caches() {
     let sb = Sandbox::new();
@@ -195,10 +191,9 @@ fn propagating_the_counter_does_not_invalidate_other_bases_caches() {
 /// A counter write that fails must say so.
 ///
 /// The data-directory counter is the one that spans every base this machine has
-/// written to, so it is what stops an unplugged drive restarting numbering. Its
-/// two per-base siblings warn when they cannot be written; this one dropped the
-/// error on the floor (`let _ = local.save()`), so the protection could be gone
-/// with nothing on screen to say it.
+/// written to, so it is what stops an unplugged drive restarting numbering.
+/// Like its two per-base siblings it warns when it cannot be written, or the
+/// protection can be gone with nothing on screen to say it.
 ///
 /// A read-only data directory is what makes only the *write* fail: the config
 /// still loads, the lock file already exists, and the atomic write cannot claim
@@ -236,12 +231,11 @@ fn a_failed_counter_write_warns_instead_of_going_quiet() {
 /// input that knows about a base which is not mounted.
 ///
 /// `Counters::floor` takes the max of three things, and only this file spans
-/// *every* base the machine has written to. Reading it as zero — which
-/// `unwrap_or(0)` did — leaves the floor coming from the mounted bases alone,
-/// so the next number handed out may be one the unplugged drive already used.
-/// It cannot be recovered from a file that will not parse; what the fix owes
-/// the user is to say the guard is not in play, before two projects share an ID
-/// rather than after.
+/// *every* base the machine has written to. Reading it as zero leaves the floor
+/// coming from the mounted bases alone, so the next number handed out may be
+/// one the unplugged drive already used. It cannot be recovered from a file
+/// that will not parse; what fastf owes the user is to say the guard is not in
+/// play, before two projects share an ID rather than after.
 ///
 /// `hostile_fs.rs` corrupts this same file with every base still mounted, where
 /// `library::max_id` covers for the zero and the defect is invisible. Unplugging
@@ -292,12 +286,8 @@ fn an_unreadable_local_counter_is_reported_rather_than_read_as_zero() {
     );
 }
 
-/// A counter file that cannot be read is not a counter at its ceiling.
-///
-/// `print_counter` asked `Counters::load().ok().and_then(next_value)` and
-/// rendered `None` as "(the maximum, 999999999999, is reached)" — so an
-/// unparseable file printed a counter of 1 with a note saying twelve digits had
-/// been used up. Three different facts, and two of them were the same branch.
+/// A counter file that cannot be read is not a counter at its ceiling:
+/// `id show` says the next ID is unknown, never that the maximum is reached.
 #[test]
 fn an_unreadable_counter_is_not_reported_as_the_maximum() {
     let sb = Sandbox::new();
@@ -365,7 +355,7 @@ fn a_create_does_not_reload_the_same_things_over_and_over() {
 }
 
 /// `template list` prints names and descriptions. It has no reason to read a
-/// single template file, and it used to read all of them.
+/// single template file.
 #[cfg(debug_assertions)]
 #[test]
 fn listing_templates_reads_no_template_file_contents() {
@@ -388,9 +378,9 @@ fn listing_templates_reads_no_template_file_contents() {
     );
 }
 
-/// `fastf id set` accepted any value above the floor, `u64::MAX` included — and
-/// then the next create computed `value + 1` and overflowed: a panic in a debug
-/// build, a silent wrap to zero in a release one. Both ends are now bounded.
+/// The counter is bounded at both ends: `fastf id set` refuses a value above
+/// the maximum, and a create that would mint past it fails cleanly, because
+/// `value + 1` on a huge value panics in debug and wraps to zero in release.
 #[test]
 fn the_counter_has_a_maximum_and_stops_cleanly_at_it() {
     const MAX: u64 = 999_999_999_999;

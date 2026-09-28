@@ -27,9 +27,8 @@ fn ctrl_d_and_ctrl_u_move_half_a_page_and_clamp() {
     assert_eq!(app.library.selected, Some(app.library.len() - 1));
 }
 
-/// The action menu is a list of eighteen verbs that cannot be searched.
-/// Before this it was the one list that could only be walked a row at a
-/// time: neither the page keys nor the jumps reached it.
+/// The action menu is a long list of verbs that cannot be searched, so the
+/// page keys and the jumps reach it as they reach every other list.
 #[test]
 fn the_action_menu_pages_and_jumps() {
     let mut app = fixture(6, 80, 24);
@@ -54,9 +53,8 @@ fn the_action_menu_pages_and_jumps() {
     assert_eq!(at(&app), 0);
 }
 
-/// `g` and `G` used to mean "template from a folder" and "the guide" on the
-/// templates tab, so the one list of arbitrary length had no jump keys at
-/// all. The two verbs moved to `I` and `H`.
+/// `g` and `G` are the ends of the templates tab too, a list of arbitrary
+/// length; the tab's from-a-folder and guide verbs are `I` and `H`.
 #[test]
 fn the_templates_tab_jumps_to_its_ends() {
     let mut app = fixture(3, 100, 30);
@@ -71,7 +69,7 @@ fn the_templates_tab_jumps_to_its_ends() {
 }
 
 /// The templates tab's page keys route through the same step as its
-/// arrows, so this is where a page used to come round to the top.
+/// arrows, and a page stops at the end rather than coming round to the top.
 #[test]
 fn the_templates_tab_pages_without_wrapping() {
     let mut app = fixture(3, 100, 30);
@@ -91,9 +89,9 @@ fn the_templates_tab_pages_without_wrapping() {
 }
 
 /// **The horizontal axis is focus.** `→` puts the cursor in the pane
-/// beside the list, `←` puts it back — and neither runs anything. `→`
-/// used to open the action menu, which is what Enter is for; an arrow
-/// that executes a verb is an arrow you cannot lean on.
+/// beside the list, `←` puts it back — and neither runs anything: the
+/// action menu is Enter's, and an arrow that executes a verb is an arrow
+/// you cannot lean on.
 #[test]
 fn the_right_arrow_focuses_the_pane_and_the_left_arrow_the_list() {
     let mut app = fixture(3, 120, 40);
@@ -224,9 +222,9 @@ fn the_left_arrow_leaves_the_pane_but_never_the_tab() {
 }
 
 /// Tab reaches the template pane on a window too narrow for the library's
-/// pane. It measured the library's geometry before, so on an 80-column
-/// window the ring had one member and the template pane's tail — a
-/// `template show` taller than the box — was unreachable.
+/// pane: the ring asks the tab on screen whether it has a pane, or on an
+/// 80-column window it has one member and the template pane's tail — a
+/// `template show` taller than the box — is unreachable.
 #[test]
 fn tab_reaches_the_template_pane_on_a_narrow_window() {
     let mut app = fixture(3, 80, 24);
@@ -242,8 +240,8 @@ fn tab_reaches_the_template_pane_on_a_narrow_window() {
     assert_eq!(app.focus, Focus::Projects, "Tab comes round");
 }
 
-/// Ctrl-C is a declared command now, so it is in the help — and it still
-/// answers before anything else, from under a dialog that takes every key.
+/// Ctrl-C is a declared command, so it is in the help — and it answers
+/// before anything else, from under a dialog that takes every key.
 #[test]
 fn ctrl_c_is_a_command_and_still_answers_first() {
     use fastf::tui::command::{CommandId, Context, find};
@@ -316,9 +314,9 @@ fn the_palette_moves_with_its_own_keys() {
 }
 
 /// **Esc leaves the pane before it does anything else.** The pane is a level,
-/// like a tab; Esc used to fall through it to the list's ladder, and with no
-/// search, filter or marks to clear, that ladder quits — so leaving the pane
-/// the way every dialog is left closed the app.
+/// like a tab: falling through it to the list's ladder, which quits with no
+/// search, filter or marks to clear, would close the app for leaving the pane
+/// the way every dialog is left.
 #[test]
 fn esc_in_the_pane_goes_back_to_the_list_and_never_quits() {
     let mut app = fixture(3, 120, 40);
@@ -379,8 +377,8 @@ fn a_window_that_shrinks_keeps_the_pane_focused_in_its_new_place() {
 }
 
 /// The templates tab draws in the whole body, wherever the library's pane
-/// would be: it used to rebuild its band from the table's width plus the
-/// pane's, which is the window twice over once the pane sits under the table.
+/// would be: a band rebuilt from the table's width plus the pane's is the
+/// window twice over once the pane sits under the table.
 #[test]
 fn the_templates_tab_takes_the_whole_body_whatever_the_library_pane_does() {
     for (width, height) in [(120, 40), (60, 45), (80, 24)] {
@@ -476,9 +474,9 @@ fn angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section() {
     assert_eq!(app.library.selected_index(), Some(0));
 }
 
-/// **The template pane pages by its own height.** It paged by the library
-/// table's, which is a different box once each tab places its pane by its own
-/// rule — at 60×45 the library's table is eleven rows under a pane, while the
+/// **The template pane pages by its own height**, never the library table's,
+/// which is a different box once each tab places its pane by its own rule —
+/// at 60×45 the library's table is eleven rows under a pane, while the
 /// templates tab's pane is beside a short card list.
 #[test]
 fn the_template_pane_pages_by_its_own_height() {

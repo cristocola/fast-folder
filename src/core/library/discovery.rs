@@ -170,7 +170,7 @@ pub(crate) fn base_names(base: &Path) -> std::io::Result<Vec<String>> {
 /// The time gate: the cache is stale when the base directory's mtime is newer
 /// than the cache file's (a project was added/removed since the cache was
 /// written), or when either mtime can't be read (be conservative and rescan).
-/// Only a second signal now — see [`freshness`].
+/// Only a second signal — see [`freshness`].
 pub(crate) fn cache_is_stale(base: &Path) -> bool {
     let base_m = dir_mtime(base);
     let cache_m = dir_mtime(&cache_path(base));
@@ -193,7 +193,8 @@ pub(crate) fn dir_mtime(path: &Path) -> Option<SystemTime> {
 /// changes no project, so the honest repair is to say the cache is still good.
 ///
 /// Only safe because fastf's own writers are serialized by `DataLock`. A change
-/// made outside fastf during this instant would be masked until the next
+/// made outside fastf during this instant that the names listing cannot see (a
+/// folder replaced under the same name) is masked until the next
 /// `fastf reindex` — the same contract external edits already carry.
 pub fn touch_cache(base: &Path) {
     let path = cache_path(base);
@@ -274,12 +275,11 @@ pub(crate) fn scan_listing(base: &Path) -> Scanned {
         names.sort();
     }
     // **An old copy being emptied where it stands is not a project**, even
-    // when a cloud mount puts its `PROJECT_INFO.md` back: an edit saved a
-    // moment before a move from R2 was still uploading when the move removed
-    // the file, and landed after — the lab found the old copy listed beside
-    // the moved project, one id twice. Its pointer or delete record names
-    // the folder until the settle has looked again; the same id there is
-    // that old copy, another is someone's project.
+    // when a cloud mount puts its `PROJECT_INFO.md` back (an edit still
+    // uploading when the move removed the file lands after it); listing it
+    // would show one id twice. Its pointer or delete record names the folder
+    // until the settle has looked again; the same id there is that old copy,
+    // another is someone's project.
     projects.retain(|project| {
         project
             .path
@@ -307,7 +307,7 @@ fn emptied_by(path: &Path, name: &str) -> Option<(String, String)> {
 
 /// Build a [`Project`] from a folder iff it contains a readable
 /// `PROJECT_INFO.md` with parseable frontmatter. Uses the fixed reserved
-/// filename directly (no config lookup) — metadata is now the project identity.
+/// filename directly (no config lookup).
 ///
 /// A folder fastf *cannot* read is warned about here rather than skipped in
 /// silence. This is the one walk over the whole library, so it is the one place
@@ -330,14 +330,13 @@ pub(crate) fn project_at(base: &Path, dir: &Path) -> Option<Project> {
 
 /// Why a folder yielded no [`Metadata`].
 ///
-/// Discovery used to answer this with a bare `None`, which conflates two facts
-/// that could not be more different. "There is no `PROJECT_INFO.md` here" is
-/// what every ordinary folder looks like and must stay silent. "There is one
-/// and fastf cannot read it" is a project the user still has and the library
-/// has stopped showing — and that was silent too, so one bad line in a file
-/// `docs/projects.md` explicitly invites people to edit ("After creation the
-/// file is yours") dropped the project out of `recent`, `search` and the app,
-/// with `reindex` reporting a count of zero as a success.
+/// A bare `None` would conflate two facts that could not be more different.
+/// "There is no `PROJECT_INFO.md` here" is what every ordinary folder looks
+/// like and must stay silent. "There is one and fastf cannot read it" is a
+/// project the user still has and the library has stopped showing, and must
+/// be said: `docs/projects.md` explicitly invites people to edit the file
+/// ("After creation the file is yours"), and one bad line would otherwise drop
+/// the project out of `recent`, `search` and the app in silence.
 pub(crate) enum NotAProject {
     /// No `PROJECT_INFO.md` in this folder.
     NoMetadata,

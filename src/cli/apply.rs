@@ -15,18 +15,15 @@ use crate::util::tty;
 /// anything — a template of plain folders needs no answers.
 ///
 /// `pub` so the TUI can collect **once** and hand the same values to a dry run
-/// and the real run. It used to call `apply::run` twice with an empty map, which
-/// meant answering every prompt a second time to confirm what you had just
-/// previewed.
+/// and the real run, or every prompt is answered a second time to confirm what
+/// was just previewed.
 pub fn collect_if_needed(
     tmpl: &crate::core::template::Template,
     provided: &HashMap<String, String>,
 ) -> Result<Option<HashMap<String, String>>> {
     // **The question is whether anything is interpolated, not whether any file
-    // has text in it.** This read the same unfiltered buffer the dry-run
-    // previews did, so an `exclude`d file, a `verbatim` one whose braces are
-    // meant literally, or a plain README with no token in it all made `apply`
-    // ask for variables nothing would use.
+    // has text in it**: an `exclude`d file, a `verbatim` one whose braces are
+    // meant literally, or a plain README with no token in it needs no answers.
     if tmpl.interpolates_anything() {
         collect_vars(tmpl, provided)
     } else {
@@ -61,10 +58,16 @@ pub fn run(args: ApplyArgs) -> Result<()> {
 
     let target = PathBuf::from(&args.target);
     if !target.exists() {
-        bail!("target folder does not exist: {}", target.display());
+        bail!(
+            "target folder does not exist: {}",
+            crate::util::paths::display_path(&target)
+        );
     }
     if !target.is_dir() {
-        bail!("target is not a directory: {}", target.display());
+        bail!(
+            "target is not a directory: {}",
+            crate::util::paths::display_path(&target)
+        );
     }
 
     // Warn on unknown --vars
@@ -89,7 +92,7 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     // `{id}` resolves from the target's own metadata, so a folder fastf owns
     // no metadata for gets the token as written. Say so once, here, rather
     // than leaving a literal `{id}` in a file for somebody to find later.
-    if mentions_id(&tmpl) && !crate::core::project_info::pinfo_path(&target).is_file() {
+    if tmpl.interpolates("{id}") && !crate::core::project_info::pinfo_path(&target).is_file() {
         eprintln!(
             "{} template '{}' writes {{id}}, and {} has no PROJECT_INFO.md — \
              it is left as written ({} would give the folder one)",
@@ -128,7 +131,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         tty::require_tty("confirm", "pass --yes to apply without confirming")?;
         println!();
         let ok = crate::tui::prompt::confirm(
-            &format!("Apply template '{}' to {}?", tmpl.slug, target.display()),
+            &format!(
+                "Apply template '{}' to {}?",
+                tmpl.slug,
+                crate::util::paths::display_path(&target)
+            ),
             true,
         )?
         .unwrap_or(false);
@@ -142,19 +149,4 @@ pub fn run(args: ApplyArgs) -> Result<()> {
     crate::core::operations::apply(&tmpl.slug, &target, &raw_vars)?;
     println!("\n{}  {}", "✓".green().bold(), "Template applied".bold());
     Ok(())
-}
-
-/// Whether the template writes `{id}` anywhere an apply would render it: a
-/// folder name, a file name, or the text of a file it interpolates.
-fn mentions_id(tmpl: &crate::core::template::Template) -> bool {
-    fn in_structure(nodes: &[crate::core::template::FolderNode]) -> bool {
-        nodes
-            .iter()
-            .any(|n| n.name.contains("{id}") || in_structure(&n.children))
-    }
-    in_structure(&tmpl.structure)
-        || tmpl
-            .files
-            .iter()
-            .any(|f| f.path.contains("{id}") || f.template.contains("{id}"))
 }

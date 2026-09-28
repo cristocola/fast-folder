@@ -1,19 +1,34 @@
-//! Retrying wrappers for the mutating filesystem calls.
+//! Asking a filesystem again.
 //!
-//! On Windows, Defender, the Search Indexer, Explorer preview handlers and
-//! OneDrive routinely hold a brief handle on a file that was just written.
-//! `rename` and `remove_dir_all` then fail with `ERROR_SHARING_VIOLATION` or
-//! `ERROR_ACCESS_DENIED` even though nothing is actually wrong — the handle is
-//! gone milliseconds later. Without a retry this surfaces as a random failed
-//! create or move with a baffling OS error, and it is the usual reason a
-//! file-heavy tool is "fine on Linux, flaky on Windows".
+//! **One loop asks** ([`Retry::run`]). What differs from one caller to the
+//! next is which errors are worth asking about again and how long to wait
+//! between tries, and both are named here and nowhere else:
 //!
-//! Retries are deliberately **Windows-only**: on Unix these error codes mean
-//! what they say, and silently retrying would mask real bugs. On Unix every
-//! function here is a direct passthrough, so Linux behaviour is unchanged.
+//! | who asks again | which errors ([`Next`]) | pauses ([`schedule`]) |
+//! |---|---|---|
+//! | [`with_retry`]: the walk, every unlink and rmdir, the probe | [`by_class`]: transient and locked again, not connected once the mount is back | `BY_CLASS`, and up to [`MOUNT_WAIT`] for a mount, `MOUNT_LAG` apart while it answers and the call does not |
+//! | a file's copy (`transactions::copy`) | the same, of the error an `anyhow` chain holds, until a cancel | the same |
+//! | [`rename`], [`remove_file`], [`remove_dir`], [`remove_dir_all`] | contention: four Windows codes | `CONTENTION` |
+//! | [`rename_dir`] | contention | `FOLDER_RENAME` |
+//! | a record's removal (`MoveTransaction::remove`) | [`still_uploading`]; by class inside it for every other error | `RECORD_UPLOAD`; `BY_CLASS` |
+//! | the publish's read-back (`move_engine`) | anything | `READ_BACK` |
 //!
-//! A genuine error (`NotFound`, for instance) is never retried — the predicate
-//! is a small allow-list, not a catch-all.
+//! **Contention is Windows's alone.** There Defender, the Search Indexer,
+//! Explorer's preview handlers and OneDrive hold a handle on a file that was
+//! just written, and `rename` or `remove_dir_all` fails with
+//! `ERROR_SHARING_VIOLATION` or `ERROR_ACCESS_DENIED` though nothing is wrong:
+//! the handle is gone milliseconds later. On unix the same codes mean what
+//! they say, so the five functions that wait contention out are passthroughs
+//! there. **Asking again by class is every platform's**: EIO from a mount that
+//! restarts, ESTALE and a lagging ENOTCONN are Linux's too.
+//!
+//! **Waits nest, and multiply.** A caller that asks [`with_retry`] about
+//! [`remove_file`] waits contention out inside every by-class try. A loop
+//! around another takes the errors it waits out away from the one inside
+//! ([`with_retry_judged`]), as a record's removal does with `EIO`.
+//!
+//! An error that asking again cannot change (`NotFound`, a permission, no
+//! room) is the answer at once: every judge is a short allow-list.
 
 use std::io;
 use std::path::Path;
@@ -149,19 +164,188 @@ fn classify_code(_code: i32) -> Option<ErrorClass> {
 /// rclone that restarts — is waited for before a call gives up on it.
 pub const MOUNT_WAIT: Duration = Duration::from_secs(120);
 
-/// The schedule for an error worth asking again ([`ErrorClass::Transient`],
-/// [`ErrorClass::Locked`]): 0.2 s doubling to 5 s, six more tries, about
-/// eleven seconds in all.
-const CLASS_BACKOFF_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
+/// What a failed try means for the next one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Next {
+    /// Ask again after the schedule's next pause; once the pauses are used
+    /// up, the error is the answer.
+    Again,
+    /// Ask again once the mount answers, for as long as the wait lasts.
+    AfterMount,
+    /// The error is the answer.
+    Stop,
+}
 
-/// Run `op`, about `path`, **by what its error means** ([`classify`]): an
-/// error worth asking again is asked again with backoff; a mount that is not
-/// connected is waited for, up to [`MOUNT_WAIT`], until the same mount
-/// answers again ([`wait_for_mount`]); anything else — a permission, no
-/// room, a name refused, "nothing there" — is answered at once, since asking
-/// again changes nothing. On every platform: EIO from a mount that restarts,
-/// ESTALE, and a lagging ENOTCONN are Linux's too, and 3.13 never retried
-/// anything on unix.
+/// The pauses before each further try, in milliseconds. **Every schedule on
+/// which fastf asks a filesystem again is one of these.**
+pub mod schedule {
+    /// An error a mount gives and takes back ([`super::by_class`]): 0.2 s
+    /// doubling to 5 s, six more tries, about eleven seconds in all.
+    pub const BY_CLASS: &[u64] = &[200, 400, 800, 1600, 3200, 5000];
+
+    /// A handle an indexer or a scanner holds for a moment: ≈ 0.3 s, well past
+    /// an antivirus scan and still imperceptible.
+    pub const CONTENTION: &[u64] = &[10, 20, 40, 80, 160];
+
+    /// The same for a folder, ≈ 2.5 s. A folder whose every file was just read
+    /// or written — a copy about to be published, an original about to leave
+    /// the library — is exactly what an indexer is still holding, and the
+    /// short schedule gives up on it.
+    pub const FOLDER_RENAME: &[u64] = &[20, 50, 100, 200, 400, 700, 1000];
+
+    /// A cloud mount still uploading a record's last files
+    /// ([`super::still_uploading`]): a second, twenty times.
+    pub const RECORD_UPLOAD: &[u64] = &[1000; 20];
+
+    /// A file written a moment ago that a mount does not show yet: twice
+    /// more, 0.2 s apart.
+    pub const READ_BACK: &[u64] = &[200, 200];
+
+    /// A folder that says it is not empty once everything in it was taken: a
+    /// cloud mount whose listing has not caught up. Each pause follows a
+    /// fresh listing and is followed by another (`core::removal`).
+    pub const LISTING_LAG: &[u64] = &[300, 600, 900, 1200];
+
+    /// A mount that answers about a path while the call on it still says "not
+    /// connected": the pause before the call is asked again.
+    pub const MOUNT_LAG: u64 = 200;
+}
+
+/// Asked again by what the error means ([`classify`]): an error a mount gives
+/// and takes back, or a lock, after a pause; a mount that is not connected,
+/// once it is back. Anything else — a permission, no room, a name refused,
+/// "nothing there" — is the answer, since asking again changes nothing.
+pub fn by_class(error: &io::Error) -> Next {
+    match classify(error) {
+        ErrorClass::Transient | ErrorClass::Locked => Next::Again,
+        ErrorClass::NotConnected => Next::AfterMount,
+        _ => Next::Stop,
+    }
+}
+
+/// Asked again when it is contention ([`is_transient`]): Windows's alone.
+fn contention(error: &io::Error) -> Next {
+    if is_transient(error) {
+        Next::Again
+    } else {
+        Next::Stop
+    }
+}
+
+/// Asked again when it is `EIO`: what a FUSE mount answers when it cannot do
+/// what was asked yet, as a cloud mount does about a folder whose files it is
+/// still uploading.
+pub fn still_uploading(error: &io::Error) -> Next {
+    #[cfg(unix)]
+    if error.raw_os_error() == Some(libc::EIO) {
+        return Next::Again;
+    }
+    #[cfg(not(unix))]
+    let _ = error;
+    Next::Stop
+}
+
+/// One way of asking again: the pauses between tries, and the mounts waited
+/// for when the judge says [`Next::AfterMount`].
+pub struct Retry<'a> {
+    /// From [`schedule`].
+    pub pauses: &'a [u64],
+    /// The paths whose mounts are waited for, in this order.
+    pub mounts: &'a [&'a Path],
+    /// How long a mount is waited for, counted from the first try.
+    pub mount_wait: Duration,
+}
+
+impl<'a> Retry<'a> {
+    /// A schedule of pauses, and no mount to wait for.
+    pub fn on(pauses: &'a [u64]) -> Self {
+        Self {
+            pauses,
+            mounts: &[],
+            mount_wait: Duration::ZERO,
+        }
+    }
+
+    /// **The one loop.** `op` is asked; an error goes to `judge`, which says
+    /// what it means for the next try. Before a pause or a wait `before` is
+    /// told (a line for the log); after it, `between` runs and may end the
+    /// asking with an error of its own (taking away what a failed try left).
+    pub fn run<T, E>(
+        &self,
+        judge: impl FnMut(&E) -> Next,
+        before: impl FnMut(&E, Next),
+        between: impl FnMut(&E) -> Result<(), E>,
+        op: impl FnMut() -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.run_sleeping(std::thread::sleep, judge, before, between, op)
+    }
+
+    /// [`Self::run`], pausing through `sleep`.
+    pub fn run_sleeping<T, E>(
+        &self,
+        mut sleep: impl FnMut(Duration),
+        mut judge: impl FnMut(&E) -> Next,
+        mut before: impl FnMut(&E, Next),
+        mut between: impl FnMut(&E) -> Result<(), E>,
+        mut op: impl FnMut() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let mut tries = 0;
+        let deadline = std::time::Instant::now() + self.mount_wait;
+        // The mounts to wait for, read at the first "not connected" rather
+        // than before every call: a FUSE mount whose daemon went away is
+        // still in the mount table then, so it names the same mount — and
+        // reading the table on every walk's look and every unlink costs more
+        // than a local unlink (a 20 000-file delete on a local disk, 0.4 s →
+        // 1.1 s).
+        let mut identities: Option<Vec<Option<String>>> = None;
+        loop {
+            let error = match op() {
+                Ok(value) => return Ok(value),
+                Err(error) => error,
+            };
+            match judge(&error) {
+                Next::Again if tries < self.pauses.len() => {
+                    before(&error, Next::Again);
+                    sleep(Duration::from_millis(self.pauses[tries]));
+                    tries += 1;
+                }
+                Next::AfterMount if std::time::Instant::now() < deadline => {
+                    before(&error, Next::AfterMount);
+                    let identities = identities.get_or_insert_with(|| {
+                        self.mounts
+                            .iter()
+                            .map(|path| crate::util::fs_kind::mount_identity(path))
+                            .collect()
+                    });
+                    let mut waited = false;
+                    for (path, identity) in self.mounts.iter().zip(identities.iter()) {
+                        waited |= wait_for_mount_sleeping(
+                            &mut sleep,
+                            path,
+                            identity.as_deref(),
+                            deadline,
+                        );
+                    }
+                    // A mount can answer about the path while the call on it
+                    // still fails: a FUSE mount whose daemon went away answers
+                    // a look from the kernel's cache for a second or so. Asked
+                    // again at once, that is a loop that spins and writes a
+                    // line to the log each time round.
+                    if !waited {
+                        sleep(Duration::from_millis(schedule::MOUNT_LAG));
+                    }
+                }
+                _ => return Err(error),
+            }
+            between(&error)?;
+        }
+    }
+}
+
+/// Run `op`, about `path`, **by what its error means** ([`by_class`]): an
+/// error worth asking again is asked again on [`schedule::BY_CLASS`]; a mount
+/// that is not connected is waited for, up to [`MOUNT_WAIT`], until the same
+/// mount answers again ([`wait_for_mount`]).
 pub fn with_retry<T>(path: &Path, op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     with_retry_for(path, mount_wait(), op)
 }
@@ -180,41 +364,53 @@ pub fn mount_wait() -> Duration {
 pub fn with_retry_for<T>(
     path: &Path,
     mount_wait: Duration,
-    mut op: impl FnMut() -> io::Result<T>,
+    op: impl FnMut() -> io::Result<T>,
 ) -> io::Result<T> {
-    let mut tries = 0;
-    let deadline = std::time::Instant::now() + mount_wait;
-    // The mount to wait for, read at the first "not connected" rather than
-    // before every call: a FUSE mount whose daemon went away is still in the
-    // mount table then, so it names the same mount — and reading the table
-    // on every walk's look and every unlink cost more than a local unlink
-    // (a 20 000-file delete on a local disk, 0.4 s → 1.1 s).
-    let mut mount: Option<Option<String>> = None;
-    loop {
-        let error = match op() {
-            Ok(value) => return Ok(value),
-            Err(error) => error,
-        };
-        match classify(&error) {
-            ErrorClass::Transient | ErrorClass::Locked if tries < CLASS_BACKOFF_MS.len() => {
-                crate::util::log::debug(format!(
-                    "{}: {error}; asking again",
-                    crate::util::paths::display_path(path)
-                ));
-                std::thread::sleep(Duration::from_millis(CLASS_BACKOFF_MS[tries]));
-                tries += 1;
-            }
-            ErrorClass::NotConnected if std::time::Instant::now() < deadline => {
-                crate::util::log::info(format!(
-                    "{}: {error}; waiting for its mount",
-                    crate::util::paths::display_path(path)
-                ));
-                let mount = mount.get_or_insert_with(|| crate::util::fs_kind::mount_identity(path));
-                wait_for_mount(path, mount.as_deref(), deadline);
-            }
-            _ => return Err(error),
-        }
+    with_retry_sleeping(std::thread::sleep, path, mount_wait, op)
+}
+
+/// [`with_retry_for`], pausing through `sleep`.
+fn with_retry_sleeping<T>(
+    sleep: impl FnMut(Duration),
+    path: &Path,
+    mount_wait: Duration,
+    op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    with_retry_judged(sleep, path, mount_wait, by_class, op)
+}
+
+/// [`with_retry`] by a judge of the caller's, pausing through `sleep`: for a
+/// caller inside a loop of its own, which takes the errors that loop waits
+/// out away from this one. Two loops that both ask again about one error
+/// multiply their waits.
+pub fn with_retry_judged<T>(
+    sleep: impl FnMut(Duration),
+    path: &Path,
+    mount_wait: Duration,
+    judge: impl FnMut(&io::Error) -> Next,
+    op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    Retry {
+        pauses: schedule::BY_CLASS,
+        mounts: &[path],
+        mount_wait,
     }
+    .run_sleeping(
+        sleep,
+        judge,
+        |error, next| match next {
+            Next::AfterMount => crate::util::log::info(format!(
+                "{}: {error}; waiting for its mount",
+                crate::util::paths::display_path(path)
+            )),
+            _ => crate::util::log::debug(format!(
+                "{}: {error}; asking again",
+                crate::util::paths::display_path(path)
+            )),
+        },
+        |_| Ok(()),
+        op,
+    )
 }
 
 /// **One sentence for a person**: what kind of problem stopped something,
@@ -294,6 +490,18 @@ pub fn list_dir(
 /// empty folder that answers "nothing there" for everything under it: that
 /// is not the mount being back.
 pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Instant) {
+    wait_for_mount_sleeping(&mut std::thread::sleep, path, mount, deadline);
+}
+
+/// [`wait_for_mount`], pausing through `sleep`. Answers whether it paused:
+/// `false` is a mount that answered at the first look.
+fn wait_for_mount_sleeping(
+    sleep: &mut impl FnMut(Duration),
+    path: &Path,
+    mount: Option<&str>,
+    deadline: std::time::Instant,
+) -> bool {
+    let mut paused = false;
     while std::time::Instant::now() < deadline {
         let answers = match crate::util::paths::presence(path) {
             crate::util::paths::Presence::Unknown(error) => {
@@ -304,45 +512,24 @@ pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Ins
         let same_mount =
             mount.is_none() || crate::util::fs_kind::mount_identity(path).as_deref() == mount;
         if answers && same_mount {
-            return;
+            return paused;
         }
-        std::thread::sleep(Duration::from_secs(1));
+        sleep(Duration::from_secs(1));
+        paused = true;
     }
-}
-
-/// Backoff schedule between attempts. Total worst-case wait ≈ 310 ms, which is
-/// well past a typical antivirus scan window while staying imperceptible.
-const BACKOFF_MS: [u64; 5] = [10, 20, 40, 80, 160];
-
-/// The longer schedule for renaming a folder, ≈ 2.5 s. A folder whose every
-/// file was just read or written — a staging tree about to be published, a
-/// source about to leave the library — is exactly what an indexer or a virus
-/// scanner is still holding, and the short schedule gave up on it: at publish
-/// that threw away a verified copy.
-const DIR_BACKOFF_MS: [u64; 7] = [20, 50, 100, 200, 400, 700, 1000];
-
-/// Windows error codes worth retrying.
-#[cfg(windows)]
-mod codes {
-    /// The file is in use by another process.
-    pub const ERROR_ACCESS_DENIED: i32 = 5;
-    /// Another process has the file open and won't share it.
-    pub const ERROR_SHARING_VIOLATION: i32 = 32;
-    /// A byte-range lock is held on the file.
-    pub const ERROR_LOCK_VIOLATION: i32 = 33;
-    /// A directory still had entries — transient while a scanner releases them.
-    pub const ERROR_DIR_NOT_EMPTY: i32 = 145;
+    paused
 }
 
 /// True when `err` is the kind of transient contention worth waiting out.
 #[cfg(windows)]
 fn is_transient(err: &io::Error) -> bool {
+    use crate::util::win;
     matches!(
         err.raw_os_error(),
-        Some(codes::ERROR_ACCESS_DENIED)
-            | Some(codes::ERROR_SHARING_VIOLATION)
-            | Some(codes::ERROR_LOCK_VIOLATION)
-            | Some(codes::ERROR_DIR_NOT_EMPTY)
+        Some(win::ERROR_ACCESS_DENIED)
+            | Some(win::ERROR_SHARING_VIOLATION)
+            | Some(win::ERROR_LOCK_VIOLATION)
+            | Some(win::ERROR_DIR_NOT_EMPTY)
     )
 }
 
@@ -351,27 +538,25 @@ fn is_transient(_err: &io::Error) -> bool {
     false
 }
 
-/// Run `op`, retrying transient contention with backoff. Returns the last error
-/// if every attempt fails, so the caller sees the real cause.
+/// Run `op`, waiting contention out on [`schedule::CONTENTION`]. The last
+/// error is the answer if every try fails, so the caller sees the real cause.
 fn retry<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
-    retry_on(&BACKOFF_MS, op)
+    retry_on(schedule::CONTENTION, op)
 }
 
-fn retry_on<T>(schedule: &[u64], mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
-    let mut last = match op() {
-        Ok(value) => return Ok(value),
-        Err(err) if is_transient(&err) => err,
-        Err(err) => return Err(err),
-    };
-    for &delay in schedule {
-        std::thread::sleep(Duration::from_millis(delay));
-        match op() {
-            Ok(value) => return Ok(value),
-            Err(err) if is_transient(&err) => last = err,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(last)
+fn retry_on<T>(schedule: &[u64], op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    retry_sleeping(std::thread::sleep, contention, schedule, op)
+}
+
+/// [`retry_on`], pausing through `sleep` and asking `judge` what an error
+/// means.
+fn retry_sleeping<T>(
+    sleep: impl FnMut(Duration),
+    judge: impl FnMut(&io::Error) -> Next,
+    schedule: &[u64],
+    op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    Retry::on(schedule).run_sleeping(sleep, judge, |_, _| {}, |_| Ok(()), op)
 }
 
 /// Clear the read-only attribute so removal can proceed.
@@ -432,11 +617,10 @@ fn clear_readonly_tree_at(path: &Path, depth: usize) {
 /// consults the target's mode — replacing a file is a property of the
 /// directory — so on Linux a read-only `PROJECT_INFO.md` is simply written
 /// through. Windows refuses `MoveFileEx` onto a target carrying
-/// `FILE_ATTRIBUTE_READONLY`, and the retry schedule then spent its full
-/// backoff before failing with `Access is denied`. A project restored from a
-/// backup, copied off read-only media or synced down by a cloud client
-/// arrives with that attribute set, and every one of those verbs stopped
-/// working on it.
+/// `FILE_ATTRIBUTE_READONLY` with `Access is denied`, which no amount of
+/// waiting changes. A project restored from a backup, copied off read-only
+/// media or synced down by a cloud client arrives with that attribute set,
+/// and without the fallback every one of those verbs fails on it.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     match retry(|| std::fs::rename(from, to)) {
         Ok(()) => Ok(()),
@@ -493,9 +677,8 @@ fn rename_without_readonly(_from: &Path, _to: &Path, err: io::Error) -> io::Resu
 /// stands.
 ///
 /// These are split by platform rather than written with `#[cfg]` inside the
-/// expression: the Unix arm of the inlined version collapsed to
-/// `or_else(|e| Err(e))`, which is both pointless and a clippy error — invisible
-/// from Windows, because that code only compiles on Linux.
+/// expression: inlined, the Unix arm collapses to `or_else(|e| Err(e))`, a
+/// clippy error that a Windows build never compiles and so never sees.
 #[cfg(windows)]
 fn retry_without_readonly(path: &Path, err: io::Error, recursive: bool) -> io::Result<()> {
     if !is_transient(&err) && err.kind() != io::ErrorKind::PermissionDenied {
@@ -528,7 +711,7 @@ pub fn remove_file(path: &Path) -> io::Result<()> {
 /// folder that stays refused is held by a program — which is what the caller
 /// has to say, see [`describe_rename_error`].
 pub fn rename_dir(from: &Path, to: &Path) -> io::Result<()> {
-    retry_on(&DIR_BACKOFF_MS, || std::fs::rename(from, to))
+    retry_on(schedule::FOLDER_RENAME, || std::fs::rename(from, to))
 }
 
 /// [`std::fs::remove_dir`] of an empty folder, with transient-contention
@@ -563,6 +746,197 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the schedules, pinned ------------------------------------------
+    //
+    // Each test below asks a call that always fails and writes down every
+    // pause it takes instead of waiting it out. `by_class` and `contended`
+    // are the only lines that know how the loops are built.
+
+    /// An error of the class a mount gives and takes back.
+    fn transient() -> io::Error {
+        #[cfg(unix)]
+        let code = libc::EIO;
+        // ERROR_IO_DEVICE.
+        #[cfg(windows)]
+        let code = 1117;
+        io::Error::from_raw_os_error(code)
+    }
+
+    /// An error of the class a program holding the file gives.
+    fn locked() -> io::Error {
+        #[cfg(unix)]
+        let code = libc::EBUSY;
+        // ERROR_SHARING_VIOLATION.
+        #[cfg(windows)]
+        let code = 32;
+        io::Error::from_raw_os_error(code)
+    }
+
+    /// A call asked again by what its error means, its pauses recorded.
+    fn by_class(
+        mount_wait: Duration,
+        op: impl FnMut() -> io::Result<()>,
+    ) -> (io::Result<()>, Vec<u64>) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut pauses = Vec::new();
+        let answer = with_retry_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            temp.path(),
+            mount_wait,
+            op,
+        );
+        (answer, pauses)
+    }
+
+    /// A call asked again on `schedule` whatever its error, its pauses
+    /// recorded: what Windows contention does, on any platform.
+    fn contended(
+        schedule: &[u64],
+        op: impl FnMut() -> io::Result<()>,
+    ) -> (io::Result<()>, Vec<u64>) {
+        let mut pauses = Vec::new();
+        let answer = retry_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            |_| Next::Again,
+            schedule,
+            op,
+        );
+        (answer, pauses)
+    }
+
+    #[test]
+    fn an_error_a_mount_takes_back_is_asked_six_more_times() {
+        for error in [transient, locked] {
+            let mut asked = 0;
+            let (answer, pauses) = by_class(Duration::from_secs(1), || {
+                asked += 1;
+                Err(error())
+            });
+            assert_eq!(pauses, [200, 400, 800, 1600, 3200, 5000]);
+            assert_eq!(asked, 7, "once, and once after each pause");
+            assert_eq!(
+                answer.unwrap_err().raw_os_error(),
+                error().raw_os_error(),
+                "and the last error is the answer"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answer_ends_the_asking_where_it_comes() {
+        let mut asked = 0;
+        let (answer, pauses) = by_class(Duration::from_secs(1), || {
+            asked += 1;
+            if asked < 4 { Err(transient()) } else { Ok(()) }
+        });
+        assert!(answer.is_ok());
+        assert_eq!(pauses, [200, 400, 800]);
+    }
+
+    #[test]
+    fn an_error_that_asking_again_cannot_change_is_the_answer_at_once() {
+        let mut asked = 0;
+        let (answer, pauses) = by_class(Duration::from_secs(1), || {
+            asked += 1;
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "no"))
+        });
+        assert_eq!(answer.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!((asked, pauses.len()), (1, 0));
+    }
+
+    /// A mount that stays gone is asked about until the wait is over, and no
+    /// longer. The folder asked about is there, so each ask follows the pause
+    /// of a mount that answers while the call fails.
+    #[test]
+    fn a_mount_that_stays_gone_is_given_up_on_when_the_wait_is_over() {
+        let wait = Duration::from_millis(300);
+        let temp = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        let mut asked = 0_usize;
+        let mut pauses = Vec::new();
+        let answer: io::Result<()> = with_retry_sleeping(
+            |pause| {
+                pauses.push(pause.as_millis() as u64);
+                std::thread::sleep(Duration::from_millis(40));
+            },
+            temp.path(),
+            wait,
+            || {
+                asked += 1;
+                Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
+            },
+        );
+        assert_eq!(answer.unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert!(asked > 1, "asked again while the wait lasted");
+        assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
+        assert!(started.elapsed() < wait + Duration::from_secs(2));
+        assert_eq!(asked, pauses.len() + 1, "a pause before each further ask");
+        assert!(
+            pauses.iter().all(|pause| *pause == schedule::MOUNT_LAG),
+            "{pauses:?}"
+        );
+    }
+
+    /// **A mount that answers about the path while the call on it still fails
+    /// is asked again after a pause, never at once.** A FUSE mount whose
+    /// daemon went away answers a look from the kernel's cache for a second or
+    /// so; asked at once, the call is a loop that spins and fills the log.
+    #[test]
+    fn a_mount_that_answers_while_the_call_fails_is_asked_again_after_a_pause() {
+        let mut left = 3;
+        let (answer, pauses) = by_class(Duration::from_secs(60), || {
+            if left > 0 {
+                left -= 1;
+                Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(answer.is_ok());
+        assert_eq!(pauses, [schedule::MOUNT_LAG; 3]);
+    }
+
+    #[test]
+    fn contention_is_waited_out_in_a_third_of_a_second() {
+        let mut asked = 0;
+        let (answer, pauses) = contended(schedule::CONTENTION, || {
+            asked += 1;
+            Err(locked())
+        });
+        assert_eq!(pauses, [10, 20, 40, 80, 160]);
+        assert_eq!(asked, 6);
+        assert_eq!(answer.unwrap_err().raw_os_error(), locked().raw_os_error());
+    }
+
+    #[test]
+    fn a_folder_rename_is_given_two_and_a_half_seconds() {
+        let mut asked = 0;
+        let (answer, pauses) = contended(schedule::FOLDER_RENAME, || {
+            asked += 1;
+            Err(locked())
+        });
+        assert_eq!(pauses, [20, 50, 100, 200, 400, 700, 1000]);
+        assert_eq!(asked, 8);
+        assert!(answer.is_err());
+    }
+
+    /// What counts as contention is four Windows codes, and nothing anywhere
+    /// else.
+    #[test]
+    fn contention_is_four_windows_codes() {
+        let asked_again =
+            |code: i32| contention(&io::Error::from_raw_os_error(code)) == Next::Again;
+        // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION,
+        // ERROR_DIR_NOT_EMPTY.
+        for code in [5, 32, 33, 145] {
+            assert_eq!(asked_again(code), cfg!(windows), "code {code}");
+        }
+        // ERROR_FILE_NOT_FOUND, ERROR_DISK_FULL, ERROR_USER_MAPPED_FILE.
+        for code in [2, 112, 1224] {
+            assert!(!asked_again(code), "code {code}");
+        }
+    }
 
     /// A call that fails the way a mount does is asked again by what the
     /// error means: transient and locked with backoff, and not again when
@@ -696,12 +1070,10 @@ mod tests {
 
     /// The publish step of `atomic::write` is a rename **over** an existing
     /// file, and Windows refuses that when the target carries the read-only
-    /// attribute. Unix `rename(2)` never looks at the target's mode, so every
-    /// metadata verb — tag, note, rename, move, config, the counters — worked
-    /// on Linux and failed here with `Access is denied` after the full
-    /// backoff. Found by driving a real project whose `PROJECT_INFO.md` had
-    /// the attribute set, which is how one arrives from a backup, from
-    /// read-only media, or from a cloud client.
+    /// attribute. Every metadata verb — tag, note, rename, move, config, the
+    /// counters — publishes this way, onto a `PROJECT_INFO.md` that arrives
+    /// with the attribute set from a backup, from read-only media, or from a
+    /// cloud client.
     #[cfg(windows)]
     #[test]
     fn a_read_only_destination_does_not_block_the_publish() {
@@ -742,9 +1114,9 @@ mod tests {
         // sweep could ever fix.
         let target = dir.path().join("absent").join("target.md");
         let err = rename(&tmp, &target).unwrap_err();
-        assert_ne!(
+        assert_eq!(
             err.kind(),
-            io::ErrorKind::AlreadyExists,
+            io::ErrorKind::NotFound,
             "the original failure is what is reported: {err}"
         );
         assert!(tmp.exists(), "and the source is left where it was");
@@ -765,8 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_gives_up_and_returns_last_error() {
-        // Non-transient on every platform → exactly one attempt.
+    fn an_error_that_is_not_contention_is_asked_once() {
         let attempts = AtomicU32::new(0);
         let err = retry(|| -> io::Result<()> {
             attempts.fetch_add(1, Ordering::Relaxed);

@@ -176,7 +176,7 @@ pub enum Transform {
 }
 
 // `PartialEq`/`Eq` so a `DryRunReport` can be compared in a test: a preview is
-// data now, and comparing two of them is how the interpolation is checked.
+// data, and comparing two of them is how the interpolation is checked.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct FolderNode {
     pub name: String,
@@ -214,11 +214,9 @@ pub struct FileEntry {
 impl Template {
     /// The `slug/value` tags this template derives from a project's variables.
     ///
-    /// **The one definition.** `project::provision_project` had one and
-    /// `operations::derived_tags` had another, and `operations::replace_auto_tags`
-    /// had a third written backwards — as "every tag under a `tag_from`
-    /// namespace", which is not the same set and is why re-deriving used to
-    /// delete tags nobody asked it to touch.
+    /// **The one definition**: a create, a register and a `tag reauto` all
+    /// derive through it, so re-deriving replaces exactly the set a create
+    /// wrote — never "every tag under a `tag_from` namespace", which is wider.
     ///
     /// `lookup` answers with the project's value for a slug. A slug with no
     /// value, or an empty one, derives nothing: a bare `slug/` is not a tag.
@@ -254,6 +252,7 @@ impl Template {
         "post_create",
         "tags",
         "tag_from",
+        "todo",
         "files",
         "dir",
     ];
@@ -265,36 +264,37 @@ impl Template {
 
     /// Whether applying this template has any question to ask.
     ///
-    /// **A file that will not be interpolated cannot need a variable.** `apply`
-    /// asked whenever *any* text file had a body at all — the same unfiltered
-    /// buffer the dry-run previews used — so a template whose only text was an
-    /// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
-    /// literally, or a plain README with no token in it, asked a question whose
-    /// answer nothing could use.
+    /// **A file that will not be interpolated cannot need a variable**: an
+    /// `exclude`d `.DS_Store`, a `verbatim` file whose `{braces}` are meant
+    /// literally, or a plain README with no token in it asks nothing, since no
+    /// answer would be used.
     ///
     /// Three things can carry a token: a folder in `structure`, a file's name,
     /// and an interpolated file's body. This asks about exactly those.
     pub fn interpolates_anything(&self) -> bool {
-        self.structure_has_tokens()
+        self.interpolates("{")
+    }
+
+    /// Whether `token` is anywhere this template would render it: the same
+    /// three places, by the same rules. `{id}` in a file the template
+    /// excludes, or in the body of one it copies verbatim, is never written.
+    pub fn interpolates(&self, token: &str) -> bool {
+        fn in_structure(nodes: &[FolderNode], token: &str) -> bool {
+            nodes
+                .iter()
+                .any(|n| n.name.contains(token) || in_structure(&n.children, token))
+        }
+        in_structure(&self.structure, token)
             || self.files.iter().any(|f| {
                 if crate::core::assets::is_excluded(&f.path, &self.exclude) {
                     return false;
                 }
                 // A name token is substituted whatever the body's fate is:
                 // `verbatim` is about contents, not about where a file lands.
-                f.path.contains('{')
+                f.path.contains(token)
                     || (!crate::core::assets::is_verbatim(&f.path, &self.verbatim)
-                        && f.template.contains('{'))
+                        && f.template.contains(token))
             })
-    }
-
-    fn structure_has_tokens(&self) -> bool {
-        fn any(nodes: &[FolderNode]) -> bool {
-            nodes
-                .iter()
-                .any(|n| n.name.contains('{') || any(&n.children))
-        }
-        any(&self.structure)
     }
 
     /// Load a template from its `template.yaml` manifest. The manifest holds
@@ -308,42 +308,41 @@ impl Template {
     /// [`load_from_file`](Self::load_from_file), choosing whether to read the
     /// text files under `files/` into the in-memory buffer.
     ///
-    /// Listing templates does not need their contents, and reading every UTF-8
-    /// file of every template to print a name and a description is work nobody
-    /// asked for — `fastf template list`, `fastf id show` and the template
-    /// picker all did it.
+    /// Listing templates does not need their contents: `fastf template list`,
+    /// `fastf id show` and the template picker print a name and a description,
+    /// and reading every UTF-8 file of every template for that is work nobody
+    /// asked for.
     pub fn load_with(path: &Path, buffer: FileBuffer) -> Result<Self> {
         crate::util::trace::hit("template_load");
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("reading template {}", path.display()))?;
+        let raw = fs::read_to_string(path).with_context(|| {
+            format!(
+                "reading template {}",
+                crate::util::paths::display_path(path)
+            )
+        })?;
         // Strip a UTF-8 BOM. Notepad, PowerShell's `Out-File -Encoding utf8`,
         // and plenty of other Windows editors add one by default, and the parser
         // then fails with a thoroughly misleading `missing field \`slug\``
         // pointing at line 1 column 2 — while `slug` is sitting right there.
-        // `project_info::split_frontmatter_body` has stripped it for years; the
-        // template loader simply never got the same treatment.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
         let mut t: Self = crate::util::yaml::from_str(raw).with_context(|| {
             format!(
                 "parsing template {}\n  (if you edited this file on Windows, \
                  check it is saved as UTF-8 without a BOM)",
-                path.display()
+                crate::util::paths::display_path(path)
             )
         })?;
         t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         // **The directory is the template's identity.** Every lookup in the
         // crate builds `templates/<slug>/template.yaml` from the slug —
         // `find_by_slug` is the only door — so a manifest whose `slug:`
-        // disagrees with the folder it sits in named a template no command
-        // could then open: `fastf template list` printed it and `template
-        // show` answered "not found — run `fastf template list`", pointing at
-        // the list that had just named it.
+        // disagrees with the folder it sits in would name a template `fastf
+        // template list` prints and no command can open.
         //
-        // Worse, a manifest field cannot be unique. Two folders both declaring
-        // `slug: general` both listed, and `find_by_slug` resolved both to
-        // whichever came first — picking the second one previewed and created
-        // the *first* template, with the right id and the wrong files, and no
-        // error anywhere. A directory name is unique by construction.
+        // Worse, a manifest field cannot be unique: two folders both declaring
+        // `slug: general` would both list and both open as whichever came
+        // first, creating from the wrong files with no error anywhere. A
+        // directory name is unique by construction.
         //
         // fastf never writes this state: `save_template` writes to
         // `template_dir(slug)` and renames the old directory first, and
@@ -410,7 +409,8 @@ impl Template {
         snapshot.validate()?;
 
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating {}", crate::util::paths::display_path(&dir)))?;
 
         // `template.yaml` is a file the user owns and may have keys in it that
         // this build knows nothing about. Merge onto what is already there so an
@@ -428,14 +428,14 @@ impl Template {
             }
             // Anything else — EACCES, EIO, a directory where the manifest
             // should be, invalid UTF-8 — is a manifest that exists and could
-            // not be read. Treating that as "new template" wrote a fresh file
-            // over it, discarding every unknown key the user owns. Refuse
+            // not be read. Treating that as "new template" would write a fresh
+            // file over it, discarding every unknown key the user owns. Refuse
             // instead: the failure is recoverable, the overwrite is not.
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!(
                         "refusing to replace an unreadable manifest at {}",
-                        path.display()
+                        crate::util::paths::display_path(path)
                     )
                 });
             }
@@ -443,15 +443,16 @@ impl Template {
         // Atomic: a manifest truncated by a crash is a template that no longer
         // loads, and `load_all` is what every create reads.
         crate::util::atomic::write(path, raw)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(path)))?;
         crate::util::faults::check("template:mid-save")?;
 
         // Flush text files into files/. Uses `path`'s parent (authoritative)
         // rather than `self.dir`, which may be unset on an in-memory template.
         let files_dir = dir.join("files");
         if !snapshot.files.is_empty() {
-            fs::create_dir_all(&files_dir)
-                .with_context(|| format!("creating {}", files_dir.display()))?;
+            fs::create_dir_all(&files_dir).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(&files_dir))
+            })?;
         }
         for f in &snapshot.files {
             let rel = crate::core::validated::SafeRelativePath::parse(&f.path)?;
@@ -460,8 +461,9 @@ impl Template {
             // than written through.
             let dest = crate::util::paths::contained_destination(&files_dir, &rel.to_path_buf())?;
             if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(parent))
+                })?;
             }
             let content = if !f.template.is_empty() {
                 &f.template
@@ -469,7 +471,7 @@ impl Template {
                 &f.content
             };
             crate::util::atomic::write(&dest, content)
-                .with_context(|| format!("writing {}", dest.display()))?;
+                .with_context(|| format!("writing {}", crate::util::paths::display_path(&dest)))?;
         }
         Ok(())
     }
@@ -585,9 +587,12 @@ pub fn load_all() -> Result<Vec<Template>> {
         return Ok(vec![]);
     }
     let mut templates = Vec::new();
-    for entry in
-        fs::read_dir(&dir).with_context(|| format!("reading templates dir {}", dir.display()))?
-    {
+    for entry in fs::read_dir(&dir).with_context(|| {
+        format!(
+            "reading templates dir {}",
+            crate::util::paths::display_path(&dir)
+        )
+    })? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
@@ -601,7 +606,11 @@ pub fn load_all() -> Result<Vec<Template>> {
         // count templates. Anything that edits or previews one loads it again.
         match Template::load_with(&manifest, FileBuffer::Skip) {
             Ok(t) => templates.push(t),
-            Err(e) => crate::util::diag::warn(format!("skipping {}: {}", manifest.display(), e)),
+            Err(e) => crate::util::diag::warn(format!(
+                "skipping {}: {}",
+                crate::util::paths::display_path(&manifest),
+                e
+            )),
         }
     }
     templates.sort_by(|a, b| a.name.cmp(&b.name));
@@ -665,9 +674,9 @@ fn validate_structure_at(nodes: &[FolderNode], template_slug: &str, depth: usize
 // Transforms
 // ---------------------------------------------------------------------------
 //
-// These live beside `Transform` rather than in `naming`, which is where they
-// were: `naming` had to import `template` for the enum, and `template` imports
-// `naming` for interpolation, so the two modules each needed the other.
+// These live beside `Transform` rather than in `naming`, so `naming` never
+// imports `template` for the enum and the two modules cannot come to need
+// each other.
 
 /// Apply a transform to a raw string value.
 pub fn apply_transform(value: &str, transform: &Transform) -> String {
@@ -714,10 +723,10 @@ mod tests {
         }
     }
 
-    /// A manifest that exists but cannot be **decoded** is the case where the
-    /// old `Err(_)` arm actually destroyed data: `read_to_string` fails with
-    /// `InvalidData`, the arm called it a new template, and the atomic write
-    /// went straight through — taking every unknown key the user owns with it.
+    /// A manifest that exists but cannot be **decoded** is never replaced:
+    /// `read_to_string` fails with `InvalidData`, and a save that took that for
+    /// a new template would write straight through it — taking every unknown
+    /// key the user owns with it.
     ///
     /// Invalid UTF-8 is the honest fixture for that. No permissions to arrange,
     /// no root-runner exemption, and the file is genuinely replaceable, so the
@@ -804,19 +813,90 @@ mod tests {
         }
     }
 
+    /// A token counts where the template would render it, and nowhere else.
+    #[test]
+    fn a_token_in_a_file_that_is_never_rendered_is_not_mentioned() {
+        let file = |path: &str, body: &str| FileEntry {
+            path: path.to_string(),
+            template: body.to_string(),
+            content: String::new(),
+        };
+        let mut template = Template {
+            name: "T".to_string(),
+            slug: "t".to_string(),
+            naming_pattern: "{name}".to_string(),
+            exclude: vec!["*.tmp".to_string()],
+            verbatim: vec!["*.j2".to_string()],
+            files: vec![
+                file("scratch.tmp", "made for {id}"),
+                file("layout.j2", "{id} is the engine's own token here"),
+            ],
+            ..Template::default()
+        };
+        assert!(!template.interpolates("{id}"));
+        assert!(!template.interpolates_anything());
+
+        template
+            .files
+            .push(file("{id}_notes.j2", "kept as written"));
+        assert!(
+            template.interpolates("{id}"),
+            "a verbatim file's name is rendered"
+        );
+        template.files.pop();
+
+        template.files.push(file("README.md", "Project {id}"));
+        assert!(template.interpolates("{id}"));
+    }
+
+    /// A save that empties the starter todos takes the block out of the
+    /// manifest, and a key fastf does not own stays where it was.
+    #[test]
+    fn a_save_without_todos_takes_the_block_out_of_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("template.yaml");
+        let mut template = Template {
+            name: "Edit".to_string(),
+            slug: "edit".to_string(),
+            naming_pattern: "{id}".to_string(),
+            todo: vec![TodoBlock {
+                phase: Some("Edit".to_string()),
+                tasks: vec!["Rough cut".to_string()],
+            }],
+            ..Template::default()
+        };
+        template.save_to_file(&manifest).unwrap();
+        let mut written = fs::read_to_string(&manifest).unwrap();
+        assert!(written.contains("Rough cut"), "{written}");
+        written.push_str("studio_note: keep me\n");
+        fs::write(&manifest, written).unwrap();
+
+        template.todo.clear();
+        template.save_to_file(&manifest).unwrap();
+        let written = fs::read_to_string(&manifest).unwrap();
+        assert!(!written.contains("todo"), "{written}");
+        assert!(!written.contains("Rough cut"), "{written}");
+        assert!(written.contains("studio_note: keep me"), "{written}");
+    }
+
     /// A field added to `Template` without being added to `OWNED_KEYS` would be
     /// preserved from the old manifest instead of updated, so an edit made in the
     /// TUI builder would appear to save and change nothing.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
-        // Populated so nothing is skipped: `verbatim` and `exclude` are omitted
-        // when empty, and the two `#[serde(skip)]` fields never appear at all.
+        // Populated so nothing is skipped: `verbatim`, `exclude` and `todo`
+        // are omitted when empty, and the two `#[serde(skip)]` fields never
+        // appear at all.
         let tmpl = Template {
             name: "T".to_string(),
             slug: "t".to_string(),
             naming_pattern: "{id}".to_string(),
             verbatim: vec!["*.png".to_string()],
             exclude: vec!["*.tmp".to_string()],
+            todo: vec![TodoBlock {
+                phase: Some("Edit".to_string()),
+                tasks: vec!["Rough cut".to_string()],
+            }],
             ..Template::default()
         };
         let serialized = crate::util::yaml::serialized_keys(&tmpl);

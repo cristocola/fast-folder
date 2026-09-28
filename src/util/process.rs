@@ -4,8 +4,8 @@
 //! **A record belongs to its worker, whichever data dir started it.** A job's
 //! own data dir knows its live jobs (`core::jobs::live_workers`), but a second
 //! fastf on the same machine — another data dir, portable mode beside the
-//! installed one, a test lab — does not, and its reconcile took a live move's
-//! record for an abandoned one and discarded the copy while it was being
+//! installed one, a test lab — does not, and its reconcile would take a live
+//! move's record for an abandoned one and discard the copy while it is being
 //! written. An operation id names the pid that minted it and the moment it
 //! did (`transactions::next_operation_id`), which is enough to ask the
 //! operating system instead.
@@ -143,7 +143,7 @@ mod imp {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 mod imp {
-    /// No way to ask here: nothing is claimed for another process, as before.
+    /// No way to ask here: nothing is claimed for another process.
     pub(super) fn started_fastf(_pid: u32) -> Option<u128> {
         None
     }

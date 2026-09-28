@@ -1,12 +1,10 @@
 //! A multi-line editor: the template builder's folder list and file contents.
 //!
-//! Written here rather than taken from `tui-textarea`, which the plan named as
-//! a candidate. Its current release pins `ratatui 0.29`, and a widget built
-//! against a different ratatui does not implement *our* `Widget` trait at all —
-//! adding it pulls a second copy of ratatui into the tree, or fails to resolve,
-//! which is what it does here. The plan's own condition for a widget crate is
-//! that it build against the ratatui in `Cargo.toml`; this one does not, so the
-//! piece is ours.
+//! Written here rather than taken from `tui-textarea`: a widget crate has to
+//! build against the ratatui in `Cargo.toml`, and that one pins `ratatui 0.29`.
+//! A widget built against a different ratatui does not implement *our*
+//! `Widget` trait at all: adding it pulls a second copy of ratatui into the
+//! tree, or fails to resolve.
 //!
 //! It is [`LineEdit`](super::input::LineEdit) with a second dimension, and the
 //! same rule holds: **the cursor is a char index, never a byte offset**, on
@@ -23,7 +21,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
 use crate::tui::command::Key;
-use crate::tui::widgets::input::visible_window;
+use crate::tui::widgets::input::{byte_index, visible_window};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextArea {
@@ -250,8 +248,8 @@ impl TextArea {
 
     /// Draw into `area` and report where the caret is. The viewport it keeps
     /// is the same bargain `LibraryState.offset` makes: scrolling is state,
-    /// and re-deriving it every frame throws it away — which is what a
-    /// caller that cloned the area before drawing used to do.
+    /// and re-deriving it every frame throws it away — as does a caller that
+    /// clones the area before drawing.
     pub fn render(&self, area: Rect, buffer: &mut Buffer, style: Style) -> Option<Position> {
         if area.height == 0 || area.width == 0 {
             return None;
@@ -265,14 +263,11 @@ impl TextArea {
             .skip(self.offset.get())
             .take(area.height as usize)
             .map(|(index, line)| {
-                // **The line the caret is on is windowed at the caret.** Every
-                // line used to be windowed at its end, while the caret below
-                // was windowed at `self.column` — two different windows over
-                // the same string. Press Home on a line longer than the pane
-                // and the caret sat at column 0 over the middle of the line,
-                // and every character typed landed off-window and never
-                // appeared. `LineEdit::render_line` has always used one window
-                // for both.
+                // **The line the caret is on is windowed at the caret**, the
+                // window the caret below is measured in, as
+                // `LineEdit::render_line` does: two windows over one string put
+                // the caret over the wrong character, and after Home on a line
+                // longer than the pane every character typed lands off-window.
                 let cursor = if index == self.row {
                     self.column
                 } else {
@@ -296,13 +291,6 @@ impl TextArea {
     }
 }
 
-fn byte_index(text: &str, char_index: usize) -> usize {
-    text.char_indices()
-        .nth(char_index)
-        .map(|(index, _)| index)
-        .unwrap_or(text.len())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,13 +302,10 @@ mod tests {
 
     /// The character under the caret is the character the caret is pointing at.
     ///
-    /// The line was windowed at its **end** and the caret at `self.column`, so
-    /// on a line longer than the pane the two disagreed by however far the
-    /// cursor was from the end. Home, then type: the caret sat at column 0, the
-    /// text drawn under it was the middle of the line, and every keystroke
-    /// landed somewhere off-window. The structure and files editors in the
-    /// template builder, the settings screen's base list and the quick note all
-    /// use this widget.
+    /// On a line longer than the pane, the drawn window and the caret agree
+    /// wherever the cursor is, so Home then typing lands on screen. The
+    /// structure and files editors in the template builder, the settings
+    /// screen's base list and the quick note all use this widget.
     #[test]
     fn the_drawn_line_and_the_caret_agree_about_where_the_cursor_is() {
         use ratatui::buffer::Buffer;

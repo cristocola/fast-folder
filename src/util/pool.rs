@@ -3,8 +3,8 @@
 //! **On a network mount every call is a round trip.** An rclone mount of an S3
 //! bucket answers an unlink in 100 ms or more, an sshfs mount a `stat` in
 //! 20 ms; a walk, copy or removal that asks one at a time spends a web
-//! project's 1640 entries waiting — 194 s to remove one old copy from R2 in
-//! 3.13. The pool asks as many at once as the filesystem is worth
+//! project's 1640 entries waiting — 194 s to remove one old copy from R2. The
+//! pool asks as many at once as the filesystem is worth
 //! ([`width_for`]) and keeps what the sequential code promised: the first
 //! error stops the rest and is the answer, nothing new is started after it,
 //! and every worker runs under the fault arming of the thread that started it

@@ -95,6 +95,7 @@ pub fn preview_apply(
 ) -> Result<ApplyOutcome> {
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
+    crate::util::paths::require_answer(target)?;
     crate::util::paths::require_real_directory(target, "apply target")?;
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     Ok(ApplyOutcome { actions })
@@ -108,6 +109,7 @@ pub fn apply(
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
+    crate::util::paths::require_answer(target)?;
     crate::util::paths::require_real_directory(target, "apply target")?;
     // The authoritative occupancy plan is computed only after the lock is held.
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
@@ -154,116 +156,36 @@ pub struct RegisterOutcome {
 }
 
 pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
-    let original_metadata = fs::symlink_metadata(&options.path).with_context(|| {
-        format!(
-            "path does not exist or is not accessible: {}",
-            options.path.display()
-        )
-    })?;
-    if original_metadata.file_type().is_symlink() || !original_metadata.file_type().is_dir() {
-        bail!(
-            "path is not a directory (or is a link): {}",
-            options.path.display()
-        );
+    let canonical = registration_target(&options.path)?;
+    // What the options themselves rule out, before the lock and before a
+    // folder that is skipped could answer for them.
+    if options.apply_structure && options.template_slug.is_none() {
+        bail!("--apply requires --template");
     }
-    let canonical = crate::util::paths::canonical(&options.path).with_context(|| {
-        format!(
-            "path does not exist or is not accessible: {}",
-            options.path.display()
-        )
-    })?;
+    if options.use_today && options.created_override.is_some() {
+        bail!("--use-today and --created are mutually exclusive");
+    }
 
     let (registered, template, desired_rename) = {
         let _mutation_lock = DataLock::acquire()?;
         let config = Config::load()?;
         let base = configured_parent(&config, &canonical)?;
-        let pinfo = project_info::pinfo_path(&canonical);
-        let pinfo_exists = assets::entry_exists(&pinfo)?;
-        if pinfo_exists {
-            match options.on_pinfo_conflict {
-                PinfoConflict::Abort => bail!(
-                    "{} already exists — this folder is already a project (confirm overwrite to re-register)",
-                    pinfo.display()
-                ),
-                PinfoConflict::Skip => {
-                    let project = library::scan_base(&base)
-                        .into_iter()
-                        .find(|project| project.path == canonical)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "{} exists but has no readable project identity",
-                                pinfo.display()
-                            )
-                        })?;
-                    return Ok(RegisterOutcome {
-                        project,
-                        renamed_to: None,
-                        pinfo_written: false,
-                        applied: false,
-                        rename_error: None,
-                        apply_error: None,
-                    });
-                }
-                PinfoConflict::Overwrite => {
-                    let metadata = fs::symlink_metadata(&pinfo)?;
-                    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                        bail!("{} is not a real PROJECT_INFO.md file", pinfo.display());
-                    }
-                }
-            }
+        if let Some(skipped) = existing_registration(options.on_pinfo_conflict, &base, &canonical)?
+        {
+            return Ok(skipped);
         }
 
-        if options.apply_structure && options.template_slug.is_none() {
-            bail!("--apply requires --template");
-        }
-        if options.use_today && options.created_override.is_some() {
-            bail!("--use-today and --created are mutually exclusive");
-        }
         let counters = Counters::load()?;
-        let template = match &options.template_slug {
-            Some(slug) => template::find_by_slug(slug)?,
-            None => registered_stub_template(),
-        };
-        let raw_values = if options.template_slug.is_some() {
-            crate::core::vars::validated_raw_values(&template, &options.vars)?
-        } else {
-            HashMap::new()
-        };
+        let (template, raw_values) = registration_template(&options)?;
 
         let folder_name = canonical
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "registered".to_string());
-        let id_value = match parse_id_token(&folder_name, &template.id.prefix) {
-            Some(recovered) => recovered,
-            None => Counters::next_value(&config, &counters)?,
-        };
-        let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
+        let (id_value, id) =
+            registration_id(&config, &counters, &template, &folder_name, &canonical)?;
 
-        for configured in config.effective_bases() {
-            let Ok(configured) = crate::util::paths::canonical(&configured) else {
-                continue;
-            };
-            for existing in library::scan_base(&configured) {
-                if existing.id == id && existing.path != canonical {
-                    bail!(
-                        "project ID {} is already used by {}; refusing duplicate registration",
-                        id,
-                        existing.path.display()
-                    );
-                }
-            }
-        }
-
-        let mut plan_vars = if options.template_slug.is_some() {
-            crate::core::vars::rendered_values(&template, &raw_values)?
-        } else {
-            HashMap::new()
-        };
-        plan_vars.insert("id".to_string(), id.clone());
-        if options.template_slug.is_none() {
-            plan_vars.insert("name".to_string(), slugify_folder_name(&folder_name));
-        }
+        let plan_vars = registration_vars(&options, &template, &raw_values, &id, &folder_name)?;
         let plan = ProjectPlan {
             folder_name,
             root_path: canonical.clone(),
@@ -297,20 +219,188 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             exists: true,
         };
         library::cache_upsert(&project.base, &project);
-        let desired = if options.rename {
-            desired_registration_name(
-                &template,
-                options.template_slug.is_some(),
-                &plan.vars,
-                &config,
-            )?
-            .filter(|name| name != &plan.folder_name)
-        } else {
-            None
-        };
+        let desired = registration_rename(&options, &template, &plan, &config)?;
         (project, template, desired)
     };
 
+    Ok(registration_follow_ups(
+        &options,
+        registered,
+        &template,
+        desired_rename,
+    ))
+}
+
+/// The folder a register is about, canonical: a real directory, not a link.
+fn registration_target(path: &Path) -> Result<PathBuf> {
+    crate::util::paths::require_answer(path)?;
+    let original_metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "path does not exist or is not accessible: {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
+    if original_metadata.file_type().is_symlink() || !original_metadata.file_type().is_dir() {
+        bail!(
+            "path is not a directory (or is a link): {}",
+            crate::util::paths::display_path(path)
+        );
+    }
+    let canonical = crate::util::paths::canonical(path).with_context(|| {
+        format!(
+            "path does not exist or is not accessible: {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
+    Ok(canonical)
+}
+
+/// A folder that already holds a `PROJECT_INFO.md`, as `conflict` says:
+/// `Abort` refuses, `Skip` answers with the project there, and `Overwrite`
+/// goes on over a real file only.
+fn existing_registration(
+    conflict: PinfoConflict,
+    base: &Path,
+    canonical: &Path,
+) -> Result<Option<RegisterOutcome>> {
+    let pinfo = project_info::pinfo_path(canonical);
+    let pinfo_exists = assets::entry_exists(&pinfo)?;
+    if pinfo_exists {
+        match conflict {
+            PinfoConflict::Abort => bail!(
+                "{} already exists — this folder is already a project (confirm overwrite to re-register)",
+                crate::util::paths::display_path(&pinfo)
+            ),
+            PinfoConflict::Skip => {
+                let project = library::scan_base(base)
+                    .into_iter()
+                    .find(|project| project.path == canonical)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{} exists but has no readable project identity",
+                            crate::util::paths::display_path(&pinfo)
+                        )
+                    })?;
+                return Ok(Some(RegisterOutcome {
+                    project,
+                    renamed_to: None,
+                    pinfo_written: false,
+                    applied: false,
+                    rename_error: None,
+                    apply_error: None,
+                }));
+            }
+            PinfoConflict::Overwrite => {
+                let metadata = fs::symlink_metadata(&pinfo)?;
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    bail!(
+                        "{} is not a real PROJECT_INFO.md file",
+                        crate::util::paths::display_path(&pinfo)
+                    );
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The template a register uses — the stub without `--template` — and the
+/// values checked against it.
+fn registration_template(options: &RegisterOptions) -> Result<(Template, HashMap<String, String>)> {
+    let template = match &options.template_slug {
+        Some(slug) => template::find_by_slug(slug)?,
+        None => registered_stub_template(),
+    };
+    let raw_values = if options.template_slug.is_some() {
+        crate::core::vars::validated_raw_values(&template, &options.vars)?
+    } else {
+        HashMap::new()
+    };
+    Ok((template, raw_values))
+}
+
+/// The id a register takes — the folder name's `ID####` token, or the next
+/// from the floor — refused when another project already holds it.
+fn registration_id(
+    config: &Config,
+    counters: &Counters,
+    template: &Template,
+    folder_name: &str,
+    canonical: &Path,
+) -> Result<(u64, String)> {
+    let id_value = match parse_id_token(folder_name, &template.id.prefix) {
+        Some(recovered) => recovered,
+        None => Counters::next_value(config, counters)?,
+    };
+    let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
+
+    for configured in config.answering_bases() {
+        let Ok(configured) = crate::util::paths::canonical(&configured) else {
+            continue;
+        };
+        for existing in library::scan_base(&configured) {
+            if existing.id == id && existing.path != canonical {
+                bail!(
+                    "project ID {} is already used by {}; refusing duplicate registration",
+                    id,
+                    crate::util::paths::display_path(&existing.path)
+                );
+            }
+        }
+    }
+    Ok((id_value, id))
+}
+
+/// The plan's variables: the template's rendered values — or, without one,
+/// the folder name as `{name}` — and the id.
+fn registration_vars(
+    options: &RegisterOptions,
+    template: &Template,
+    raw_values: &HashMap<String, String>,
+    id: &str,
+    folder_name: &str,
+) -> Result<HashMap<String, String>> {
+    let mut plan_vars = if options.template_slug.is_some() {
+        crate::core::vars::rendered_values(template, raw_values)?
+    } else {
+        HashMap::new()
+    };
+    plan_vars.insert("id".to_string(), id.to_string());
+    if options.template_slug.is_none() {
+        plan_vars.insert("name".to_string(), slugify_folder_name(folder_name));
+    }
+    Ok(plan_vars)
+}
+
+/// The name `--rename` asks for, when it differs from the folder's own.
+fn registration_rename(
+    options: &RegisterOptions,
+    template: &Template,
+    plan: &ProjectPlan,
+    config: &Config,
+) -> Result<Option<String>> {
+    let desired = if options.rename {
+        desired_registration_name(
+            template,
+            options.template_slug.is_some(),
+            &plan.vars,
+            config,
+        )?
+        .filter(|name| name != &plan.folder_name)
+    } else {
+        None
+    };
+    Ok(desired)
+}
+
+/// The rename and the apply, after the lock: each keeps its failure in the
+/// outcome, since the registration is already committed.
+fn registration_follow_ups(
+    options: &RegisterOptions,
+    registered: Project,
+    template: &Template,
+    desired_rename: Option<String>,
+) -> RegisterOutcome {
     let mut outcome = RegisterOutcome {
         project: registered,
         renamed_to: None,
@@ -334,14 +424,14 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             Err(error) => outcome.apply_error = Some(format!("{error:#}")),
         }
     }
-    Ok(outcome)
+    outcome
 }
 
 fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
     let parent = canonical
         .parent()
         .context("registration target has no parent directory")?;
-    for configured in config.effective_bases() {
+    for configured in config.answering_bases() {
         let Ok(configured) = crate::util::paths::canonical(&configured) else {
             continue;
         };
@@ -352,7 +442,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
     }
     bail!(
         "registration target must be a direct child of a configured base: {}",
-        canonical.display()
+        crate::util::paths::display_path(canonical)
     )
 }
 
@@ -386,7 +476,9 @@ fn desired_registration_name(
     Ok(Some(desired))
 }
 
-fn registered_stub_template() -> Template {
+/// The template a register without one uses: the basics
+/// `Metadata::from_plan_at` and `project_info::render` need, and nothing else.
+pub fn registered_stub_template() -> Template {
     Template {
         name: "Registered project".to_string(),
         slug: REGISTERED_SLUG.to_string(),
@@ -404,9 +496,8 @@ fn write_registration_metadata(
     tags: &[String],
     created: &str,
 ) -> Result<()> {
-    // One write. This used to write the file with `now` and then rewrite the
-    // frontmatter to patch `created`, which meant a registered project's
-    // identity file existed briefly with the wrong date in it.
+    // One write, `created` already in it: a second write to patch the date
+    // would leave the identity file briefly holding the wrong one.
     project_info::write_at(plan, template, tags, created.to_string())
         .context("writing project metadata")
 }
@@ -424,8 +515,12 @@ pub fn resolve_created(
     if use_today {
         return Ok(crate::util::time::now_iso8601());
     }
-    let metadata =
-        fs::metadata(path).with_context(|| format!("reading metadata of {}", path.display()))?;
+    let metadata = fs::metadata(path).with_context(|| {
+        format!(
+            "reading metadata of {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
     match metadata.created().or_else(|_| metadata.modified()) {
         Ok(value) => {
             let date: DateTime<Utc> = value.into();
@@ -435,7 +530,11 @@ pub fn resolve_created(
     }
 }
 
-fn slugify_folder_name(name: &str) -> String {
+/// Turn an existing folder basename into the `{name}` token used by
+/// `config.register_naming_pattern`. Collapses any run of whitespace to a
+/// single `_` and then runs `sanitize_name` to strip filesystem-illegal chars.
+/// Case is preserved.
+pub fn slugify_folder_name(name: &str) -> String {
     sanitize_name(&name.split_whitespace().collect::<Vec<_>>().join("_"))
 }
 
@@ -520,11 +619,10 @@ fn mutate_tags(project: &Project, mutate: impl FnOnce(&mut Vec<String>)) -> Resu
 /// Re-derive this project's auto-tags, replacing **only** the tags fastf
 /// derived last time.
 ///
-/// It used to remove every tag under a `tag_from` slug's namespace, which is a
-/// wider set than the one it wrote: a template declaring `tags: ["tier/legacy"]`
-/// lost that tag, and so did anyone who typed `fastf tag add ID0001
-/// tier/manual`. Re-deriving is a refresh, not a reset — nothing it did not
-/// write is its to delete.
+/// Every tag under a `tag_from` slug's namespace is a wider set than the one it
+/// wrote: it holds a template's literal `tier/legacy` and a hand-typed
+/// `tier/manual` too. Re-deriving is a refresh, not a reset — nothing it did
+/// not write is its to delete.
 ///
 /// A derived tag that has not changed keeps its place in the list, so a reauto
 /// that changes nothing rewrites nothing.
@@ -780,9 +878,8 @@ pub fn copy_project(
 /// bases get walked is the whole question, and answering it with defaults would
 /// report a clean library because it looked in the wrong place.
 pub fn reconcile() -> Result<crate::core::provisioning::ReconcileReport> {
-    // Loaded here only to fail loudly on an unreadable config: reporting a
-    // clean library because the pass looked in the wrong place would be worse
-    // than an error. The pass itself reloads it beneath the lock.
+    // Loaded here only to fail loudly; the pass itself reloads it beneath the
+    // lock.
     Config::load()?;
     Ok(crate::core::provisioning::reconcile_locked())
 }
@@ -876,20 +973,12 @@ pub fn reindex() -> Result<(Config, usize)> {
 /// Record the number behind each project's id, for projects written before
 /// `Metadata::id_number` existed.
 ///
-/// **Why this is here and not on the counter's path.** Reading a number back
-/// out of a rendered id needs the template's `id.prefix` to know where the
-/// prefix ends, and the counter's floor is computed on every create *and*
-/// every preview, over every project in every base — loading a template per
-/// row there would be absurd, and worse, it has no answer for the cases that
-/// already exist: a project registered without a template, one whose template
-/// was deleted or renamed, one copied in from a machine with different
-/// templates. A guess that reads too *low* mints a duplicate id, which is
-/// worse than reading too high.
-///
-/// Reindex is where that lookup is affordable and where "no answer" is a fine
-/// outcome: it already holds the lock, it is the declared verb for changes
-/// fastf could not observe, and a project it cannot resolve is simply left
-/// alone to keep using the parse fallback.
+/// **Here and not on the counter's path**, which runs on every create and
+/// preview and would load a template per row, with no answer for a project
+/// whose template is gone or never was — and a guess that reads too *low*
+/// mints a duplicate id (`src/core/CLAUDE.md` › Create, apply, register).
+/// Reindex already holds the lock, and a project it cannot resolve keeps the
+/// parse fallback.
 fn backfill_id_numbers(config: &Config) {
     for project in library::discover(config) {
         if project.id_number.is_some() {
@@ -938,7 +1027,7 @@ fn backfill_id_numbers(config: &Config) {
 /// `original_slug` is the slug the template was **loaded** under. When it
 /// differs from `template.slug` the directory is renamed before the manifest is
 /// written — the builder's edit mode can change a slug, and without the rename
-/// the new manifest landed in a fresh directory while the old one stayed behind
+/// the new manifest lands in a fresh directory while the old one stays behind
 /// as a second, stale template with the same contents.
 ///
 /// Returns the manifest path.
@@ -954,12 +1043,10 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
     // **A save may land on a directory that already exists only when the
     // template was loaded from that very slug** — that, and only that, is an
     // edit in place. Everything else is a collision reached by one door or the
-    // other: a rename onto an occupied slug, which was always refused, or a
-    // *new* template typed onto one, which was not. The second had no guard at
-    // all, because the rename check lived inside `if let Some(original)` and a
-    // new template carries `None`: typing `general` as the slug of a new
-    // template overwrote the bundled one — its variables, its structure and its
-    // naming pattern replaced — and said `✓ Saved`.
+    // other: a rename onto an occupied slug, or a *new* template typed onto
+    // one. A new template carries `None`, so a check that lives inside
+    // `if let Some(original)` lets `general` typed as a new slug overwrite the
+    // bundled template whole.
     let manifest = crate::util::paths::template_manifest(slug.as_str());
     let loaded_here = match original_slug {
         Some(original) => {
@@ -990,13 +1077,13 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
             let from = crate::util::paths::template_dir(original.as_str());
             if from.exists() {
                 // The destination has no manifest or we would have bailed
-                // above, but `fs::rename` still needs the path itself free.
+                // above, but the rename still needs the path itself free.
                 if dir.exists() {
                     bail!(
                         "template '{slug}' already exists — rename '{original}' to something else"
                     );
                 }
-                fs::rename(&from, &dir)
+                crate::util::fs_retry::rename_dir(&from, &dir)
                     .with_context(|| format!("renaming template '{original}' to '{slug}'"))?;
             }
         }
@@ -1045,6 +1132,47 @@ pub fn template_from_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Renaming a template waits for a folder held for a moment.** Its folder
+    /// is the template, so a new slug is a folder rename, and Windows renames
+    /// no folder while a file in it is open; 0.8 s is past the file rename's
+    /// schedule and inside the folder one.
+    #[cfg(windows)]
+    #[test]
+    fn a_templates_rename_waits_for_a_folder_held_for_a_moment() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        let (_guard, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let mut template = Template {
+            name: "Album".to_string(),
+            slug: "album".to_string(),
+            naming_pattern: "{id}".to_string(),
+            ..Template::default()
+        };
+        save_template(&template, None).unwrap();
+        let bundled = crate::util::paths::template_dir("album").join("files");
+        fs::create_dir_all(&bundled).unwrap();
+        fs::write(bundled.join("cover.psd"), vec![5_u8; 4096]).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(bundled.join("cover.psd"))
+            .unwrap();
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            drop(held);
+        });
+
+        template.slug = "record".to_string();
+        let saved = save_template(&template, Some("album"));
+        letting_go.join().unwrap();
+
+        saved.expect("the folder was let go inside the folder schedule");
+        let renamed = crate::util::paths::template_dir("record");
+        assert!(renamed.join("files").join("cover.psd").is_file());
+        assert!(renamed.join("template.yaml").is_file());
+        assert!(!crate::util::paths::template_dir("album").exists());
+    }
 
     #[test]
     fn resolve_created_rejects_invalid_dates() {

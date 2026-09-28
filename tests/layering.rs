@@ -2,8 +2,7 @@
 //!
 //! `core` and `util` are the parts of fastf that both surfaces — the CLI and the
 //! guided TUI — sit on top of. A prompt inside one of them is a prompt a
-//! non-interactive caller cannot answer, which is how `core::vars::collect_vars`
-//! came to block scripted variable collection until it was moved to `tui`.
+//! non-interactive caller cannot answer, and a scripted run blocks on it.
 //!
 //! A source scan is the only check that holds here: an import is not something a
 //! runtime test can observe, and the rule has to fail the build the moment it is
@@ -39,6 +38,102 @@ fn sources(layer: &str) -> Vec<PathBuf> {
     found
 }
 
+/// A file that holds only unit tests: one named `tests.rs`, or anything in a
+/// `tests/` folder beside the module it tests. Judged on the path below `src/`,
+/// so a checkout that happens to sit under a folder named `tests` exempts
+/// nothing.
+fn is_test_file(path: &Path) -> bool {
+    let below = path
+        .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+        .unwrap_or(path);
+    below.file_name().is_some_and(|name| name == "tests.rs")
+        || below
+            .parent()
+            .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "tests"))
+}
+
+/// The lines of a source file that are production code, numbered from one:
+/// not a comment, and not inside a module behind `cfg(test)` — **wherever in
+/// the file that module is**. A scan that stops at the first test module reads
+/// nothing below it.
+///
+/// A module's end is found by its indentation, the way rustfmt writes it (a
+/// `}` alone at the indentation of its `mod` line): counting braces would
+/// count the ones in strings and in `'{'`.
+fn production_lines(text: &str) -> Vec<(usize, &str)> {
+    let mut lines = Vec::new();
+    let mut gated = false;
+    let mut closing: Option<String> = None;
+    for (index, line) in text.lines().enumerate() {
+        if let Some(end) = &closing {
+            if line == end {
+                closing = None;
+            }
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let is_mod = trimmed.starts_with("mod ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("pub(crate) mod ")
+            || trimmed.starts_with("pub(super) mod ");
+        if gated && is_mod {
+            gated = false;
+            // `mod tests;` is a file of its own, which `is_test_file` knows.
+            if trimmed.ends_with('{') {
+                let indent = &line[..line.len() - trimmed.len()];
+                closing = Some(format!("{indent}}}"));
+            }
+            continue;
+        }
+        // An attribute may sit between the gate and its module.
+        if !trimmed.starts_with("#[") {
+            gated = false;
+        }
+        if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test") {
+            gated = true;
+        }
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        lines.push((index + 1, line));
+    }
+    lines
+}
+
+/// The scans read what is below a test module too, and nothing inside one.
+#[test]
+fn a_scan_reads_the_code_below_a_test_module() {
+    let text = "\
+fn above() {}
+// a comment
+#[cfg(test)]
+mod tests {
+    fn inside() {
+        let brace = '{';
+    }
+}
+
+impl Below {
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod nested {
+        fn also_inside() {}
+    }
+    fn below() {}
+}
+#[cfg(test)]
+mod elsewhere;
+fn last() {}
+";
+    let read: Vec<&str> = production_lines(text)
+        .into_iter()
+        .map(|(_, line)| line.trim())
+        .filter(|line| line.starts_with("fn "))
+        .collect();
+    assert_eq!(read, ["fn above() {}", "fn below() {}", "fn last() {}"]);
+    assert_eq!(production_lines(text)[0], (1, "fn above() {}"));
+}
+
 /// Nothing under `core/` may ask a question. The same functions serve scripted,
 /// non-interactive runs, where there is no terminal to prompt on and no user
 /// watching one — so a prompt there is a hang no caller can avoid.
@@ -63,8 +158,8 @@ fn core_does_not_prompt() {
 /// `fastf copy lullaby`'s picker and the guided app look like one tool.
 ///
 /// A scan, because the point is that nothing reintroduces it: a second prompt
-/// library is a second set of cancel semantics, and inconsistent cancelling is
-/// the defect this whole area exists to have fixed.
+/// library is a second set of cancel semantics, and Esc has to back out of
+/// every prompt the same way.
 #[test]
 fn dialoguer_is_gone() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -115,9 +210,8 @@ fn dialoguer_is_gone() {
 fn core_and_util_do_not_render() {
     const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
     // Matched on the file name, not a `"util/diag.rs"` suffix: `Path::display`
-    // uses the platform separator, so a `/` suffix never matches on Windows —
-    // and the first version of this list flagged `util::diag` itself there, on
-    // the one platform nobody ran it on locally.
+    // uses the platform separator, so a `/` suffix never matches on Windows
+    // and the list would flag `util::diag` itself there.
     const ALLOWED: [&str; 2] = ["diag.rs", "trace.rs"];
 
     let mut offenders = Vec::new();
@@ -128,26 +222,16 @@ fn core_and_util_do_not_render() {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if ALLOWED.contains(&file_name.as_str()) {
+            // A unit test may print: it is describing a failure to a human
+            // who is already looking at a terminal.
+            if ALLOWED.contains(&file_name.as_str()) || is_test_file(&path) {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
-            let mut in_tests = false;
-            for (number, line) in text.lines().enumerate() {
-                // A unit test may print: it is describing a failure to a human
-                // who is already looking at a terminal.
-                if line.trim_start().starts_with("mod tests") {
-                    in_tests = true;
-                }
-                if in_tests {
-                    continue;
-                }
-                // A comment may name what it replaced.
-                if line.trim_start().starts_with("//") {
-                    continue;
-                }
+            // A comment may name a macro without calling it.
+            for (number, line) in production_lines(&text) {
                 if RENDERING.iter().any(|marker| line.contains(marker)) {
-                    offenders.push(format!("{shown}:{}  {}", number + 1, line.trim()));
+                    offenders.push(format!("{shown}:{number}  {}", line.trim()));
                 }
             }
         }
@@ -196,11 +280,8 @@ fn core_and_util_do_not_import_the_surfaces() {
     );
 }
 
-/// An earlier attempt at a cancel contract moved twenty-nine prompts to
-/// `interact_opt` by hand and missed several, so Esc backed out of some menus
-/// and was swallowed by others. Consistency is the whole feature, and it cannot
-/// be kept by remembering: **two modules take the terminal**, and nothing else
-/// may.
+/// **Two modules take the terminal**, and nothing else may: Esc has to back
+/// out of every prompt the same way, and that cannot be kept by remembering.
 ///
 /// `tui::runtime` owns the alternate screen for the guided app; `tui::inline`
 /// owns the last few rows for a command-line prompt. A third owner is two
@@ -218,8 +299,13 @@ fn only_the_runtime_touches_the_terminal() {
     let mut offenders = Vec::new();
     for layer in ["tui", "cli"] {
         for path in sources(layer) {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name == "runtime.rs" || name == "inline.rs" {
+            // The two modules themselves, by their place: the files of
+            // `tui/runtime/` and `tui/inline.rs`. A `runtime` folder or an
+            // `inline.rs` anywhere else is not one of them.
+            let in_runtime = path
+                .parent()
+                .is_some_and(|folder| folder.ends_with(Path::new("tui").join("runtime")));
+            if in_runtime || path.ends_with(Path::new("tui").join("inline.rs")) {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
@@ -248,9 +334,7 @@ fn only_the_runtime_touches_the_terminal() {
 
 /// The same rule one layer down. `util` is under `core`.
 ///
-/// `util::live_select` used to be the exception; it went with the ratatui
-/// rebuild (v3.0.0). The one
-/// thing `util` may still do about a terminal is ask whether there *is* one
+/// The one thing `util` may do about a terminal is ask whether there *is* one
 /// (`util::tty`) and put the cursor back after a signal (`util::interrupt`).
 #[test]
 fn util_does_not_prompt() {
@@ -318,10 +402,9 @@ fn ratatui_and_crossterm_stay_under_tui() {
 /// Every mutation of the templates directory goes through `core::operations`,
 /// which holds `DataLock`.
 ///
-/// Eight of nine template writers used to bypass the lock. A manifest written
-/// with no lock held can be read half-finished by a `fastf new` in another
-/// terminal — `load_all` is what every create reads — and a `remove_dir_all`
-/// racing a create removes files out from under it.
+/// A manifest written with no lock held can be read half-finished by a
+/// `fastf new` in another terminal — `load_all` is what every create reads —
+/// and a `remove_dir_all` racing a create removes files out from under it.
 ///
 /// A source scan is the only check that holds: the rule is about which function
 /// is called, and a runtime test would only catch the race it happened to
@@ -365,23 +448,19 @@ fn every_canonicalization_goes_through_the_helper() {
     let mut offenders = Vec::new();
     for layer in ["cli", "core", "tui", "util"] {
         for path in sources(layer) {
-            let name = path.file_name().unwrap();
-            if name == "tests.rs" {
+            if is_test_file(&path) {
                 continue;
             }
             // The helper's own call is the one allowed.
             let helper = path.ends_with(Path::new("util").join("paths.rs"));
             let text = fs::read_to_string(&path).unwrap();
-            for (number, line) in text.lines().enumerate() {
+            for (number, line) in production_lines(&text) {
                 let trimmed = line.trim_start();
-                if trimmed.starts_with("mod tests") {
-                    break;
-                }
                 if helper && trimmed == "match path.canonicalize() {" {
                     continue;
                 }
-                if !trimmed.starts_with("//") && trimmed.contains(".canonicalize()") {
-                    offenders.push(format!("{}:{}: {}", path.display(), number + 1, trimmed));
+                if trimmed.contains(".canonicalize()") {
+                    offenders.push(format!("{}:{number}: {trimmed}", path.display()));
                 }
             }
         }
@@ -393,13 +472,229 @@ fn every_canonicalization_goes_through_the_helper() {
     );
 }
 
+/// **One mechanism asks a filesystem again**: `util::fs_retry`, whose schedules
+/// are the only pauses `core` takes for it. A `sleep` anywhere else under
+/// `src/core` is a retry loop written by hand, on a schedule nobody else knows.
+/// The pauses that are not retries are named here, with what each waits for.
+#[test]
+fn core_asks_again_only_through_fs_retry() {
+    const ALLOWED: [(&str, usize, &str); 2] = [
+        ("jobs.rs", 2, "a worker process saying it has started"),
+        (
+            "removal.rs",
+            1,
+            "a listing catching up, between two listings of one folder",
+        ),
+    ];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut found = Vec::new();
+        for (number, line) in production_lines(&text) {
+            let trimmed = line.trim_start();
+            if trimmed.contains("sleep(") {
+                found.push(format!("{}:{}: {trimmed}", path.display(), number));
+            }
+        }
+        let allowed = ALLOWED
+            .iter()
+            .find(|(file, ..)| *file == name)
+            .map_or(0, |(_, count, _)| *count);
+        if found.len() != allowed {
+            offenders.push(format!(
+                "{name}: {} pause(s) where {allowed} are accounted for\n    {}",
+                found.len(),
+                found.join("\n    ")
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "ask again through `util::fs_retry` (a `Retry` on one of its schedules), or name \
+         what the pause waits for in this test:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// **A folder is renamed through `fs_retry::rename_dir`**, whose schedule
+/// outlasts a program holding a file in it for a moment; the file rename's is a
+/// third of a second, and a bare `fs::rename` does not ask again at all.
+/// Nothing in a call says which of the two it renames, so every other rename
+/// under `src/core` is named here with what it renames.
+#[test]
+fn core_renames_a_folder_through_rename_dir() {
+    const NOT_A_FOLDER: [(&str, &str, &str); 4] = [
+        (
+            "assets.rs",
+            "fs_retry::rename(",
+            "a copied file, from its temporary name",
+        ),
+        (
+            "transaction.rs",
+            "fs_retry::rename(",
+            "a file an old staging folder held",
+        ),
+        (
+            "move_engine.rs",
+            "fs::rename(",
+            "the rename whose refusal is the signal to stage",
+        ),
+        (
+            "move_preflight.rs",
+            "fs::rename(",
+            "the probe's own folder, asked again by class",
+        ),
+    ];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        for (number, line) in production_lines(&text) {
+            let trimmed = line.trim_start();
+            for call in ["fs_retry::rename(", "fs::rename("] {
+                let named = NOT_A_FOLDER
+                    .iter()
+                    .any(|(file, allowed, _)| *file == name && *allowed == call);
+                if trimmed.contains(call) && !named {
+                    offenders.push(format!("{}:{}: {trimmed}", path.display(), number));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "rename a folder through `fs_retry::rename_dir`, or name what this renames in \
+         this test:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// **Core removes through `util::fs_retry`**, which on Windows waits out the
+/// handle an indexer or a scanner holds on what was just written and sets
+/// the read-only attribute aside, and is the call itself everywhere else. A
+/// bare `fs::remove_*` fails there on what a moment would have let go. The
+/// ones that are meant to fail at once are named here.
+#[test]
+fn core_removes_through_fs_retry() {
+    const AT_ONCE: [(&str, usize, &str); 1] = [(
+        "transaction.rs",
+        2,
+        "a staging folder that may still hold something, which is then meant to stay",
+    )];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut found = Vec::new();
+        for (number, line) in production_lines(&text) {
+            let trimmed = line.trim_start();
+            if ["fs::remove_file(", "fs::remove_dir(", "fs::remove_dir_all("]
+                .iter()
+                .any(|call| trimmed.contains(call))
+            {
+                found.push(format!("{}:{}: {trimmed}", path.display(), number));
+            }
+        }
+        let allowed = AT_ONCE
+            .iter()
+            .find(|(file, ..)| *file == name)
+            .map_or(0, |(_, count, _)| *count);
+        if found.len() != allowed {
+            offenders.push(format!(
+                "{name}: {} bare removal(s) where {allowed} are accounted for\n    {}",
+                found.len(),
+                found.join("\n    ")
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "remove through `util::fs_retry`, or name in this test why this one fails at \
+         once:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+/// **A path is shown through `util::paths::display_path`.** On Windows a path
+/// that has been canonicalized carries the `\\?\` prefix, which is what makes
+/// long paths work and is not for reading: `Path::display` prints it, in a
+/// message, an error or the log. What is left of `.display()` is a path that
+/// is kept as text (`.display().to_string()`, where a stored path needs the
+/// prefix it came with) and a path relative to something, which has none.
+#[test]
+fn a_path_is_shown_through_display_path() {
+    const RELATIVE: [(&str, usize, &str); 1] =
+        [("lifecycle.rs", 1, "a mount's path inside the project")];
+
+    let mut offenders = Vec::new();
+    for layer in ["core", "cli", "tui", "util"] {
+        for path in sources(layer) {
+            if is_test_file(&path) || path.ends_with(Path::new("util").join("paths.rs")) {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let text = fs::read_to_string(&path).unwrap();
+            let mut found = Vec::new();
+            for (number, line) in production_lines(&text) {
+                let trimmed = line.trim_start();
+                let shown = trimmed.matches(".display()").count();
+                let kept = trimmed.matches(".display().to_string()").count();
+                // `.display()` alone on its line is followed by `.to_string()`
+                // on the next, where rustfmt broke the chain.
+                if shown > kept && trimmed != ".display()" {
+                    found.push(format!("{}:{}: {trimmed}", path.display(), number));
+                }
+            }
+            let allowed = RELATIVE
+                .iter()
+                .find(|(file, ..)| *file == name)
+                .map_or(0, |(_, count, _)| *count);
+            if found.len() != allowed {
+                offenders.push(format!(
+                    "{name}: {} shown with `.display()` where {allowed} are accounted for\n    {}",
+                    found.len(),
+                    found.join("\n    ")
+                ));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "show a path with `util::paths::display_path`:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same
 /// process-global variables is one lock too many: they race each other and every
-/// `env::var` in the binary. The lib had two — `trace::tests::TEST_LOCK` for
-/// `FASTF_TRACE_FILE` and `interrupt::TEST_LOCK`, borrowed as `SERIAL` by
-/// `project`'s tests, for `FASTF_INSTALL_DIR`.
+/// `env::var` in the binary.
 ///
 /// Under `src/`, the one place is `util::test_env`. Under `tests/`, it is
 /// `common::env`. A helper that reaches for `set_var` itself looks like
@@ -459,11 +754,8 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
 
 /// **The arrows are spelled in one place, and the hint bar spells nothing.**
 ///
-/// Seven surfaces used to write `↑↓` into a key line by hand — the palette's,
-/// the picker's, the pager's, the search bar's, the preview's, the guide's and
-/// the one every list on a dialog shares. They were all correct on the day
-/// they were written, which is the drift `command.rs` exists to prevent, and a
-/// runtime test cannot see a string literal.
+/// A key line written by hand is correct on the day it is written and drifts
+/// from the registry after, and a runtime test cannot see a string literal.
 ///
 /// Two rules, and they differ because the surfaces do:
 ///
@@ -476,8 +768,8 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
 ///
 /// The key lines a widget draws inside its own frame keep their literals:
 /// `Ctrl-S` in a text area and `Tab` in a form are the widget's, not the
-/// registry's, and naming them where they are consumed is the honest
-/// exception `src/tui/CLAUDE.md` has always made for them.
+/// registry's, and naming them where they are consumed is the exception
+/// `src/tui/CLAUDE.md` makes for them.
 #[test]
 fn no_key_line_is_written_by_hand() {
     const ARROWS: [&str; 5] = ["↑↓", "↑ ↓", "\"↑\"", "\"↓\"", "\"←\""];
@@ -488,9 +780,14 @@ fn no_key_line_is_written_by_hand() {
 
     let mut offenders = Vec::new();
     for path in sources("tui") {
+        // Anywhere under `view/`, a folder of its own included.
         let in_view = path
-            .parent()
-            .is_some_and(|d| d.file_name().is_some_and(|n| n == "view"));
+            .strip_prefix(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src")
+                    .join("tui"),
+            )
+            .is_ok_and(|below| below.starts_with("view"));
         if !in_view {
             continue;
         }
@@ -513,7 +810,7 @@ fn no_key_line_is_written_by_hand() {
     }
     assert!(
         offenders.is_empty(),
-        "a key line is written by hand — read it from `command.rs` instead:\n  {}",
+        "a key line is written by hand — read it from `tui::command` instead:\n  {}",
         offenders.join("\n  ")
     );
 }

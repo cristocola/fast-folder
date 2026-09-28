@@ -82,7 +82,7 @@ terminal nobody is holding is never switched to the alternate screen.
 
 `app::update(&mut App, Msg) -> Vec<Effect>` is the one state transition and
 **performs no I/O**: everything it wants done is an `Effect` (`effect.rs`) that
-`runtime.rs` carries out, and `view::view(&App, &mut Frame)` takes the app by
+`runtime` carries out, and `view::view(&App, &mut Frame)` takes the app by
 shared reference. So `tests/tui_update/` drives the state machine with no
 terminal, `tests/tui_snapshots.rs` renders any state a test can build, and a slow
 filesystem can never reach the key handler.
@@ -94,7 +94,7 @@ the view would need `&mut App`.
 
 ## The runtime owns the screen
 
-`runtime.rs` takes raw mode, the alternate screen and bracketed paste **on
+`runtime` takes raw mode, the alternate screen and bracketed paste **on
 stderr**, so `fastf > log` still opens the app and stdout keeps choosing output
 format. `Runtime::init` calls `tty::mark_interactive_surface` and installs a
 screen-restoring panic hook for the **main thread only**; `spawn_worker` turns a
@@ -106,7 +106,7 @@ trip through the console host — 45 ms first frames and 117 ms fade frames in
 Windows Terminal, under 1 ms and 7 ms buffered. `Terminal::draw` and `execute!`
 flush, so nothing is left waiting.
 
-**Two modules take the terminal** (`tests/layering.rs`): `runtime.rs` the
+**Two modules take the terminal** (`tests/layering.rs`): `runtime/` the
 alternate screen, `inline.rs` a few rows at the cursor for a command-line prompt.
 A third owner would be two unsynchronised writers on one tty. `Suspended` has two
 variants, both because the *terminal* is needed: `Note` (the `$EDITOR` flow) and
@@ -197,7 +197,14 @@ the screens whose rows are not commands.
 ## The command line's own prompts
 
 `prompt.rs` is the contract — the `require_tty` guard, `Ok(None)` for cancelled —
-over `inline.rs`'s drawing. `pickers::pick_project` is the ambiguity picker
+over `inline.rs`'s drawing. **Every prompt goes through it**, so Esc cancels all
+of them or none: one written straight against `inline` is how Esc comes to back
+out of some questions and be swallowed by others. **Every "you cancelled" is
+`prompt::report_cancelled`**, one sentence — `Cancelled — <what did not
+happen>.` — because a bare `Aborted.` says neither what was cancelled nor what
+state the project is in. **The template, base and project pickers exist once
+each** (`pickers.rs`), so their labels, their clamping and their "nothing to
+pick" refusals cannot differ between two commands. `pickers::pick_project` is the ambiguity picker
 `open`/`copy`/`path`/`term` share, never the app; `vars` holds the variable
 prompts a scripted `fastf new` falls back to. The picker is **not filterable**:
 the query already narrowed the list, and it should be answered in a keystroke or
@@ -258,9 +265,9 @@ body and `TableNeeds`): **beside** the table when the names fit whole with
 `PANE_BESIDE_MIN` next to them; **below** it, full width, when the body holds
 `TABLE_BELOW_MIN` + `PANE_BELOW_MIN` rows — the table as tall as its projects, up
 to its share; otherwise **over** it, `Regions.detail` being the body itself, drawn
-instead of the table while the pane has the focus. The pane used to need 100
-columns *and* 26 left by the names, so a library of long names never showed it at
-all. `place` takes no focus: the pane's width is what its rows wrap to, and a
+instead of the table while the pane has the focus. No width is asked of the
+terminal for it: a fixed minimum never shows the pane to a library of long
+names. `place` takes no focus: the pane's width is what its rows wrap to, and a
 focus that changed it would re-wrap them under the cursor. The app asks three
 questions of it: `pane_live` (switched on, and a library with a project in it —
 the pane arrives with the first project instead of moving when the names land),
@@ -272,7 +279,7 @@ into when it would be over.
 
 ## One registry
 
-**Every command is declared once, in `command.rs`** — title, description, contexts,
+**Every command is declared once, in `command::table`** — title, description, contexts,
 default keys, category, palette and hint visibility — and the keymap (`lookup`),
 the palette (`palette_entries`), help (`help_lines`), the hint bar (`hints`) and
 every dialog's key line read it, so none can drift. `tests/tui_commands.rs` holds
@@ -416,14 +423,22 @@ given with the question in view, never one given blind.
 `close_top` owns the question, `quit` who must ask it, and
 `ConfirmThen::DiscardTemplate` carries `then_quit` so the answer finishes the quit.
 
-**A dialog carries its target and never re-reads the selection at submit.**
-`TextThen::Rename`/`Delete` and `ConfirmThen::Unregister` hold the path, because a
-discovery underneath can move the cursor; `App::project_at` resolves it in the
-current snapshot, and a target that is gone is a refusal, never a neighbour.
+**A dialog carries its targets and never re-reads the selection at submit.**
+Every dialog a project verb opens holds the paths it was opened about
+(`actions::Targets`, taken by `App::targets_now`: the marks in view or the
+selection, and whether that was a batch) — rename, delete, unregister, move,
+copy, both tag pickers, the quick note, the todo and phase prompts, and
+`App.editor_note_for` while `$EDITOR` has the terminal — because a discovery
+underneath can take a marked row out of the list or move the cursor.
+`App::still_here` resolves them in the current snapshot: the verb runs over
+what is left of them, and with none left it is a refusal, never a neighbour.
 
 **A worker's answer names its question.** `Builder::pending` carries the slug a
 template read was for, as `on_template_loaded` and `TemplateViewLoaded` check
-theirs, so a slow read never lands as another template's contents.
+theirs, so a slow read never lands as another template's contents. A
+read-only dialog's read is numbered (`App::open_reading`, `App.view_request`)
+and `Msg::ViewLoaded` carries the number back: the title is no name for the
+question, since two projects may share an id and so a title.
 
 ## Discovery, patches and generations
 
@@ -506,13 +521,14 @@ wider earlier one. Widths come from the rows, never the sizes, so a landing size
 cannot reflow the table; the size cell is `rows::SIZE_CELL`, right-aligned, header
 included.
 
-**The base is promoted above the date when the visible rows span more than one
-base** — a question about the rows on screen, not the configuration. The
+**The base is promoted above the date when the rows the filter keeps span more
+than one base** — a question about the list, not the configuration. The
 *claim* is another question: `LibraryState.widths`, `many_bases` and
 `base_width` are measured in `recompute` over the **whole library**, so
 `App::table_min_width` can claim the base column before long names take its
 room, and so a claim that shrank as a query was typed cannot move the pane on
-every keystroke; the view's `choose_columns` still measures the rows on screen.
+every keystroke; the view's `choose_columns` still measures the rows in the
+list.
 
 **Width is display columns, never bytes or characters** (`Проекты` is seven
 columns and fourteen bytes): `view::fit`, `view::pad`, and
@@ -561,7 +577,7 @@ rung and the bar keeps saying what filters the list.
 ## The single-project actions, marks and batches
 
 The verbs on a project are native modals (`app/actions.rs`: `ActionsState`,
-`TextPrompt`, `Confirm`, `MultiPick`). `command.rs` binds `Enter`/`a` to the
+`TextPrompt`, `Confirm`, `MultiPick`). The registry binds `Enter`/`a` to the
 action menu, `A`/`Ctrl-T` to add/remove tags, `N`/`Ctrl-N` to the editor and
 inline notes, `r m u D` to rename/move/unregister/delete, and `M`/`J` to the
 read-only metadata and notes views. Menu rows come from the registry in display
@@ -695,7 +711,8 @@ Enter or `e` on the tab opens it, with the template's details read on a worker
 `template show` prints). The tab's verbs are `n`, Enter, `I` and `D`.
 
 **The builder is a list of a template's five parts, not a sequence of steps**
-(`app/studio.rs` holds the scratch `Template` and the open section), and every row
+(`app::studio` holds the scratch `Template` and the open section; `update`'s
+side of it is `app/builder.rs`, and the tab's `app/templates_tab.rs`), and every row
 summarises what its part holds. Nothing is written until Save, which answers
 `Cannot save:` in `Template::validate`'s words rather than writing something that
 will not load.
@@ -703,8 +720,10 @@ will not load.
 **The builder stays up until the write has landed** (`Builder::saving`), so a
 refusal from under the lock — an occupied slug, a held lock, a full disk — lands
 on the list with every answer intact; `on_action_done` pops only on success, like
-the `Settings` and `Onboarding` arms. While saving it takes no keys, Esc included,
-because a sent write cannot be cancelled.
+the `Settings` and `Onboarding` arms. While saving it ignores Esc and `q`,
+because a sent write cannot be cancelled and its refusal needs the list to land
+on; **Ctrl-C still closes it**, since the write can wait thirty seconds on the
+data lock and the interrupt key is the one way out.
 
 **Leaving asks only when something would be lost**: `is_dirty` compares against
 `Builder::original` whole, so an undone typo is not "worked on". Esc, `q` and
@@ -739,7 +758,7 @@ re-derived every frame jumps.
 
 ## The panel, the guide, and where the words live
 
-**`guide.rs` is to explanations what `command.rs` is to keys**: the builder's
+**`guide.rs` is to explanations what `command` is to keys**: the builder's
 panel, the seven-page guide and the coach all read it, so each explanation exists
 once. It is pure — no I/O, clock or `Config` — and takes only the scratch
 `Template`, so `update` can call it. It holds itself to two rules: **no key is
@@ -928,8 +947,8 @@ one, or the end. **The line takes keys while its write is on its way**: Enter
 empties it at once and records the text in `sending`, an Enter meanwhile goes to
 `queued` and is sent when the first lands (`flush_adds`), and Esc or an empty
 Enter meanwhile sets `closing`, so the line goes once everything entered is
-written — the line used to refuse keys until the answer came, and a fast typist
-lost the first letters of the next todo. **Where it landed is the writer's
+written — a line that refuses keys until the answer comes loses a fast typist
+the first letters of the next todo. **Where it landed is the writer's
 answer** (`ActionOutcome::todo_ordinal`), never the app's guess. A refusal puts
 the text back on the line when nothing was typed after it, and otherwise names
 what was not added. **Closing the line** (`close_pane_edit`, which Esc, an empty
@@ -939,8 +958,8 @@ its index was a heading's. A paste goes in at the caret: several lines are that
 many todos (what was typed before it the start of the first, list markers off,
 `pane::todo_text_of`), one line is the field's, markers off when it was empty.
 `on_paste` normalises a terminal's line breaks first: many send a bare `\r`, and
-`str::lines` splits on `\n` alone, so every multi-line paste used to arrive as
-one line.
+`str::lines` splits on `\n` alone, so a multi-line paste would arrive as one
+line.
 
 **`Context::PaneEdit` is a text-entry context**: the field has first refusal, and
 the registry answers Enter, Esc and `Ctrl-S` (`on_pane_edit_key`). So Enter on the

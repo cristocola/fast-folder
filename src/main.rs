@@ -903,13 +903,9 @@ enum IdAction {
     Reset,
 }
 
-/// `template from-folder`'s long help, with the skipped directories read from
-/// the list itself.
-///
-/// The list was written out here by hand and had drifted: nine of the twelve
-/// were named, so a source tree with a `venv/`, a `.next/` or a `.DS_Store` had
-/// them vanish from the generated template with nothing in the help or the docs
-/// accounting for it.
+/// `template from-folder`'s long help, with the skipped names read from the
+/// list the scan uses: a list written out here by hand drifts from it, and a
+/// name the scan skips then goes unmentioned.
 fn from_folder_help() -> String {
     format!(
         "Walks the folder, turning every directory into a FolderNode and every\n\
@@ -1005,9 +1001,9 @@ fn main() {
 ///
 /// **The claim that this is that window rides on argv, not on the environment.**
 /// `FASTF_RELAUNCHED` is inherited, so a shell inside the window has it and so
-/// does everything typed into that shell — and `fastf completions bash` in a
-/// package build then stopped and waited for an Enter nobody was there to
-/// press. `cli::terminal::relaunched_window` reads the `--relaunched` flag the
+/// does everything typed into that shell — so `fastf completions bash` in a
+/// package build would stop and wait for an Enter nobody is there to press.
+/// `cli::terminal::relaunched_window` reads the `--relaunched` flag the
 /// relaunch put on this process's own command line, which nothing inherits.
 ///
 /// After `restore_terminal` and in cooked mode, so there is no ordering hazard
@@ -1049,10 +1045,10 @@ fn is_config_parse_failure(rendered: &str) -> bool {
 /// Take `--relaunched` off the command line, recording it, before clap sees it.
 ///
 /// It is fastf's own bookkeeping — `util::relaunch` writes it, `cli::terminal`
-/// reads it — and declaring it as a clap argument put it in front of users:
+/// reads it — and declared as a clap argument it would be in front of users:
 /// `hide` keeps a flag out of `--help` and the man pages but **not** out of the
-/// generated shell completions, so `fastf --<TAB>` offered it. Off argv here, it
-/// exists on no surface at all.
+/// generated shell completions, so `fastf --<TAB>` would offer it. Off argv
+/// here, it exists on no surface at all.
 ///
 /// Only in the first position, which is exactly where `relaunch::build` puts it:
 /// anywhere else it is a word the user typed, and clap should refuse it as it
@@ -1092,47 +1088,12 @@ fn run() -> Result<()> {
         Some(Commands::Completions { .. }) | Some(Commands::Mangen { .. })
     ) {
         bootstrap::ensure_bootstrapped()?;
-        // The log keeps what `log_level` asks for; `util` may not read the
-        // configuration, so it is told. A configuration that does not parse
-        // is the command's own error to report, a moment from now.
-        if let Ok(config) = fastf::core::config::Config::load()
-            && let Some(level) = fastf::util::log::Level::parse(&config.log_level)
-        {
-            fastf::util::log::set_level(level);
-        }
-        fastf::util::log::debug(format!(
-            "fastf {}",
-            std::env::args().skip(1).collect::<Vec<_>>().join(" ")
-        ));
+        start_the_log();
     }
 
     match cli.command {
         // No subcommand → interactive TUI
-        None => {
-            // A launcher's `fastf` has no terminal to draw on, and the app's
-            // own refusal would be written to the journal. Open a window
-            // and run the app in it; anywhere else this is false.
-            //
-            // A config that cannot be parsed is handed off too, with the
-            // default terminal probe: the window is where the error can be
-            // read, and the copy of fastf inside it prints it and waits.
-            let cfg = match fastf::core::config::Config::load() {
-                Ok(cfg) => cfg,
-                Err(err) => {
-                    if cli::terminal::hand_off_to_a_terminal(
-                        &fastf::core::config::Config::default(),
-                        false,
-                    ) {
-                        return Ok(());
-                    }
-                    return Err(err);
-                }
-            };
-            if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
-                return Ok(());
-            }
-            tui::run(tui::Entry::Menu)
-        }
+        None => run_app(),
 
         Some(Commands::New {
             template,
@@ -1142,55 +1103,13 @@ fn run() -> Result<()> {
             no_post,
             yes,
             extra,
-        }) => {
-            let classified = classify_for("new", extra)?;
-            let mut args = cli::new::NewArgs {
-                template_slug: template,
-                vars: classified.vars,
-                dry_run,
-                base_dir_override: base_dir,
-                no_preview,
-                no_post,
-                yes,
-            };
-            cli::new::apply_extra(&mut args, classified.recognized)?;
-            cli::new::run(args)
-        }
+        }) => run_new(template, dry_run, base_dir, no_preview, no_post, yes, extra),
 
-        Some(Commands::Template { action }) => match action {
-            TemplateAction::New => cli::template::new_interactive(),
-            TemplateAction::List => cli::template::list(),
-            TemplateAction::Show { slug } => cli::template::show(&slug),
-            TemplateAction::Edit { slug } => cli::template::edit(&slug),
-            TemplateAction::Delete { slug, yes } => cli::template::delete(&slug, yes),
-            TemplateAction::FromFolder {
-                path,
-                slug,
-                force,
-                bundle_assets,
-                yes,
-                dry_run,
-            } => cli::template::run_from_folder(cli::template::FromFolderArgs {
-                path,
-                slug,
-                force,
-                bundle_assets,
-                yes,
-                dry_run,
-            }),
-        },
+        Some(Commands::Template { action }) => run_template(action),
 
-        Some(Commands::Config { action }) => match action {
-            ConfigAction::Show => cli::config::show(),
-            ConfigAction::Set { key, value } => cli::config::set(&key, &value),
-        },
+        Some(Commands::Config { action }) => run_config(action),
 
-        Some(Commands::Id { action }) => match action {
-            IdAction::Show => cli::id::show(),
-            IdAction::Sync => cli::id::sync(),
-            IdAction::Set { value } => cli::id::set(value),
-            IdAction::Reset => cli::id::reset(),
-        },
+        Some(Commands::Id { action }) => run_id(action),
 
         Some(Commands::Recent {
             limit,
@@ -1253,11 +1172,7 @@ fn run() -> Result<()> {
             (_, Some(resolve)) => cli::reconcile::resolve(&resolve[0], &resolve[1], yes),
             _ => cli::reconcile::run(detach),
         },
-        Some(Commands::Jobs { action }) => match action {
-            None => cli::jobs::list(),
-            Some(JobsAction::Watch { id }) => cli::jobs::watch(id),
-            Some(JobsAction::Cancel { id }) => cli::jobs::cancel(id),
-        },
+        Some(Commands::Jobs { action }) => run_jobs(action),
         Some(Commands::Log { lines, follow }) => cli::log::log(lines, follow),
         Some(Commands::Messages { lines }) => cli::log::messages(lines),
 
@@ -1272,14 +1187,9 @@ fn run() -> Result<()> {
             created,
             yes,
             extra,
-        }) => {
-            let classified = classify_for("register", extra)?;
-            // clap's `requires`/`conflicts_with` only see flags written *before*
-            // the path; `trailing_var_arg` swallows anything after it. So the
-            // flags are merged first and the constraints checked on the merged
-            // set — `fastf register X --dry-run` used to be dropped silently and
-            // the folder written for real.
-            let mut flags = cli::register::RegisterFlags {
+        }) => run_register(
+            path,
+            cli::register::RegisterFlags {
                 recursive,
                 dry_run,
                 template,
@@ -1288,30 +1198,9 @@ fn run() -> Result<()> {
                 use_today,
                 created,
                 yes,
-            };
-            flags.apply_extra(classified.recognized)?;
-            flags.validate()?;
-            if flags.recursive {
-                cli::register::run_recursive(cli::register::RecursiveArgs {
-                    base: std::path::PathBuf::from(path),
-                    template_slug: flags.template,
-                    vars: classified.vars,
-                    use_today: flags.use_today,
-                    dry_run: flags.dry_run,
-                })
-            } else {
-                cli::register::run(cli::register::RegisterArgs {
-                    path: std::path::PathBuf::from(path),
-                    template_slug: flags.template,
-                    vars: classified.vars,
-                    apply_structure: flags.apply,
-                    rename: flags.rename,
-                    use_today: flags.use_today,
-                    created_override: flags.created,
-                    yes: flags.yes,
-                })
-            }
-        }
+            },
+            extra,
+        ),
 
         Some(Commands::Apply {
             template,
@@ -1319,25 +1208,9 @@ fn run() -> Result<()> {
             dry_run,
             yes,
             extra,
-        }) => {
-            let classified = classify_for("apply", extra)?;
-            let mut args = cli::apply::ApplyArgs {
-                template_slug: template,
-                target,
-                dry_run,
-                yes,
-                vars: classified.vars,
-            };
-            cli::apply::apply_extra(&mut args, classified.recognized)?;
-            cli::apply::run(args)
-        }
+        }) => run_apply(template, target, dry_run, yes, extra),
 
-        Some(Commands::Tag { action }) => match action {
-            TagAction::Add { query, tags } => cli::tag::add(&query, &tags),
-            TagAction::Remove { query, tags } => cli::tag::remove(&query, &tags),
-            TagAction::List { query } => cli::tag::list(&query),
-            TagAction::Reauto { query } => cli::tag::reauto(&query),
-        },
+        Some(Commands::Tag { action }) => run_tag(action),
 
         Some(Commands::Search { terms, plain, json }) => {
             cli::search::run(cli::search::SearchArgs { terms, plain, json })
@@ -1345,41 +1218,9 @@ fn run() -> Result<()> {
 
         Some(Commands::Show { query, json }) => cli::show::run(cli::show::ShowArgs { query, json }),
 
-        Some(Commands::Note { action }) => match action {
-            NoteAction::Add { query, message } => {
-                cli::note::add(cli::note::NoteAddArgs { query, message })
-            }
-        },
+        Some(Commands::Note { action }) => run_note(action),
 
-        Some(Commands::Todo { action }) => match action {
-            TodoAction::List { query, open } => {
-                cli::todo::list(cli::todo::ListArgs { query, open })
-            }
-            TodoAction::Add { query, text, phase } => {
-                cli::todo::add(cli::todo::AddArgs { query, text, phase })
-            }
-            TodoAction::Done {
-                query,
-                number,
-                undo,
-            } => cli::todo::done(cli::todo::DoneArgs {
-                query,
-                number,
-                undo,
-            }),
-            TodoAction::Edit {
-                query,
-                number,
-                text,
-            } => cli::todo::edit(cli::todo::EditArgs {
-                query,
-                number,
-                text,
-            }),
-            TodoAction::Remove { query, number } => {
-                cli::todo::remove(cli::todo::RemoveArgs { query, number })
-            }
-        },
+        Some(Commands::Todo { action }) => run_todo(action),
 
         Some(Commands::Notes { query, since }) => {
             cli::note::notes(cli::note::NotesArgs { query, since })
@@ -1391,12 +1232,231 @@ fn run() -> Result<()> {
     }
 }
 
+/// Set the log's level from the configuration, then record the command line.
+fn start_the_log() {
+    // The log keeps what `log_level` asks for; `util` may not read the
+    // configuration, so it is told. A configuration that does not parse
+    // is the command's own error to report, a moment from now.
+    if let Ok(config) = fastf::core::config::Config::load()
+        && let Some(level) = fastf::util::log::Level::parse(&config.log_level)
+    {
+        fastf::util::log::set_level(level);
+    }
+    // `args_os`, read lossily: `args` panics on an argument that is not
+    // Unicode, and a log line is no reason to.
+    fastf::util::log::debug(format!(
+        "fastf {}",
+        std::env::args_os()
+            .skip(1)
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+}
+
+fn run_app() -> Result<()> {
+    // A launcher's `fastf` has no terminal to draw on, and the app's
+    // own refusal would be written to the journal. Open a window
+    // and run the app in it; anywhere else this is false.
+    //
+    // A config that cannot be parsed is handed off too, with the
+    // default terminal probe: the window is where the error can be
+    // read, and the copy of fastf inside it prints it and waits.
+    let cfg = match fastf::core::config::Config::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            if cli::terminal::hand_off_to_a_terminal(&fastf::core::config::Config::default(), false)
+            {
+                return Ok(());
+            }
+            return Err(err);
+        }
+    };
+    if cli::terminal::hand_off_to_a_terminal(&cfg, false) {
+        return Ok(());
+    }
+    tui::run(tui::Entry::Menu)
+}
+
+fn run_new(
+    template: Option<String>,
+    dry_run: bool,
+    base_dir: Option<String>,
+    no_preview: bool,
+    no_post: bool,
+    yes: bool,
+    extra: Vec<String>,
+) -> Result<()> {
+    let classified = classify_for("new", extra)?;
+    let mut args = cli::new::NewArgs {
+        template_slug: template,
+        vars: classified.vars,
+        dry_run,
+        base_dir_override: base_dir,
+        no_preview,
+        no_post,
+        yes,
+    };
+    cli::new::apply_extra(&mut args, classified.recognized)?;
+    cli::new::run(args)
+}
+
+fn run_template(action: TemplateAction) -> Result<()> {
+    match action {
+        TemplateAction::New => cli::template::new_interactive(),
+        TemplateAction::List => cli::template::list(),
+        TemplateAction::Show { slug } => cli::template::show(&slug),
+        TemplateAction::Edit { slug } => cli::template::edit(&slug),
+        TemplateAction::Delete { slug, yes } => cli::template::delete(&slug, yes),
+        TemplateAction::FromFolder {
+            path,
+            slug,
+            force,
+            bundle_assets,
+            yes,
+            dry_run,
+        } => cli::template::run_from_folder(cli::template::FromFolderArgs {
+            path,
+            slug,
+            force,
+            bundle_assets,
+            yes,
+            dry_run,
+        }),
+    }
+}
+
+fn run_config(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Show => cli::config::show(),
+        ConfigAction::Set { key, value } => cli::config::set(&key, &value),
+    }
+}
+
+fn run_id(action: IdAction) -> Result<()> {
+    match action {
+        IdAction::Show => cli::id::show(),
+        IdAction::Sync => cli::id::sync(),
+        IdAction::Set { value } => cli::id::set(value),
+        IdAction::Reset => cli::id::reset(),
+    }
+}
+
+fn run_jobs(action: Option<JobsAction>) -> Result<()> {
+    match action {
+        None => cli::jobs::list(),
+        Some(JobsAction::Watch { id }) => cli::jobs::watch(id),
+        Some(JobsAction::Cancel { id }) => cli::jobs::cancel(id),
+    }
+}
+
+/// `flags` as clap parsed them, before what the trailing bucket holds.
+fn run_register(
+    path: String,
+    mut flags: cli::register::RegisterFlags,
+    extra: Vec<String>,
+) -> Result<()> {
+    let classified = classify_for("register", extra)?;
+    // clap's `requires`/`conflicts_with` never see a flag that lands in
+    // the trailing bucket — everything after the first undeclared token.
+    // So the flags are merged first and the constraints checked on the
+    // merged set; `RegisterFlags::validate` is the authority.
+    flags.apply_extra(classified.recognized)?;
+    flags.validate()?;
+    if flags.recursive {
+        cli::register::run_recursive(cli::register::RecursiveArgs {
+            base: std::path::PathBuf::from(path),
+            template_slug: flags.template,
+            vars: classified.vars,
+            use_today: flags.use_today,
+            dry_run: flags.dry_run,
+        })
+    } else {
+        cli::register::run(cli::register::RegisterArgs {
+            path: std::path::PathBuf::from(path),
+            template_slug: flags.template,
+            vars: classified.vars,
+            apply_structure: flags.apply,
+            rename: flags.rename,
+            use_today: flags.use_today,
+            created_override: flags.created,
+            yes: flags.yes,
+        })
+    }
+}
+
+fn run_apply(
+    template: String,
+    target: String,
+    dry_run: bool,
+    yes: bool,
+    extra: Vec<String>,
+) -> Result<()> {
+    let classified = classify_for("apply", extra)?;
+    let mut args = cli::apply::ApplyArgs {
+        template_slug: template,
+        target,
+        dry_run,
+        yes,
+        vars: classified.vars,
+    };
+    cli::apply::apply_extra(&mut args, classified.recognized)?;
+    cli::apply::run(args)
+}
+
+fn run_tag(action: TagAction) -> Result<()> {
+    match action {
+        TagAction::Add { query, tags } => cli::tag::add(&query, &tags),
+        TagAction::Remove { query, tags } => cli::tag::remove(&query, &tags),
+        TagAction::List { query } => cli::tag::list(&query),
+        TagAction::Reauto { query } => cli::tag::reauto(&query),
+    }
+}
+
+fn run_note(action: NoteAction) -> Result<()> {
+    match action {
+        NoteAction::Add { query, message } => {
+            cli::note::add(cli::note::NoteAddArgs { query, message })
+        }
+    }
+}
+
+fn run_todo(action: TodoAction) -> Result<()> {
+    match action {
+        TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
+        TodoAction::Add { query, text, phase } => {
+            cli::todo::add(cli::todo::AddArgs { query, text, phase })
+        }
+        TodoAction::Done {
+            query,
+            number,
+            undo,
+        } => cli::todo::done(cli::todo::DoneArgs {
+            query,
+            number,
+            undo,
+        }),
+        TodoAction::Edit {
+            query,
+            number,
+            text,
+        } => cli::todo::edit(cli::todo::EditArgs {
+            query,
+            number,
+            text,
+        }),
+        TodoAction::Remove { query, number } => {
+            cli::todo::remove(cli::todo::RemoveArgs { query, number })
+        }
+    }
+}
+
 /// Sort one subcommand's trailing bucket, using **that subcommand's own clap
 /// declarations** as the list of flags to recognize.
 ///
-/// Reading the list from clap is the point: the hand-written recognizer knew
-/// five flags, `register` declares none of them, and every register flag typed
-/// after the path was reported "unrecognized" and dropped.
+/// Reading the list from clap is the point: a list written out here drifts
+/// from the declarations, and a flag it misses works before the positional
+/// and is refused after it.
 fn classify_for(subcommand: &str, extra: Vec<String>) -> Result<cli::extra::ClassifiedExtra> {
     use clap::CommandFactory;
     let command = Cli::command();
@@ -1465,10 +1525,10 @@ mod tests {
             .collect()
     }
 
-    /// The guard that replaces the old "three coordinated edits" rule: declare a
-    /// flag in clap, handle it in that command's `apply_extra`, and this test
-    /// catches the case you forget. Before it, a flag added to clap kept working
-    /// before the positional and silently did nothing after it.
+    /// Adding a flag is two steps — declare it in clap, handle it in that
+    /// command's `apply_extra` — and this test catches a forgotten second step,
+    /// which would leave the flag working before the positional and refused
+    /// after it.
     #[test]
     fn every_declared_flag_is_handled_after_the_positional() {
         let mut new_args = fastf::cli::new::NewArgs {

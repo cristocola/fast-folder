@@ -29,7 +29,8 @@ use crate::cli::extra::Recognized;
 use crate::core::config::Config;
 use crate::core::counter::Counters;
 use crate::core::library::Project;
-use crate::core::naming::{interpolate_name, parse_id_token, sanitize_name};
+use crate::core::naming::{interpolate_name, parse_id_token};
+use crate::core::operations::registered_stub_template;
 use crate::core::project_info;
 use crate::core::template::{self, IdConfig, Template};
 use crate::tui::vars::collect_vars;
@@ -57,9 +58,9 @@ pub enum PinfoConflict {
 /// the trailing bucket, so a flag means the same thing wherever it was typed.
 ///
 /// The constraints live here rather than only in clap's attributes because
-/// `trailing_var_arg` hides everything after the path from clap: `requires` and
-/// `conflicts_with` simply do not see those tokens. That is how
-/// `register <path> --dry-run` came to write the folder for real.
+/// `trailing_var_arg` hides everything after an undeclared token from clap:
+/// `requires` and `conflicts_with` simply do not see those tokens, and
+/// `register <path> --artist=X --dry-run` would write the folder for real.
 #[derive(Default, Debug)]
 pub struct RegisterFlags {
     pub recursive: bool,
@@ -117,7 +118,8 @@ impl RegisterFlags {
                 if set {
                     bail!(
                         "{flag} cannot be used with --recursive: bulk registration never prompts, \
-                         never renames, and takes each folder's own date"
+                         never renames, and dates each folder by its own date (or by today, \
+                         with --use-today)"
                     );
                 }
             }
@@ -223,10 +225,8 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
 /// What registering one folder would name it, and where its ID comes from.
 ///
 /// Print-free and terminal-free, so the CLI's rename confirmation and the
-/// guided app's preview are the same computation. They were not: the app's
-/// bridge asked its own prompt, and the ID in the question came from a different
-/// expression than the one the commit used — `..._ID0001` offered,
-/// `..._ID0011` written.
+/// guided app's preview are the same computation, and the ID in the question
+/// is the one the commit writes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenamePlan {
     /// The ID this registration would carry.
@@ -259,8 +259,8 @@ pub fn plan_rename(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // MUST be the same expression `register_core` commits with.
-    let counters = Counters::load().unwrap_or_default();
+    // The commit's own read: a counter that cannot be read stops both.
+    let counters = Counters::load()?;
     let recovered_value = parse_id_token(&current_name, &tmpl.id.prefix);
     let id_value = match recovered_value {
         Some(recovered) => recovered,
@@ -275,7 +275,7 @@ pub fn plan_rename(
     if !has_template {
         preview_vars
             .entry("name".to_string())
-            .or_insert_with(|| slugify_folder_name(&current_name));
+            .or_insert_with(|| crate::core::operations::slugify_folder_name(&current_name));
     }
     let desired = desired_rename(tmpl, has_template, &preview_vars, cfg)?.unwrap_or_default();
     Ok(RenamePlan {
@@ -290,7 +290,7 @@ pub fn plan_rename(
 /// exact set `--recursive` would write into.
 pub fn recursive_targets(base: &Path) -> Result<Vec<PathBuf>> {
     let mut targets: Vec<PathBuf> = fs::read_dir(base)
-        .with_context(|| format!("reading {}", base.display()))?
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(base)))?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_dir() && !project_info::pinfo_path(p).exists())
@@ -300,21 +300,21 @@ pub fn recursive_targets(base: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// What would happen to one bulk-registered folder's ID: recovered from its
-/// name, or minted.
-pub fn recursive_id_note(name: &str, prefix: &str) -> String {
-    match parse_id_token(name, prefix) {
-        Some(v) => format!("recover {}", Counters::format_id(prefix, 4, v)),
+/// name and written the way the run writes it, or minted.
+pub fn recursive_id_note(name: &str, id: &IdConfig) -> String {
+    match parse_id_token(name, &id.prefix) {
+        Some(v) => format!("recover {}", Counters::format_id(&id.prefix, id.digits, v)),
         None => "mint new ID".to_string(),
     }
 }
 
-/// The ID prefix a bulk registration would use: the template's, else the
-/// default.
-pub fn recursive_prefix(template_slug: Option<&str>) -> String {
+/// The shape of the IDs a bulk registration writes, prefix and digits: the
+/// template's, else the default.
+pub fn recursive_id(template_slug: Option<&str>) -> IdConfig {
     template_slug
         .and_then(|s| template::find_by_slug(s).ok())
-        .map(|t| t.id.prefix)
-        .unwrap_or_else(|| IdConfig::default().prefix)
+        .map(|t| t.id)
+        .unwrap_or_default()
 }
 
 /// The stub template a register without one uses. Public so the guided app can
@@ -328,32 +328,22 @@ pub fn stub_template() -> Template {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: RegisterArgs) -> Result<()> {
-    // Resolve template + interactive var prompts up front (the engine itself
-    // never prompts). Without a template, use the registered stub.
+    crate::util::paths::require_answer(&args.path)?;
     let canonical = crate::util::paths::canonical(&args.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            args.path.display()
+            crate::util::paths::display_path(&args.path)
         )
     })?;
 
     let cfg = Config::load()?;
 
+    // The template and its variables are asked for here, before the engine
+    // runs: it never prompts. Without a template, the registered stub.
     let (tmpl, collected_vars) = match &args.template_slug {
         Some(slug) => {
             let t = template::find_by_slug(slug)?;
-            let known: std::collections::HashSet<&str> =
-                t.variables.iter().map(|v| v.slug.as_str()).collect();
-            for k in args.vars.keys() {
-                if !known.contains(k.as_str()) {
-                    eprintln!(
-                        "{} unknown variable '--{}' — not defined in template '{}'",
-                        "warning:".yellow().bold(),
-                        k,
-                        t.slug
-                    );
-                }
-            }
+            warn_unknown_vars(&t, &args);
             let Some(v) = collect_vars(&t, &args.vars)? else {
                 crate::tui::prompt::report_cancelled("nothing was registered");
                 return Ok(());
@@ -363,65 +353,15 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         None => (registered_stub_template(), HashMap::new()),
     };
 
-    // Decide whether to actually rename: preview the target and confirm.
-    let mut rename = args.rename;
-    if rename && !args.yes {
-        tty::require_tty(
-            "confirm the rename",
-            "pass --yes to rename without confirming",
-        )?;
-        let plan = plan_rename(
-            &canonical,
-            &tmpl,
-            args.template_slug.is_some(),
-            &collected_vars,
-            &cfg,
-        )?;
-        if plan.renames() {
-            println!();
-            rename = crate::tui::prompt::confirm(
-                &format!("Rename '{}' → '{}'?", plan.current_name, plan.desired),
-                true,
-            )?
-            .unwrap_or(false);
-        }
-    }
+    let rename = decide_rename(&args, &canonical, &tmpl, &collected_vars, &cfg)?;
 
-    // Decide PROJECT_INFO.md conflict policy.
-    let pinfo_path = project_info::pinfo_path(&canonical);
-    let on_pinfo_conflict = if pinfo_path.exists() {
-        if args.yes {
-            PinfoConflict::Overwrite
-        } else if tty::prompt_available() {
-            println!();
-            let overwrite = crate::tui::prompt::confirm(
-                &format!("{} already exists — overwrite?", pinfo_path.display()),
-                false,
-            )
-            .ok()
-            .flatten()
-            .unwrap_or(false);
-            if overwrite {
-                PinfoConflict::Overwrite
-            } else {
-                PinfoConflict::Skip
-            }
-        } else {
-            eprintln!(
-                "{} {} already exists; pass --yes to overwrite or remove the file first",
-                "warning:".yellow().bold(),
-                pinfo_path.display()
-            );
-            PinfoConflict::Skip
-        }
-    } else {
-        PinfoConflict::Overwrite
-    };
+    let on_pinfo_conflict = pinfo_conflict_policy(&args, &canonical)?;
 
     if args.apply_structure {
         println!();
     }
 
+    let asked = (args.rename, args.apply_structure);
     let outcome = register_core(RegisterOptions {
         path: args.path,
         template_slug: args.template_slug,
@@ -433,8 +373,127 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         on_pinfo_conflict,
     })?;
 
-    // Success summary — mirrors `project::print_success` layout.
-    let project = &outcome.project;
+    if outcome.pinfo_written {
+        print_registered(&outcome.project);
+    } else {
+        print_left_alone(&outcome.project, asked);
+    }
+
+    Ok(())
+}
+
+fn warn_unknown_vars(t: &Template, args: &RegisterArgs) {
+    let known: std::collections::HashSet<&str> =
+        t.variables.iter().map(|v| v.slug.as_str()).collect();
+    for k in args.vars.keys() {
+        if !known.contains(k.as_str()) {
+            eprintln!(
+                "{} unknown variable '--{}' — not defined in template '{}'",
+                "warning:".yellow().bold(),
+                k,
+                t.slug
+            );
+        }
+    }
+}
+
+/// Decide whether to actually rename: preview the target and confirm.
+fn decide_rename(
+    args: &RegisterArgs,
+    canonical: &Path,
+    tmpl: &Template,
+    collected_vars: &HashMap<String, String>,
+    cfg: &Config,
+) -> Result<bool> {
+    let mut rename = args.rename;
+    if rename && !args.yes {
+        tty::require_tty(
+            "confirm the rename",
+            "pass --yes to rename without confirming",
+        )?;
+        let plan = plan_rename(
+            canonical,
+            tmpl,
+            args.template_slug.is_some(),
+            collected_vars,
+            cfg,
+        )?;
+        if plan.renames() {
+            println!();
+            rename = crate::tui::prompt::confirm(
+                &format!("Rename '{}' → '{}'?", plan.current_name, plan.desired),
+                true,
+            )?
+            .unwrap_or(false);
+        }
+    }
+    Ok(rename)
+}
+
+/// Decide PROJECT_INFO.md conflict policy.
+fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> Result<PinfoConflict> {
+    let pinfo_path = project_info::pinfo_path(canonical);
+    Ok(if pinfo_path.exists() {
+        if args.yes {
+            PinfoConflict::Overwrite
+        } else if tty::prompt_available() {
+            println!();
+            let overwrite = crate::tui::prompt::confirm(
+                &format!(
+                    "{} already exists — overwrite?",
+                    crate::util::paths::display_path(&pinfo_path)
+                ),
+                false,
+            )?
+            .unwrap_or(false);
+            if overwrite {
+                PinfoConflict::Overwrite
+            } else {
+                PinfoConflict::Skip
+            }
+        } else {
+            eprintln!(
+                "{} {} already exists; pass --yes to overwrite or remove the file first",
+                "warning:".yellow().bold(),
+                crate::util::paths::display_path(&pinfo_path)
+            );
+            PinfoConflict::Skip
+        }
+    } else {
+        PinfoConflict::Overwrite
+    })
+}
+
+/// The folder already is a project and was not to be overwritten: what it is,
+/// and what was asked for and not done.
+fn print_left_alone(project: &Project, (rename, apply): (bool, bool)) {
+    println!(
+        "\n{}  {}",
+        "–".dimmed(),
+        "Already a project — nothing was written".bold()
+    );
+    println!("  {} {}", "ID:".dimmed(), project.id);
+    println!(
+        "  {} {}",
+        "→".cyan().bold(),
+        crate::util::paths::display_path(&project.path)
+    );
+    let not_done: Vec<&str> = [(rename, "--rename"), (apply, "--apply")]
+        .into_iter()
+        .filter_map(|(asked, flag)| asked.then_some(flag))
+        .collect();
+    if !not_done.is_empty() {
+        println!(
+            "  {} {} {} not carried out",
+            "note:".dimmed(),
+            not_done.join(" and "),
+            crate::util::plural::of(not_done.len(), "was", "were")
+        );
+    }
+}
+
+/// Success summary — mirrors `render::print_success` layout.
+fn print_registered(project: &Project) {
     println!("\n{}  {}", "✓".green().bold(), "Project registered".bold());
     println!("  {} {}", "Template:".dimmed(), project.template_name);
     println!("  {} {}", "ID:".dimmed(), project.id);
@@ -451,8 +510,6 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         parent_display.dimmed(),
         project.name.bold().white()
     );
-
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -463,9 +520,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 pub struct RecursiveArgs {
     pub base: PathBuf,
     pub template_slug: Option<String>,
-    /// Raw variable values applied to every child. Empty is the ordinary case;
-    /// they were dropped entirely before, so a template with required variables
-    /// could not be used for bulk onboarding at all.
+    /// Raw variable values applied to every child. Empty is the ordinary case.
     pub vars: HashMap<String, String>,
     pub use_today: bool,
     pub dry_run: bool,
@@ -478,14 +533,18 @@ pub struct RecursiveArgs {
 /// variable values, so a template with required variables needs them passed as
 /// `--slug=value` on the command line.
 pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
+    crate::util::paths::require_answer(&args.base)?;
     let base = crate::util::paths::canonical(&args.base).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            args.base.display()
+            crate::util::paths::display_path(&args.base)
         )
     })?;
     if !base.is_dir() {
-        bail!("path is not a directory: {}", base.display());
+        bail!(
+            "path is not a directory: {}",
+            crate::util::paths::display_path(&base)
+        );
     }
 
     // Direct children that are directories without a PROJECT_INFO.md.
@@ -507,13 +566,13 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 .bold()
         );
         println!();
-        let prefix = recursive_prefix(args.template_slug.as_deref());
+        let id = recursive_id(args.template_slug.as_deref());
         for path in &targets {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let id_note = recursive_id_note(&name, &prefix);
+            let id_note = recursive_id_note(&name, &id);
             println!("  {} {}  {}", "+".green().bold(), name, id_note.dimmed());
         }
         println!();
@@ -521,7 +580,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
             "  {} {} folder{} would be registered",
             "Summary:".bold(),
             targets.len(),
-            if targets.len() == 1 { "" } else { "s" }
+            crate::util::plural::s(targets.len())
         );
         return Ok(());
     }
@@ -549,19 +608,21 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 registered += 1;
             }
             Err(e) => {
-                eprintln!("  {} {}: {}", "skip".yellow().bold(), path.display(), e);
+                eprintln!(
+                    "  {} {}: {}",
+                    "skip".yellow().bold(),
+                    crate::util::paths::display_path(&path),
+                    e
+                );
                 skipped += 1;
             }
         }
     }
     println!();
-    // **The summary counts both, and registering nothing is not a success.**
-    // Every failure was an `eprintln!` and the tail printed `✓ Registered 0
-    // folders.` and returned `Ok(())` regardless — so a base whose children
-    // were all unwritable, or all already held a `PROJECT_INFO.md` that
-    // `--on-conflict skip` refused, gave a script a clean exit for a run that
-    // onboarded nothing. A flag that cannot be obeyed is an error, and so is a
-    // pass that did nothing it was asked to.
+    // **The summary counts both, and registering nothing is not a success**: a
+    // base whose children were all skipped must not give a script a clean exit
+    // for a run that onboarded nothing. A flag that cannot be obeyed is an
+    // error, and so is a pass that did nothing it was asked to.
     println!(
         "{}  Registered {} folder{}{}.",
         if registered == 0 {
@@ -570,7 +631,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
             "✓".green().bold()
         },
         registered,
-        if registered == 1 { "" } else { "s" },
+        crate::util::plural::s(registered),
         match skipped {
             0 => String::new(),
             n => format!(", skipped {n}"),
@@ -629,25 +690,11 @@ fn desired_rename(
     Ok(Some(desired))
 }
 
-/// Stub Template for the no-`--template` register path. Empty everything
-/// except the basics needed by `Metadata::from_plan_at` / `project_info::render`.
-fn registered_stub_template() -> Template {
-    Template {
-        name: "Registered project".to_string(),
-        slug: REGISTERED_SLUG.to_string(),
-        description: "Registered (not created) from an existing folder".to_string(),
-        version: "1".to_string(),
-        naming_pattern: "{id}".to_string(),
-        id: IdConfig::default(),
-        ..Template::default()
-    }
-}
-
 /// Resolve the `created` timestamp for a registered folder.
 ///
 /// Precedence:
 /// 1. `override_date` ("YYYY-MM-DD") → `YYYY-MM-DDT00:00:00Z`.
-/// 2. `use_today` → `library::now_iso8601()`.
+/// 2. `use_today` → `util::time::now_iso8601()`.
 /// 3. fs `created()` → fallback to `modified()` → fallback to `now`.
 ///
 /// Pure function (no Counters/Config dependency) so tests can exercise every
@@ -660,18 +707,10 @@ pub fn resolve_created(
     crate::core::operations::resolve_created(path, use_today, override_date)
 }
 
-/// Turn an existing folder basename into the `{name}` token used by
-/// `config.register_naming_pattern`. Collapses any run of whitespace to a
-/// single `_` and then runs `sanitize_name` to strip filesystem-illegal chars.
-/// Case is preserved.
-fn slugify_folder_name(name: &str) -> String {
-    let collapsed = name.split_whitespace().collect::<Vec<_>>().join("_");
-    sanitize_name(&collapsed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::operations::slugify_folder_name;
 
     #[test]
     fn resolve_created_explicit_date() {
@@ -684,7 +723,11 @@ mod tests {
     fn resolve_created_invalid_date_bails() {
         let tmp = tempfile::tempdir().unwrap();
         let r = resolve_created(tmp.path(), false, Some("not-a-date"));
-        assert!(r.is_err());
+        let said = format!("{:#}", r.unwrap_err());
+        assert!(
+            said.contains("--created 'not-a-date' is not a valid YYYY-MM-DD date"),
+            "{said}"
+        );
     }
 
     #[test]
@@ -711,6 +754,30 @@ mod tests {
         assert_eq!(slugify_folder_name("  trim  me  "), "trim_me");
         assert_eq!(slugify_folder_name("already_clean"), "already_clean");
         assert_eq!(slugify_folder_name("bad:char"), "bad_char");
+    }
+
+    #[test]
+    fn a_preview_refuses_the_counter_the_commit_would_refuse() {
+        let (_guard, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let counters = crate::util::paths::counters_path();
+        fs::write(&counters, "value = [").unwrap();
+        let folder = sandbox.path().join("Old Project");
+        fs::create_dir(&folder).unwrap();
+
+        let refused = plan_rename(
+            &folder,
+            &registered_stub_template(),
+            false,
+            &HashMap::new(),
+            &Config::default(),
+        )
+        .map(|plan| plan.id)
+        .expect_err("a counter that cannot be read is not a counter at zero");
+        let said = format!("{refused:#}");
+        assert!(
+            said.contains("parsing") && said.contains("counters.toml"),
+            "{said}"
+        );
     }
 
     #[test]

@@ -5,9 +5,7 @@
 //! that stops the walk part of the way — a folder it may not write, a file a
 //! program holds open, a network drop, an entry the filesystem lists but will
 //! not let it examine — leaves a tree that still holds its `PROJECT_INFO.md`,
-//! so the library lists a husk as the project. That is how 3.11 left 13 of
-//! 1473 files of a moved project behind on an sshfs mount and then called the
-//! source untouched.
+//! so the library lists a husk as the project.
 //!
 //! So a source is **retired** first, in one step that either happens or does
 //! not, and only then emptied:
@@ -203,10 +201,10 @@ pub(crate) enum SetAside {
 /// no data lock — the copy is hidden, and a record whose job is alive is left
 /// alone by every reconcile.
 ///
-/// Nothing is walked here: the merge that follows proves every removal entry
-/// by entry, and absorbs what changed in the original meanwhile. 3.13 walked
-/// the original and the moved copy first and kept the original whole on a
-/// single difference — a dev server's log line — for ever.
+/// Nothing is walked here: a check of the whole tree would keep the original
+/// whole over a single difference — a dev server's log line — while the merge
+/// that follows proves every removal entry by entry, and absorbs what changed
+/// in the original meanwhile.
 pub(crate) fn set_aside(
     mut transaction: MoveTransaction,
     cleanup: &Cleanup,
@@ -247,12 +245,21 @@ pub(crate) fn set_aside(
             reason: format!("{error:#}"),
         });
     }
+    // **What was published is on disk before the original is touched**: a
+    // file's sync keeps its bytes and only its folder's keeps its name, and a
+    // copy a killed move published was never synced at all. Here, since every
+    // retire comes through here, the move's and recovery's alike.
+    transactions::sync_folders(cleanup.manifest, cleanup.final_path);
+    if let Some(base) = cleanup.final_path.parent() {
+        sync_dir(base);
+    }
+    crate::util::trace::hit("retire");
     let retired = transaction.old_copy_path();
     let outcome = match transaction.journal.retire {
         RetireStrategy::Rename => {
             // One rename, which fastf cannot count into: on an S3-style mount
-            // it is a copy and a delete per object inside rclone, and took
-            // minutes on a real R2 bucket. Say what it is waiting on.
+            // it is a copy and a delete per object inside rclone, minutes on
+            // an R2 bucket. Say what it is waiting on.
             cleanup.ticker.update(|state| {
                 state.current_file = "renaming it aside in one step — on a network mount this \
                                       can take a while"
@@ -319,8 +326,7 @@ pub(crate) fn retire_in_place(transaction: &MoveTransaction, cleanup: &Cleanup) 
         (Ok(Some(found)), Some(recorded)) if transactions::agrees(recorded, &found) => {}
         // Older than what the move copied: a version from before it, which
         // a cloud mount put back from an upload still on its way — nothing
-        // in it the moved copy lacks. The lab's edit-then-move on R2 got the
-        // pre-edit file back after the move had removed the edited one.
+        // in it the moved copy lacks.
         (Ok(Some(found)), Some(recorded))
             if found.source_modified.nanos() < recorded.source_modified.nanos() => {}
         // Only its time moved, or the moved copy's was rewritten since: the
@@ -508,7 +514,7 @@ impl Housekeeping {
                         path: old.path,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -557,7 +563,7 @@ impl Housekeeping {
                         path: deleted.folder,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -576,7 +582,7 @@ impl Housekeeping {
                         path,
                         reason: format!(
                             "{remaining} {} left: {reason}",
-                            if remaining == 1 { "entry" } else { "entries" }
+                            crate::util::plural::of(remaining, "entry", "entries")
                         ),
                         redundant: !kept_on_purpose,
                     },
@@ -626,7 +632,7 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                     path: old,
                     reason: format!(
                         "{remaining} {} left: {reason}",
-                        if remaining == 1 { "entry" } else { "entries" }
+                        crate::util::plural::of(remaining, "entry", "entries")
                     ),
                     redundant: !kept_on_purpose,
                 };
@@ -658,8 +664,8 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
                     "{moved} file{} the mount had put in the move's old staging folder \
                      late {} moved into place, and {} left there that fastf will not \
                      remove: {}",
-                    if moved == 1 { "" } else { "s" },
-                    if moved == 1 { "was" } else { "were" },
+                    crate::util::plural::s(moved),
+                    crate::util::plural::of(moved, "was", "were"),
                     left.len(),
                     left.iter()
                         .take(LISTED)
@@ -696,9 +702,9 @@ pub(crate) fn remove_retired(transaction: MoveTransaction, cleanup: &Cleanup) ->
 
 /// Whether the record of `operation`, whose old copy is gone from beside
 /// `source`, waits out the settle: on a mount that uploads in the background
-/// a removed folder can come back minutes later (rclone did, on R2, after a
-/// move reported its old copy removed), and only a record can remove it then.
-/// A record the data dir's index does not know is cleared at once, as before.
+/// (rclone) a removed folder can come back minutes later, and only a record
+/// can remove it then. A record the data dir's index does not know is
+/// cleared at once.
 pub(crate) fn settling(operation: &str, source: &Path) -> bool {
     let Some(source_base) = source.parent() else {
         return false;
@@ -770,7 +776,7 @@ fn remove_split_residue(transaction: &MoveTransaction, cleanup: &Cleanup) -> Opt
             path: source,
             reason: format!(
                 "part of the original is still there: {remaining} {} left: {reason}",
-                if remaining == 1 { "entry" } else { "entries" }
+                crate::util::plural::of(remaining, "entry", "entries")
             ),
             redundant: !kept_on_purpose,
         }),
@@ -879,6 +885,9 @@ fn step_out_of(tree: &Path) {
 pub(crate) fn sync_dir(dir: &Path) {
     #[cfg(unix)]
     if let Ok(handle) = fs::File::open(dir) {
+        if let Some(name) = dir.file_name() {
+            crate::util::trace::hit(&format!("sync {}", name.to_string_lossy()));
+        }
         let _ = handle.sync_all();
     }
     #[cfg(not(unix))]

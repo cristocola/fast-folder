@@ -11,20 +11,24 @@ pub fn run() -> Result<()> {
     let (dir, mode) = paths::try_install_dir()?;
 
     println!("{}", "fastf data locations:".bold());
-    println!("  {:<16} {}", "Data dir:".dimmed(), dir.display());
+    println!(
+        "  {:<16} {}",
+        "Data dir:".dimmed(),
+        crate::util::paths::display_path(&dir)
+    );
     println!("  {:<16} {}", "Resolved via:".dimmed(), mode.label());
     println!();
     println!(
         "  {:<16} {}",
         "Config:".green(),
-        paths::config_path().display()
+        crate::util::paths::display_path(&paths::config_path())
     );
-    // Two counter locations, and the base one is the record — saying only
-    // "Counters: <data dir>" made the backup input look authoritative.
+    // Two counter locations, and the base one is the record — naming only the
+    // data dir's would make the backup input look authoritative.
     println!(
         "  {:<16} {}",
         "Counter:".green(),
-        paths::counters_path().display()
+        crate::util::paths::display_path(&paths::counters_path())
     );
     println!(
         "  {:<16} {}",
@@ -39,7 +43,7 @@ pub fn run() -> Result<()> {
     println!(
         "  {:<16} {}",
         "Templates:".green(),
-        paths::templates_dir().display()
+        crate::util::paths::display_path(&paths::templates_dir())
     );
     Ok(())
 }

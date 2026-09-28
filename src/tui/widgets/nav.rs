@@ -1,15 +1,14 @@
 //! The arithmetic every list shares: the arrows and the page keys stop at
 //! the ends, and the viewport follows the selection without jumping.
 //!
-//! **A list does not wrap.** It did, from the first row up to the last and
-//! from the last down to the first, and a cursor that leaves the bottom of a
-//! table and reappears at the top reads as the cursor escaping — one key too
-//! many at the end of a long list and you are somewhere else with nothing to
-//! say why. Stopping is what a scrollbar promises, and every list here has
-//! one or behaves as if it did. The one thing that still cycles is a
-//! *value*: a form's choice steps through its options with `←`/`→` and has
-//! to come round, and a form's Tab ring has to reach its first field from its
-//! last. Those are `cycle`, and they are not lists.
+//! **A list does not wrap**: a cursor that leaves the bottom of a table and
+//! reappears at the top reads as the cursor escaping — one key too many at
+//! the end of a long list and you are somewhere else with nothing to say why.
+//! Stopping is what a scrollbar promises, and every list here has one or
+//! behaves as if it did. The one thing that cycles is a *value*: a form's
+//! choice steps through its options with `←`/`→` and has to come round, and a
+//! form's Tab ring has to reach its first field from its last. Those are
+//! `cycle`, and they are not lists.
 
 /// Move `selected` by `delta`, stopping at the ends.
 ///

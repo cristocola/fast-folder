@@ -2,9 +2,10 @@
 //! configured base.
 //!
 //! Targets are restricted to the effective bases (`base_dir` + config `bases`)
-//! so a moved project always stays discoverable. Only EXDEV enables the private
-//! v2 copy transaction; it verifies topology/lengths and source stability before
-//! publication, then removes the source.
+//! so a moved project always stays discoverable. Only a cross-device rename
+//! (EXDEV, Windows's `ERROR_NOT_SAME_DEVICE`) takes the staged copy
+//! transaction, which copies, verifies and publishes before the original is set
+//! aside (`src/core/CLAUDE.md` › Moving projects).
 
 use anyhow::Result;
 use colored::Colorize;
@@ -54,12 +55,13 @@ pub fn run(args: MoveArgs) -> Result<()> {
     let target = match &args.base {
         Some(raw) => {
             let wanted = PathBuf::from(raw);
+            crate::util::paths::require_answer(&wanted)?;
             let wanted = crate::util::paths::canonical(&wanted).unwrap_or(wanted);
             if wanted == current {
                 anyhow::bail!(
                     "'{}' is already in base {}",
                     project.name,
-                    current.display()
+                    crate::util::paths::display_path(&current)
                 );
             }
             // Accept a full path or a base's short label (its folder name).
@@ -70,7 +72,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 .ok_or_else(|| {
                     let list = candidates
                         .iter()
-                        .map(|b| format!("  {}", b.display()))
+                        .map(|b| format!("  {}", crate::util::paths::display_path(b)))
                         .collect::<Vec<_>>()
                         .join("\n");
                     anyhow::anyhow!(
@@ -101,11 +103,11 @@ pub fn run(args: MoveArgs) -> Result<()> {
 
     // Confirm before touching anything. Deliberately no size figure: getting one
     // means walking the whole tree, which is wasted on the same-filesystem
-    // rename that handles most moves, and slow over NTFS. The progress line
-    // below reports real numbers once there is actually something to copy.
+    // rename that handles most moves, and slow over NTFS. The job's progress
+    // reports real numbers once there is actually something to copy.
     if !args.yes {
-        // A confirmation that cannot be shown is not a confirmation. Skipping it
-        // here moved the folder on the strength of a question nobody was asked.
+        // A confirmation that cannot be shown is not a confirmation: without a
+        // terminal, only `--yes` answers it.
         crate::util::tty::require_tty("confirm", "pass --yes to move without confirming")?;
         println!(
             "  {} {}  {} {}",

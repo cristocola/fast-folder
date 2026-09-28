@@ -5,10 +5,8 @@
 //! questions, look at what that would do, say yes. The questions are a
 //! [`Form`]; the look is a [`Preview`] a worker computed from the very
 //! functions the commit will use (`project::plan_report`, `project::apply_plan`,
-//! `cli::register::preview_rename`), so the screen cannot promise one thing and
-//! do another. That was a real defect twice over — a rename prompt offering
-//! `ID0001` while the commit wrote `ID0011`, and a preview header saying
-//! nothing would be created immediately before creating it.
+//! `cli::register::plan_rename`), so the screen cannot promise one thing and
+//! do another.
 //!
 //! `register.rs` builds the register flow's fields and reads its answers back;
 //! this module holds the state the three share and the create and apply halves.
@@ -65,8 +63,8 @@ impl FlowKind {
         }
     }
 
-    /// What a cancel says. The words are the old flows' own, so a cancelled
-    /// run reads the same wherever it happened.
+    /// What a cancel says. The words are the command line's own, so a
+    /// cancelled run reads the same wherever it happened.
     pub fn cancelled(self) -> &'static str {
         match self {
             FlowKind::Create => "Cancelled — nothing was created.",
@@ -279,8 +277,7 @@ pub fn variable_field(var: &crate::tui::app::data::VarInfo) -> Field {
 ///
 /// The template is a field rather than a picker that runs first, so changing
 /// your mind about it costs one keystroke instead of the whole flow — and the
-/// base is only asked about when there is more than one to choose from, which
-/// is what `pick_base_interactively` decided by returning early.
+/// base is only asked about when there is more than one to choose from.
 pub fn create_form(templates: &[String], template_at: usize, bases: &[String]) -> Form {
     let mut fields = vec![Field::choice(
         FIELD_TEMPLATE,
@@ -335,7 +332,7 @@ pub fn from_folder_form() -> Form {
 
 /// The apply form: which template, which folder, and the variables its files
 /// interpolate. The target comes second and is checked before anything that
-/// depends on it — `apply` used to reject it after every variable was answered.
+/// depends on it.
 pub fn apply_form(templates: &[String], template_at: usize) -> Form {
     Form::new(vec![
         Field::choice(
@@ -378,8 +375,8 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The bases a new project could go in, the configured default first —
-    /// which is what makes a plain Enter mean exactly what it always meant.
+    /// The bases a new project could go in, the configured default first, so
+    /// a plain Enter creates where the configuration says.
     fn base_options(&self) -> Vec<String> {
         let Some(summary) = &self.summary else {
             return Vec::new();
@@ -487,15 +484,13 @@ impl App {
             KeyCode::End => isize::MAX / 2,
             // Anything the preview does not consume is whatever the registry
             // binds where the keys are: `?` for the help, `q` to close. There
-            // is nothing to type into on this step, so swallowing them said
-            // nothing and did nothing.
+            // is nothing to type into on this step.
             _ => return self.lookup_and_run(key),
         };
-        // Clamped **here**, against the geometry `view` draws with. Only the
-        // view clamped before, so ten PgDns over a short preview drove `scroll`
-        // to 100 with nothing moving on screen, and the next ten PgUps did
-        // nothing either — a dialog that reads as frozen. `layout.rs`'s whole
-        // job is that a cursor cannot leave the drawn window.
+        // Clamped **here**, against the geometry `view` draws with: clamped
+        // only at draw time, a scroll runs past the end and the dialog reads
+        // as frozen. `layout.rs`'s whole job is that a cursor cannot leave the
+        // drawn window.
         let max = match self.modals.top() {
             Some(Modal::Flow(flow)) => {
                 crate::tui::view::modals::preview_max_scroll(self, flow) as isize
@@ -681,9 +676,7 @@ impl App {
         }
     }
 
-    /// The base the create form names, or `None` for the configured default —
-    /// the same distinction `pick_base_interactively` drew by returning early
-    /// when there was only one base to offer.
+    /// The base the create form names, or `None` for the configured default.
     fn chosen_base(&self, flow: &Flow) -> Option<String> {
         let chosen = flow.form.value(FIELD_BASE);
         if chosen.is_empty() {

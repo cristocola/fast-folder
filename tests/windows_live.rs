@@ -7,12 +7,12 @@
 //! reserved names, trailing dots, a sharing violation, a junction. What it
 //! cannot show is anything that needs **two different filesystems**, because
 //! a `TempDir` is always on one. The move engine's staged copy is reached
-//! only by a genuine `ERROR_NOT_SAME_DEVICE`, so today it is exercised by a
-//! synthetic error (`library/tests.rs`, `only_the_cross_device_error_licenses_
-//! copy_fallback`) or by a failpoint, and never end to end. The ID counter is
-//! designed around a project drive that two machines mount
-//! (`core/counter.rs`), and that has never been driven over a network share
-//! at all.
+//! only by a genuine `ERROR_NOT_SAME_DEVICE`, so elsewhere it is exercised by
+//! a synthetic error (`library/tests/moves.rs`,
+//! `only_the_cross_device_error_licenses_copy_fallback`) or by a failpoint,
+//! and never end to end. The ID counter is designed around a project drive
+//! that two machines mount (`core/counter.rs`), and nothing else drives it
+//! over a network share at all.
 //!
 //! Those are the gaps this suite fills, and they are the reason it is a
 //! separate target rather than more cases in `windows_semantics.rs`: it needs
@@ -42,8 +42,8 @@
 //! Every run gets its own data directory under `%TEMP%` and its own uniquely
 //! named subfolder under each base, removed afterwards. Nothing here can see
 //! an installed fastf's `%APPDATA%\fastf`, and nothing writes to a base root
-//! beyond its own subfolder — the machine this was written for has a real
-//! fastf installed and in use.
+//! beyond its own subfolder — the machine it runs on may have a real fastf
+//! installed and in use.
 
 #![cfg(windows)]
 #![allow(clippy::field_reassign_with_default)]
@@ -53,29 +53,19 @@
 // file.
 #![allow(clippy::permissions_set_readonly_false)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+// The one list of what a spawned fastf must never inherit from whoever ran the
+// suite.
+use common::NOT_INHERITED;
 
 const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 
 const LOCAL_VAR: &str = "FASTF_WIN_LOCAL_BASE";
 const SHARE_VAR: &str = "FASTF_WIN_SHARE_BASE";
-
-/// Variables a spawned fastf must never inherit from whoever ran the suite —
-/// the same list `tests/common` keeps, for the same reason: the developer's
-/// own shell must not answer for fastf.
-const NOT_INHERITED: &[&str] = &[
-    "EDITOR",
-    "FASTF_ASCII",
-    "FASTF_FAULT",
-    "FASTF_NO_RELAUNCH",
-    "FASTF_PROJECT_PATH",
-    "FASTF_RELAUNCHED",
-    "FASTF_THEME",
-    "FASTF_TRACE_FILE",
-    "NO_COLOR",
-    "TERMINAL",
-];
 
 /// One run's scaffolding: a private data directory, and one subfolder under
 /// each configured base.
@@ -120,7 +110,7 @@ fn live(case: &str) -> Option<Live> {
     // A name unique per case, so two cases never share a folder and a failure
     // leaves something identifiable behind. `live-` rather than `run-`,
     // because the runner script beside the sandbox is called
-    // `run-windows-live.ps1` and a leftover check globbing `run-*` matched
+    // `run-windows-live.ps1` and a leftover check globbing `run-*` matches
     // the script itself.
     let stamp = format!("{}-{}", std::process::id(), case);
     let local = local_root.join(format!("live-{stamp}"));
@@ -263,9 +253,9 @@ fn write_template(install: &Path, slug: &str) {
 
 /// **The staged copy, for real.** A move between two volumes is the only path
 /// that copies, verifies and publishes rather than renaming, and it is
-/// reached only by a genuine `ERROR_NOT_SAME_DEVICE` from the OS. Until this
-/// suite it was exercised by a synthetic `io::Error` and a failpoint, never
-/// by two filesystems.
+/// reached only by a genuine `ERROR_NOT_SAME_DEVICE` from the OS. Elsewhere it
+/// is exercised by a synthetic `io::Error` and a failpoint, never by two
+/// filesystems.
 ///
 /// One half of the Windows move validation; the same-volume rename below is
 /// the other.
@@ -358,8 +348,8 @@ fn a_move_within_one_volume_renames_and_copies_nothing() {
 }
 
 /// A junction inside a project crosses to another volume as a junction, and
-/// the original's removal never goes through it — the failure mode that once
-/// deleted what a junction pointed at. A volume that cannot hold one (a share
+/// the original's removal never goes through it — a removal that does deletes
+/// what the junction points at. A volume that cannot hold one (a share
 /// may not) is found before anything is copied, and the source stays whole.
 #[test]
 fn a_junction_crosses_volumes_as_a_junction_or_is_refused_up_front() {
@@ -504,7 +494,8 @@ fn a_case_only_rename_round_trips_for_non_ascii_names() {
 /// Every metadata mutation publishes through `atomic::write`, which finishes
 /// with a rename over the existing file. Windows refuses that when the target
 /// carries the read-only attribute, where Unix does not care — so a project
-/// restored from a backup or copied off a share could not be tagged or noted.
+/// restored from a backup or copied off a share would refuse every tag and
+/// note.
 #[test]
 fn a_read_only_project_info_does_not_block_a_tag_or_a_note() {
     let Some(live) = live("read-only") else {

@@ -89,7 +89,7 @@ fn build(program: &str, style: &CwdStyle, dir: &Path) -> Vec<OsString> {
 /// any emulator that ignores its own flag.
 ///
 /// **The relaunch marker is dropped here**, and in [`exec_shell_at`]. It says
-/// "this fastf process is a rerun" and it is inherited, so a window opened from
+/// "do not relaunch" and it is inherited, so a window opened from
 /// a relaunched fastf would hand it to its shell, that shell would hand it to
 /// everything typed into it, and one of those is a build that runs fastf's own
 /// suite — where a set `FASTF_RELAUNCHED` turns off the very behaviour the

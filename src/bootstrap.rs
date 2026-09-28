@@ -96,8 +96,12 @@ pub fn ensure_bootstrapped() -> Result<()> {
     // The resolved data dir may not exist yet (fresh user-config-dir install,
     // e.g. after `pacman -S fast-folder` put the binary in read-only /usr/bin).
     // Only bootstrap creates it — path resolution itself never writes.
-    fs::create_dir_all(&install)
-        .map_err(|e| anyhow::anyhow!("cannot create data directory {}: {e}", install.display()))?;
+    fs::create_dir_all(&install).map_err(|e| {
+        anyhow::anyhow!(
+            "cannot create data directory {}: {e}",
+            crate::util::paths::display_path(&install)
+        )
+    })?;
 
     // Config
     let config_path = paths::config_path();
@@ -112,12 +116,9 @@ pub fn ensure_bootstrapped() -> Result<()> {
         fs::create_dir_all(&templates_dir)?;
     }
 
-    // **Per template, not per directory.** The guard used to be "is the
-    // templates directory empty", and both templates were written under it —
-    // so a failure between them (a full disk, a permission, a Ctrl-C) left the
-    // directory non-empty, the guard false ever after, and `client-project`
-    // never written. The user was left with one of the two templates the
-    // README promises and nothing anywhere saying so.
+    // **Per template, not per directory**: a first run that stops between the
+    // two writes (a full disk, a permission, a Ctrl-C) leaves the directory
+    // non-empty, and a guard on "is it empty" would never write the second.
     let was_empty = fs::read_dir(&templates_dir)?.next().is_none();
     let mut written = 0;
     written += usize::from(write_bundled_template_if_absent(
@@ -137,15 +138,14 @@ pub fn ensure_bootstrapped() -> Result<()> {
         // **stderr.** `ensure_bootstrapped` runs for every command but
         // `completions` and `mangen`, and `docs/cli.md` promises that `fastf
         // path` prints "the path followed by a newline — no colour, no
-        // decoration, nothing else on stdout". On a machine whose data
-        // directory does not exist yet but whose base already holds projects —
-        // a second computer, a portable base, a fresh `FASTF_INSTALL_DIR` — this
-        // banner went into `cd "$(fastf path lullaby)"`.
+        // decoration, nothing else on stdout". A first run can be that command
+        // — a second computer, a portable base, a fresh `FASTF_INSTALL_DIR` —
+        // and on stdout this banner would land in `cd "$(fastf path lullaby)"`.
         eprintln!(
             "fastf: initialized in {} — {}\n       {written} default template{} written to templates/",
-            install.display(),
+            crate::util::paths::display_path(&install),
             mode.label(),
-            if written == 1 { "" } else { "s" }
+            crate::util::plural::s(written)
         );
     }
 

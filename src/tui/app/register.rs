@@ -2,11 +2,10 @@
 //! answers make.
 //!
 //! Register asks more than the other two flows and asks it conditionally —
-//! bulk registration never renames, never applies and never takes a date other
-//! than each folder's own, which `RegisterFlags::validate` refuses on the
-//! command line. On one screen that is not a branch through a sequence of
-//! prompts but a scope field whose value hides the three questions it makes
-//! meaningless.
+//! bulk registration never renames, never applies and never takes a typed
+//! date, which `RegisterFlags::validate` refuses on the command line. On one
+//! screen that is not a branch through a sequence of prompts but a scope field
+//! whose value hides the three questions it makes meaningless.
 
 use std::path::PathBuf;
 

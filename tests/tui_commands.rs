@@ -88,16 +88,8 @@ fn no_two_commands_share_a_key_in_one_context() {
 /// `?` lists every key that fires where the keys currently go — **the globals
 /// included**, and as the overlay actually draws them.
 ///
-/// This asked `help_sections` whether it contained the commands whose
-/// `contexts` include `ctx`, which is a strict subset of the predicate
-/// `help_sections` itself filters on: it could only ever fail when a command's
-/// category was missing from `Category::ALL`, which the loop at the bottom
-/// checks directly. So it was a shadow of that check, and it never looked at a
-/// global command — the ones bound in every context, and therefore the ones
-/// most likely to be missing from a particular context's help.
-///
-/// It goes through `help_lines` now, the function the overlay renders from, so
-/// a command that is grouped but never drawn fails it too.
+/// It reads `help_lines`, the function the overlay renders from, so a command
+/// that is grouped but never drawn fails it too.
 #[test]
 fn every_bound_command_appears_in_its_contexts_help() {
     for ctx in CONTEXTS {
@@ -127,8 +119,8 @@ fn every_bound_command_appears_in_its_contexts_help() {
     }
 }
 
-/// Help listed `Ctrl-z Suspend … fg brings fastf back` on Windows, where
-/// there is no job control and the key is bound to nothing.
+/// Help lists `Suspend` only on unix: Windows has no job control, and there
+/// the key is bound to nothing.
 #[test]
 fn help_lists_suspend_only_where_there_is_job_control() {
     let listed = help_lines(Context::Projects, 100, &fastf::tui::theme::Glyphs::unicode())
@@ -171,10 +163,8 @@ fn key_normalisation_folds_ctrl_case_and_labels_read_well() {
 
 /// **Every list moves the same way.** The grammar is eight commands wide, and
 /// a list that binds the arrows binds all of it — the page keys, the halves and
-/// the jumps to the ends. It used to stop short: `PgUp`/`PgDn` skipped the
-/// action menu and the builder and `Home`/`End` skipped the templates tab as
-/// well, so the two lists that cannot be searched were the two that could only
-/// be walked one row at a time.
+/// the jumps to the ends. The action menu and the builder cannot be searched,
+/// so the grammar is all they have.
 #[test]
 fn every_list_binds_the_whole_movement_grammar() {
     const GRAMMAR: [CommandId; 8] = [
@@ -250,11 +240,9 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
     }
 }
 
-/// **The horizontal axis only moves focus or turns a page.** `→` used to be
-/// "whatever Enter does here" and `←` "whatever Esc does", which made two
-/// arrows that ran verbs and closed dialogs; the keys a person leans on to
-/// look around must never act. The guide is the one reader, and a reader's
-/// pages are horizontal.
+/// **The horizontal axis only moves focus or turns a page.** The keys a person
+/// leans on to look around must never run a verb or close a dialog. The guide
+/// is the one reader, and a reader's pages are horizontal.
 #[test]
 fn the_horizontal_axis_only_moves_focus_or_turns_a_page() {
     const AXIS: [Key; 4] = [
@@ -282,9 +270,8 @@ fn the_horizontal_axis_only_moves_focus_or_turns_a_page() {
 }
 
 /// **Every context has a way out and a way to ask.** A context whose help is
-/// empty is one the registry cannot describe, which is how `SearchEdit` and
-/// `Palette` came to have no help at all; a context with no `Close`, `Back` or
-/// `Quit` is a corner.
+/// empty is one the registry cannot describe; a context with no `Close`,
+/// `Back` or `Quit` is a corner.
 #[test]
 fn every_context_has_help_and_a_way_out() {
     for ctx in CONTEXTS {

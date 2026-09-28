@@ -52,6 +52,88 @@ fn is_test_file(path: &Path) -> bool {
             .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "tests"))
 }
 
+/// The lines of a source file that are production code, numbered from one:
+/// not a comment, and not inside a module behind `cfg(test)` — **wherever in
+/// the file that module is**. A scan that stops at the first test module reads
+/// nothing below it.
+///
+/// A module's end is found by its indentation, the way rustfmt writes it (a
+/// `}` alone at the indentation of its `mod` line): counting braces would
+/// count the ones in strings and in `'{'`.
+fn production_lines(text: &str) -> Vec<(usize, &str)> {
+    let mut lines = Vec::new();
+    let mut gated = false;
+    let mut closing: Option<String> = None;
+    for (index, line) in text.lines().enumerate() {
+        if let Some(end) = &closing {
+            if line == end {
+                closing = None;
+            }
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let is_mod = trimmed.starts_with("mod ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("pub(crate) mod ")
+            || trimmed.starts_with("pub(super) mod ");
+        if gated && is_mod {
+            gated = false;
+            // `mod tests;` is a file of its own, which `is_test_file` knows.
+            if trimmed.ends_with('{') {
+                let indent = &line[..line.len() - trimmed.len()];
+                closing = Some(format!("{indent}}}"));
+            }
+            continue;
+        }
+        // An attribute may sit between the gate and its module.
+        if !trimmed.starts_with("#[") {
+            gated = false;
+        }
+        if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test") {
+            gated = true;
+        }
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        lines.push((index + 1, line));
+    }
+    lines
+}
+
+/// The scans read what is below a test module too, and nothing inside one.
+#[test]
+fn a_scan_reads_the_code_below_a_test_module() {
+    let text = "\
+fn above() {}
+// a comment
+#[cfg(test)]
+mod tests {
+    fn inside() {
+        let brace = '{';
+    }
+}
+
+impl Below {
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod nested {
+        fn also_inside() {}
+    }
+    fn below() {}
+}
+#[cfg(test)]
+mod elsewhere;
+fn last() {}
+";
+    let read: Vec<&str> = production_lines(text)
+        .into_iter()
+        .map(|(_, line)| line.trim())
+        .filter(|line| line.starts_with("fn "))
+        .collect();
+    assert_eq!(read, ["fn above() {}", "fn below() {}", "fn last() {}"]);
+    assert_eq!(production_lines(text)[0], (1, "fn above() {}"));
+}
+
 /// Nothing under `core/` may ask a question. The same functions serve scripted,
 /// non-interactive runs, where there is no terminal to prompt on and no user
 /// watching one — so a prompt there is a hang no caller can avoid.
@@ -146,20 +228,10 @@ fn core_and_util_do_not_render() {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
-            let mut in_tests = false;
-            for (number, line) in text.lines().enumerate() {
-                if line.trim_start().starts_with("mod tests") {
-                    in_tests = true;
-                }
-                if in_tests {
-                    continue;
-                }
-                // A comment may name a macro without calling it.
-                if line.trim_start().starts_with("//") {
-                    continue;
-                }
+            // A comment may name a macro without calling it.
+            for (number, line) in production_lines(&text) {
                 if RENDERING.iter().any(|marker| line.contains(marker)) {
-                    offenders.push(format!("{shown}:{}  {}", number + 1, line.trim()));
+                    offenders.push(format!("{shown}:{number}  {}", line.trim()));
                 }
             }
         }
@@ -381,16 +453,13 @@ fn every_canonicalization_goes_through_the_helper() {
             // The helper's own call is the one allowed.
             let helper = path.ends_with(Path::new("util").join("paths.rs"));
             let text = fs::read_to_string(&path).unwrap();
-            for (number, line) in text.lines().enumerate() {
+            for (number, line) in production_lines(&text) {
                 let trimmed = line.trim_start();
-                if trimmed.starts_with("mod tests") {
-                    break;
-                }
                 if helper && trimmed == "match path.canonicalize() {" {
                     continue;
                 }
-                if !trimmed.starts_with("//") && trimmed.contains(".canonicalize()") {
-                    offenders.push(format!("{}:{}: {}", path.display(), number + 1, trimmed));
+                if trimmed.contains(".canonicalize()") {
+                    offenders.push(format!("{}:{number}: {trimmed}", path.display()));
                 }
             }
         }
@@ -428,17 +497,10 @@ fn core_asks_again_only_through_fs_retry() {
             .unwrap_or_default();
         let text = fs::read_to_string(&path).unwrap();
         let mut found = Vec::new();
-        let mut gated = false;
-        for (number, line) in text.lines().enumerate() {
+        for (number, line) in production_lines(&text) {
             let trimmed = line.trim_start();
-            // The unit tests below a module may wait for a process they
-            // started: a module behind `cfg(test)` ends the scan.
-            if gated && trimmed.starts_with("mod ") {
-                break;
-            }
-            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
-            if !trimmed.starts_with("//") && trimmed.contains("sleep(") {
-                found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+            if trimmed.contains("sleep(") {
+                found.push(format!("{}:{}: {trimmed}", path.display(), number));
             }
         }
         let allowed = ALLOWED
@@ -501,22 +563,14 @@ fn core_renames_a_folder_through_rename_dir() {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
         let text = fs::read_to_string(&path).unwrap();
-        let mut gated = false;
-        for (number, line) in text.lines().enumerate() {
+        for (number, line) in production_lines(&text) {
             let trimmed = line.trim_start();
-            if gated && trimmed.starts_with("mod ") {
-                break;
-            }
-            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
-            if trimmed.starts_with("//") {
-                continue;
-            }
             for call in ["fs_retry::rename(", "fs::rename("] {
                 let named = NOT_A_FOLDER
                     .iter()
                     .any(|(file, allowed, _)| *file == name && *allowed == call);
                 if trimmed.contains(call) && !named {
-                    offenders.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+                    offenders.push(format!("{}:{}: {trimmed}", path.display(), number));
                 }
             }
         }
@@ -553,21 +607,13 @@ fn core_removes_through_fs_retry() {
             .unwrap_or_default();
         let text = fs::read_to_string(&path).unwrap();
         let mut found = Vec::new();
-        let mut gated = false;
-        for (number, line) in text.lines().enumerate() {
+        for (number, line) in production_lines(&text) {
             let trimmed = line.trim_start();
-            if gated && trimmed.starts_with("mod ") {
-                break;
-            }
-            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
-            if trimmed.starts_with("//") {
-                continue;
-            }
             if ["fs::remove_file(", "fs::remove_dir(", "fs::remove_dir_all("]
                 .iter()
                 .any(|call| trimmed.contains(call))
             {
-                found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+                found.push(format!("{}:{}: {trimmed}", path.display(), number));
             }
         }
         let allowed = AT_ONCE
@@ -613,23 +659,14 @@ fn a_path_is_shown_through_display_path() {
                 .unwrap_or_default();
             let text = fs::read_to_string(&path).unwrap();
             let mut found = Vec::new();
-            let mut gated = false;
-            for (number, line) in text.lines().enumerate() {
+            for (number, line) in production_lines(&text) {
                 let trimmed = line.trim_start();
-                if gated && trimmed.starts_with("mod ") {
-                    break;
-                }
-                gated =
-                    trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
-                if trimmed.starts_with("//") {
-                    continue;
-                }
                 let shown = trimmed.matches(".display()").count();
                 let kept = trimmed.matches(".display().to_string()").count();
                 // `.display()` alone on its line is followed by `.to_string()`
                 // on the next, where rustfmt broke the chain.
                 if shown > kept && trimmed != ".display()" {
-                    found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+                    found.push(format!("{}:{}: {trimmed}", path.display(), number));
                 }
             }
             let allowed = RELATIVE

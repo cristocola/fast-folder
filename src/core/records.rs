@@ -24,13 +24,21 @@ pub const SETTLE_SECS: i64 = 600;
 
 const VERSION: u32 = 1;
 
+/// What [`Entry::kind`] holds for a move's record.
+pub const MOVE: &str = "move";
+/// For a copy's.
+pub const COPY: &str = "copy";
+/// For a delete that empties its folder in place.
+pub const DELETE: &str = "delete";
+
 /// One record, as the index knows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Entry {
     pub version: u32,
     pub operation: String,
-    /// `move` or `copy`.
+    /// [`MOVE`], [`COPY`] or [`DELETE`]. A word, so an index another version
+    /// wrote is read whatever it holds.
     pub kind: String,
     pub project_id: String,
     /// The transaction directory.
@@ -65,6 +73,14 @@ pub fn source_unmounted(operation: &str) -> Option<String> {
             crate::util::paths::display_path(&entry.source_base)
         )
     })
+}
+
+impl Entry {
+    /// A delete's record sits beside its folder, where the base's own walk
+    /// finds it; the index only keeps its settle.
+    pub fn is_delete(&self) -> bool {
+        self.kind == DELETE
+    }
 }
 
 impl Default for Entry {

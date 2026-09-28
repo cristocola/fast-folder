@@ -44,8 +44,8 @@ impl MoveTransaction {
                     crate::core::records::add(&crate::core::records::Entry {
                         operation: operation_id.clone(),
                         kind: match operation {
-                            Operation::Move => "move",
-                            Operation::Copy => "copy",
+                            Operation::Move => crate::core::records::MOVE,
+                            Operation::Copy => crate::core::records::COPY,
                         }
                         .to_string(),
                         project_id: project_id.to_string(),

@@ -119,7 +119,7 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
         }
         // A delete's record sits beside its folder, where the base's own
         // walk finds it; the index only keeps its settle.
-        if entry.kind == "delete" {
+        if entry.is_delete() {
             if crate::util::paths::presence(&entry.record).is_absent()
                 && crate::util::paths::presence(&entry.target_base).is_present()
             {

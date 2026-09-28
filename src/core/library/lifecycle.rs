@@ -267,7 +267,7 @@ fn delete_in_place(
     })?;
     crate::core::records::add(&crate::core::records::Entry {
         operation: operation.clone(),
-        kind: "delete".to_string(),
+        kind: crate::core::records::DELETE.to_string(),
         project_id: project.id.clone(),
         record: record_path.clone(),
         source_base: base.to_path_buf(),

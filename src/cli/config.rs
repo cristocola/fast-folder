@@ -61,16 +61,18 @@ fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: St
                 crate::util::paths::display_path(&base)
             )
         } else {
-            base.display().to_string()
+            crate::util::paths::display_path(&base)
         }
     );
     println!(
         "  {:<26} {}",
         "editor:".green(),
-        if config.editor.is_empty() {
+        if !config.editor.is_empty() {
+            editor
+        } else if std::env::var_os("EDITOR").is_some() {
             format!("{} (from $EDITOR)", editor)
         } else {
-            editor
+            format!("{} ($EDITOR is not set)", editor)
         }
     );
     println!(
@@ -147,7 +149,7 @@ fn print_prompts_and_library(config: &Config) {
     println!(
         "  {:<26} {}",
         "recent_limit:".green(),
-        config.recent_default_limit
+        config.resolve_recent_limit()
     );
     println!(
         "  {:<26} {}",
@@ -276,90 +278,86 @@ pub fn set(key: &str, value: &str) -> Result<()> {
 /// does. Every refusal here is the refusal `config set` has always made.
 pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
     let normalized = key.replace('-', "_");
-    let said = {
-        match normalized.as_str() {
-            "base_dir" => set_base_dir(config, value)?,
-            "editor" => {
-                config.editor = value.to_string();
-                format!("Set editor = {}", value)
-            }
-            "terminal" => {
-                config.terminal = value.to_string();
-                format!("Set terminal = {}", value)
-            }
-            "motion" => set_motion(config, value)?,
-            "log_level" => set_log_level(config, value)?,
-            // A v3.6.0 setting; the app never takes the mouse. Accepted and
-            // ignored for the reason `show_banner` and `show_frame` are.
-            "mouse" => format!(
-                "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
-            ),
-            "theme" => set_theme(config, value)?,
-            "default_template" => {
-                config.default_template = value.to_string();
-                format!("Set default_template = {}", value)
-            }
-            "date_format" => set_date_format(config, value)?,
-            "preview_lines" => {
-                config.preview_lines = parse_usize(value)?;
-                format!("Set preview_lines = {}", config.preview_lines)
-            }
-            "prompt_open_after_create" => {
-                config.prompt_open_after_create = parse_bool(value)?;
-                format!(
-                    "Set prompt_open_after_create = {}",
-                    config.prompt_open_after_create
-                )
-            }
-            "confirm_create" => {
-                config.confirm_create = parse_bool(value)?;
-                format!("Set confirm_create = {}", config.confirm_create)
-            }
-            // Retired at v3.0.0 with the menu they drew. Accepted and ignored
-            // rather than refused: a config file or a script that still sets
-            // one must not start failing.
-            "show_banner" | "show_frame" => format!(
-                "{normalized} is no longer used — the guided app has no banner and no frame"
-            ),
-            "bases" => set_bases(config, value)?,
-            // `recent-default-limit` is the key's name before v3.0.0, when it
-            // also sized a menu page. It keeps parsing: a config file that
-            // names it must not start failing.
-            "recent_limit" | "recent_default_limit" => set_recent_limit(config, value)?,
-            "register_naming_pattern" => set_register_naming_pattern(config, value)?,
-            "on_name_collision" => set_on_name_collision(config, value)?,
-            "post_create.git_init" => {
-                config.post_create.git_init = parse_bool(value)?;
-                format!("Set post_create.git_init = {}", config.post_create.git_init)
-            }
-            "post_create.reveal" => {
-                config.post_create.reveal = parse_bool(value)?;
-                format!("Set post_create.reveal = {}", config.post_create.reveal)
-            }
-            "post_create.open_in_editor" => {
-                config.post_create.open_in_editor = parse_bool(value)?;
-                format!(
-                    "Set post_create.open_in_editor = {}",
-                    config.post_create.open_in_editor
-                )
-            }
-            "post_create.print_path" => {
-                config.post_create.print_path = parse_bool(value)?;
-                format!(
-                    "Set post_create.print_path = {}",
-                    config.post_create.print_path
-                )
-            }
-            other => bail!(
-                "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
-             preview-lines, prompt-open-after-create, confirm-create, \
-             recent-limit, register-naming-pattern, on-name-collision, \
-             post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
-                other
-            ),
+    Ok(match normalized.as_str() {
+        "base_dir" => set_base_dir(config, value)?,
+        "editor" => {
+            config.editor = value.to_string();
+            format!("Set editor = {}", value)
         }
-    };
-    Ok(said)
+        "terminal" => {
+            config.terminal = value.to_string();
+            format!("Set terminal = {}", value)
+        }
+        "motion" => set_motion(config, value)?,
+        "log_level" => set_log_level(config, value)?,
+        // A retired key: the app never takes the mouse. Accepted and
+        // ignored for the reason `show_banner` and `show_frame` are.
+        "mouse" => format!(
+            "{normalized} is no longer used — the app never takes the mouse, so text selects as usual and the wheel scrolls"
+        ),
+        "theme" => set_theme(config, value)?,
+        "default_template" => {
+            config.default_template = value.to_string();
+            format!("Set default_template = {}", value)
+        }
+        "date_format" => set_date_format(config, value)?,
+        "preview_lines" => {
+            config.preview_lines = parse_usize(value)?;
+            format!("Set preview_lines = {}", config.preview_lines)
+        }
+        "prompt_open_after_create" => {
+            config.prompt_open_after_create = parse_bool(value)?;
+            format!(
+                "Set prompt_open_after_create = {}",
+                config.prompt_open_after_create
+            )
+        }
+        "confirm_create" => {
+            config.confirm_create = parse_bool(value)?;
+            format!("Set confirm_create = {}", config.confirm_create)
+        }
+        // Retired keys. Accepted and ignored rather than refused: a
+        // config file or a script that still sets one must not start
+        // failing.
+        "show_banner" | "show_frame" => {
+            format!("{normalized} is no longer used — the guided app has no banner and no frame")
+        }
+        "bases" => set_bases(config, value)?,
+        // `recent-default-limit` is the key's older name. It keeps
+        // parsing: a config file that names it must not start failing.
+        "recent_limit" | "recent_default_limit" => set_recent_limit(config, value)?,
+        "register_naming_pattern" => set_register_naming_pattern(config, value)?,
+        "on_name_collision" => set_on_name_collision(config, value)?,
+        "post_create.git_init" => {
+            config.post_create.git_init = parse_bool(value)?;
+            format!("Set post_create.git_init = {}", config.post_create.git_init)
+        }
+        "post_create.reveal" => {
+            config.post_create.reveal = parse_bool(value)?;
+            format!("Set post_create.reveal = {}", config.post_create.reveal)
+        }
+        "post_create.open_in_editor" => {
+            config.post_create.open_in_editor = parse_bool(value)?;
+            format!(
+                "Set post_create.open_in_editor = {}",
+                config.post_create.open_in_editor
+            )
+        }
+        "post_create.print_path" => {
+            config.post_create.print_path = parse_bool(value)?;
+            format!(
+                "Set post_create.print_path = {}",
+                config.post_create.print_path
+            )
+        }
+        other => bail!(
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
+         preview-lines, prompt-open-after-create, confirm-create, \
+         recent-limit, register-naming-pattern, on-name-collision, \
+         post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
+            other
+        ),
+    })
 }
 
 /// Same validation as first-run onboarding — see

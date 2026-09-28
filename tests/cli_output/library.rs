@@ -276,6 +276,50 @@ fn the_recent_limit_key_is_one_word_everywhere() {
     );
 }
 
+/// **`config show` prints what is in force, and where it came from.** The
+/// editor is `$EDITOR`'s only when `$EDITOR` is set, and a limit of zero a hand
+/// wrote is shown as the limit `fastf recent` will use.
+#[test]
+fn config_show_says_what_is_in_force() {
+    let sb = Sandbox::new();
+    let shown = sb.ok(&["config", "show"]);
+    let editor = shown
+        .lines()
+        .find(|line| line.trim_start().starts_with("editor:"))
+        .unwrap_or_else(|| panic!("no editor line:\n{shown}"));
+    assert!(
+        !editor.contains("from $EDITOR"),
+        "`$EDITOR` is not set here, so nothing came from it: {editor}"
+    );
+    assert!(editor.contains("$EDITOR is not set"), "{editor}");
+
+    let out = sb
+        .command()
+        .env("EDITOR", "hx")
+        .args(["config", "show"])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(shown.contains("hx (from $EDITOR)"), "{shown}");
+
+    sb.ok(&["config", "set", "recent-limit", "50"]);
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    fs::write(
+        sb.install.join("config.toml"),
+        config.replace("recent_limit = 50", "recent_limit = 0"),
+    )
+    .unwrap();
+    let shown = sb.ok(&["config", "show"]);
+    let limit = shown
+        .lines()
+        .find(|line| line.trim_start().starts_with("recent_limit:"))
+        .unwrap_or_else(|| panic!("no limit line:\n{shown}"));
+    assert!(
+        limit.trim_end().ends_with("20"),
+        "zero is read as the default, and that is what is shown: {limit}"
+    );
+}
+
 /// **`mouse` is a retired key.** It was a setting in v3.6.0; the app never
 /// takes the mouse now. `config set mouse` is accepted and says so rather than
 /// failing a script that still sets it, a `config.toml` that still names it

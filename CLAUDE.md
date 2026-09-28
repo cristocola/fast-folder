@@ -113,7 +113,7 @@ tell you.
   `report` / `pass` / `base` / `moves` / `finish` / `recordless`),
   `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
-  byte-copy), `body.rs` (the grammar of `PROJECT_INFO.md`'s body: sections,
+  byte-copy), `body/` (the grammar of `PROJECT_INFO.md`'s body: sections,
   notes, todos), `validated.rs` (typed slugs, relative paths, tags, project
   folder names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`; says what it waits for
@@ -153,11 +153,12 @@ tell you.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
   `runtime.rs` (the one owner of the alternate screen, the threads and the loop),
   `entry.rs` (how the app was opened), `app/` (`App` and `update`; the app's own
-  `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`
-  and, for the pane, `pane_edit` / `pane_add` / `pane_cursor`; and a module per
+  `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`,
+  for the pane `pane_edit` / `pane_add` / `pane_cursor`, and for the templates
+  tab and its builder `templates_tab` / `builder`; and a module per
   flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`), `view/` (renderers only, `&App`
-  in), `command/` (**the one registry** every key, palette entry, help line,
+  in; `modals/` is every dialog, by what it is for), `command/` (**the one registry** every key, palette entry, help line,
   key line and hint comes from: `table` declares, `read` and `help` read),
   `guide.rs` (**the one place** an explanation is
   written: the builder's panel, the guide, the coach), `motion.rs` (pure motion

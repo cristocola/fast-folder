@@ -134,7 +134,7 @@ in `template::validate_structure`, which every load and save passes through.
 `created`, `folder`, `path`, `tags`, `auto_tags` (the derived subset), and
 `variables: BTreeMap` holding **every** template variable (sorted, for stable
 diffs). The **body** holds a variables table, a `## Notes` section and, after the
-first `add_todo`, a `## Todo` list; its grammar is `core/body.rs`, and outside
+first `add_todo`, a `## Todo` list; its grammar is `core::body`, and outside
 those helpers fastf never touches the file after creation.
 
 `write_frontmatter(path, |meta| …)` reads, splits, parses, applies and writes
@@ -923,7 +923,7 @@ saturating.
 
 ## Notes and todos
 
-**`core/body.rs` is the body's grammar, and the journal is the notes.** A note is a
+**`core::body` is the body's grammar, and the journal is the notes.** A note is a
 dated entry under `## Notes` — `- 2026-04-20T14:32:11Z — text`, further lines
 indented two spaces. **What the writer writes, the reader reads**:
 `body::notes_span` is where a new note goes — a legacy `## Journal` section when

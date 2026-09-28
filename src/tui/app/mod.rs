@@ -26,6 +26,7 @@ pub mod settings;
 pub mod studio;
 pub mod wizard;
 
+mod builder;
 mod geometry;
 mod keys;
 mod listing;
@@ -35,6 +36,7 @@ mod pane_cursor;
 mod pane_edit;
 mod run;
 mod status;
+mod templates_tab;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

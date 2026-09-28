@@ -702,7 +702,8 @@ Enter or `e` on the tab opens it, with the template's details read on a worker
 `template show` prints). The tab's verbs are `n`, Enter, `I` and `D`.
 
 **The builder is a list of a template's five parts, not a sequence of steps**
-(`app/studio.rs` holds the scratch `Template` and the open section), and every row
+(`app::studio` holds the scratch `Template` and the open section; `update`'s
+side of it is `app/builder.rs`, and the tab's `app/templates_tab.rs`), and every row
 summarises what its part holds. Nothing is written until Save, which answers
 `Cannot save:` in `Template::validate`'s words rather than writing something that
 will not load.

@@ -1040,7 +1040,7 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
                 Span::styled(" ", theme.dim()),
                 Span::styled(report.folder_name.clone(), theme.bold()),
             ]));
-            for line in crate::tui::widgets::tree::lines(&report.structure, g.rule == "-") {
+            for line in crate::tui::widgets::tree::lines(&report.structure, g.is_ascii()) {
                 lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
             }
             if !report.files.is_empty() {
@@ -1180,7 +1180,7 @@ fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
             ]));
             if !scan.structure.is_empty() {
                 lines.push(Line::from(""));
-                for line in crate::tui::widgets::tree::lines(&scan.structure, g.rule == "-") {
+                for line in crate::tui::widgets::tree::lines(&scan.structure, g.is_ascii()) {
                     lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
                 }
             }

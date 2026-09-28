@@ -18,7 +18,7 @@ use crate::tui::app::wizard::{ApplyPreview, FromFolderPreview, RecursivePreview,
 /// Split out so `update` can ask the same question `view` answers: the
 /// preview's scroll is clamped from this, and a scroll clamped only at draw
 /// time runs past the end of the preview and the dialog reads as frozen.
-fn flow_rect(area: Rect, flow: &Flow) -> Rect {
+fn flow_rect(app: &App, area: Rect, flow: &Flow) -> Rect {
     // Sized to what it holds, so the footer sits under the last answer rather
     // than at the bottom of a mostly-empty box. The preview takes the room it
     // needs and scrolls past that.
@@ -29,7 +29,7 @@ fn flow_rect(area: Rect, flow: &Flow) -> Rect {
     );
     let body = match flow.step {
         Step::Form => flow.form.rows() as u16,
-        Step::Preview => preview_height(flow),
+        Step::Preview => preview_height(app, flow),
     };
     let height = crate::tui::layout::fit_between(
         body + 4,
@@ -40,9 +40,9 @@ fn flow_rect(area: Rect, flow: &Flow) -> Rect {
 }
 
 /// The rows the body gets: the dialog less its border and its two bottom rows.
-fn flow_body_rows(area: Rect, flow: &Flow) -> usize {
+fn flow_body_rows(app: &App, flow: &Flow) -> usize {
     // `Block::inner` on an all-borders block is two rows and two columns.
-    let inner = flow_rect(area, flow).height.saturating_sub(2);
+    let inner = flow_rect(app, app.area(), flow).height.saturating_sub(2);
     if inner < 4 {
         return 0;
     }
@@ -58,7 +58,7 @@ pub(crate) fn preview_max_scroll(app: &App, flow: &Flow) -> usize {
         Some(preview) => preview_lines(app, preview).len(),
         None => 1,
     };
-    lines.saturating_sub(flow_body_rows(app.area(), flow))
+    lines.saturating_sub(flow_body_rows(app, flow))
 }
 
 pub(super) fn render_flow(
@@ -68,7 +68,7 @@ pub(super) fn render_flow(
     area: Rect,
 ) -> Option<Position> {
     let theme = &app.theme;
-    let area = flow_rect(area, flow);
+    let area = flow_rect(app, area, flow);
     super::clear(frame, area, &app.theme);
     let title = match flow.step {
         Step::Form => format!(" {} ", flow.kind.title()),
@@ -154,20 +154,28 @@ fn scroll_keys(g: &crate::tui::theme::Glyphs) -> String {
         .unwrap_or_default()
 }
 
-/// How many lines the preview wants, so a short one gets a short box.
-fn preview_height(flow: &Flow) -> u16 {
-    match &flow.preview {
-        Some(Preview::Create(report)) => {
-            (report.structure.len() + report.files.len() + report.values.len() + 10) as u16
+/// How many lines the preview wants, so a short one gets a short box: the
+/// room its kind is given, and never less than the lines it draws — a nested
+/// folder, a file's preview and register's `fill in` row are lines the room
+/// does not count, and a box that comes out short puts the last of them under
+/// the fold with the window's rows to spare.
+fn preview_height(app: &App, flow: &Flow) -> u16 {
+    let Some(preview) = &flow.preview else {
+        return 3;
+    };
+    let room = match preview {
+        Preview::Create(report) => {
+            report.structure.len() + report.files.len() + report.values.len() + 10
         }
-        Some(Preview::Apply(apply)) => (apply.rows.len() + 5) as u16,
-        Some(Preview::Register(register)) => 6 + u16::from(register.pinfo_exists) * 2,
-        Some(Preview::Recursive(recursive)) => (recursive.rows.len() + 5) as u16,
-        Some(Preview::FromFolder(scan)) => {
-            (scan.structure.len() + scan.files.len() + scan.assets.len() + 8) as u16
+        Preview::Apply(apply) => apply.rows.len() + 5,
+        Preview::Register(register) => 6 + usize::from(register.pinfo_exists) * 2,
+        Preview::Recursive(recursive) => recursive.rows.len() + 5,
+        Preview::FromFolder(scan) => {
+            scan.structure.len() + scan.files.len() + scan.assets.len() + 8
         }
-        None => 3,
-    }
+    };
+    let drawn = preview_lines(app, preview).len();
+    room.max(drawn).min(u16::MAX as usize) as u16
 }
 
 fn render_flow_form(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) -> Option<Position> {

@@ -71,6 +71,93 @@ Unscheduled; nothing here is promised.
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
 
+### Known weaknesses in the code, most serious first
+
+None is a wrong result today; each is where the next one would come from.
+
+**The engine.**
+
+1. After a move's publish only the target *base* is synced, not the project
+   folder `PROJECT_INFO.md` was just written into (`move_engine`). After a power
+   loss the moved copy can lack its identity while the original is already set
+   aside; reconcile reports it and nothing is lost, but the copy is not durable
+   when the move says it is.
+2. Three reads ask one base after another with no deadline: `library::max_id`
+   (every create and every preview), `Counters::base_floor` and `fastf
+   reindex`. A mount that stopped answering holds `fastf new` for the kernel's
+   own timeout, against the rule in `CLAUDE.md` › Configuration.
+3. Reconcile makes destructive filesystem calls that skip `util::fs_retry`.
+4. `transactions::target_ignores_case` ignores whether its probe file could be
+   removed; one left behind is in the copy, and verification refuses the move.
+5. A record's removal gives up after about four minutes on a mount that
+   answers `EIO` for good, because waits nest (`src/core/CLAUDE.md`). The
+   schedules are as they were; whether four minutes is wanted is undecided.
+6. `provisioning::finish_record` files a *successful* sweep of strays under
+   `unrecoverable`, which counts as needing a look.
+7. `jobs::claim` discards the result of the write that makes the claim.
+8. The case-only rename's search for a free staging name has no upper bound
+   (`library::lifecycle`), and `removal::empty_again` pauses 1.2 s after its
+   last listing.
+
+**What a person can meet.**
+
+9. The palette: Enter on a project the base filter or a `recent` preset hides
+   does not bring it into view; the cursor stays where it was.
+10. The pane's folder listing takes 200 entries before it sorts, so a folder
+    with more shows an arbitrary 200 (`tui::loaders`).
+11. On Windows, `fastf move`'s list of bases and `print_path` print the
+    `\\?\` form of a path, where everything else prints `display_path`.
+12. The picker pads its id, base and template columns by character count and
+    measures them in display columns: a base label in double-width characters
+    misaligns the rows (`tui::rows`).
+13. A hand-written `on_name_collision = "Error"` means `suffix`, because the
+    value is matched case for case; `config set` lowercases first.
+14. A hand-written `recent_limit = 0` is read as 1; the flag and `config set`
+    refuse 0.
+15. `fastf apply` mentions `{id}` when only an `exclude`d file holds the token.
+16. `register --recursive` refuses a date flag saying bulk registration "takes
+    each folder's own date", while `--use-today` is accepted with it.
+17. Search forgives a letter left out (`lulaby`) and not one typed too often.
+18. On Windows the cursor is put back after a signal by an escape sequence
+    through the ordinary handles; whether a legacy console prints it as text
+    has not been looked at.
+
+**Structure.**
+
+19. A cancel travels as message text, in three spellings, and is recognised by
+    matching it.
+20. `Result<_, String>` is the error channel in `merge`, `move_preflight` and
+    the app's messages; `theme`, `motion` and `log_level` are strings in
+    `Config`; a record's `kind` is a string with named constants.
+21. Four dispatch functions run 300 to 700 lines: `App::run`, `App::handle`,
+    `runtime::run_action`, `main::run`.
+22. Eight files are between 1,500 and 1,950 lines: `core/body.rs`,
+    `tui/app/studio.rs`, `tui/runtime.rs`, `tui/view/modals.rs`, `src/main.rs`
+    and three test suites. `tests/layering.rs` finds `runtime.rs` by its place
+    and the view files by their folder, so splitting either means moving a
+    guard with it.
+23. Five sentences in `src/tui/view/` spell a key by hand where the rule is to
+    read it from the registry; `view::modals::render_move_progress` draws every
+    kind of job.
+24. About seven loops claim a free name each in their own way; about 45
+    plurals are written out by hand; `cli::job_worker` has three batch loops of
+    one shape.
+25. Kept and unused: `Job.warnings` is never filled, `rows::project_row`'s
+    size branch is reached only by its tests, `library::now_iso8601` is a
+    compatibility re-export nothing imports, and a few `#[cfg(test)]` branches
+    sit inside production functions. `IncompleteKind`'s doc says its names are
+    in journals on disk, and nothing in the tree writes them.
+
+**Tests and docs.**
+
+26. The pty suite waits by fixed pauses; `tests/windows_live.rs` skips in
+    silence where its drives are missing.
+27. `assets::plan_entries`' size limit has no test at the limit.
+28. The scans in `tests/layering.rs` stop at a file's first `mod tests` and do
+    not start again, so code below an inline test module is not read.
+29. `tests/properties.rs` names the YAML crate; `docs/projects.md` narrates
+    release numbers.
+
 ### The ASCII alphabet on four more screens
 
 A console with no `·`, `…` or `→` draws a replacement box. The theme's glyphs

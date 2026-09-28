@@ -397,7 +397,7 @@ fn preview_recursive(
     let base = existing_directory(&request.path, REGISTER_PATH)?;
     let targets = reg::recursive_targets(&base)
         .map_err(|error| PreviewRefusal::on(REGISTER_PATH, format!("{error:#}")))?;
-    let prefix = reg::recursive_prefix(request.template_slug.as_deref());
+    let id = reg::recursive_id(request.template_slug.as_deref());
     let rows = targets
         .iter()
         .map(|path| {
@@ -405,7 +405,7 @@ fn preview_recursive(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let note = reg::recursive_id_note(&name, &prefix);
+            let note = reg::recursive_id_note(&name, &id);
             (name, note)
         })
         .collect();

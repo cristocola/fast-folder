@@ -296,6 +296,47 @@ fn recursive_register_passes_its_variables_to_every_child() {
     }
 }
 
+/// **A bulk register's preview names the ID the run writes.** An ID a folder's
+/// name already carries is recovered, and written with the template's own
+/// number of digits, in the preview as in the run.
+#[test]
+fn a_recursive_dry_run_names_the_id_the_run_writes() {
+    let sb = Sandbox::new();
+    let template = sb.install.join("templates").join("reel");
+    fs::create_dir_all(template.join("files")).unwrap();
+    fs::write(
+        template.join("template.yaml"),
+        "name: Reel\nslug: reel\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: R\n  digits: 6\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n\
+         \x20   required: true\n    transform: none\n",
+    )
+    .unwrap();
+    let base = sb.with_bases(&["legacy-base"]).remove(0);
+    fs::create_dir_all(base.join("R000042_Old_Reel")).unwrap();
+    let base = base.display().to_string();
+
+    let preview = sb.ok(&[
+        "register",
+        &base,
+        "--recursive",
+        "--template=reel",
+        "--name=Old",
+        "--dry-run",
+    ]);
+    assert!(preview.contains("recover R000042"), "{preview}");
+
+    let run = sb.ok(&[
+        "register",
+        &base,
+        "--recursive",
+        "--template=reel",
+        "--name=Old",
+    ]);
+    assert!(run.contains("R000042"), "{run}");
+    assert!(!run.contains("R0042 "), "{run}");
+}
+
 /// Two user-facing lists name the config keys — `config set --help` and the
 /// error an unknown key gets — and they must agree. `--help` is the one place
 /// someone looks to find out what they can set, so a key is only really

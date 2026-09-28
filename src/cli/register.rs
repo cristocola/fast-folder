@@ -299,21 +299,21 @@ pub fn recursive_targets(base: &Path) -> Result<Vec<PathBuf>> {
 }
 
 /// What would happen to one bulk-registered folder's ID: recovered from its
-/// name, or minted.
-pub fn recursive_id_note(name: &str, prefix: &str) -> String {
-    match parse_id_token(name, prefix) {
-        Some(v) => format!("recover {}", Counters::format_id(prefix, 4, v)),
+/// name and written the way the run writes it, or minted.
+pub fn recursive_id_note(name: &str, id: &IdConfig) -> String {
+    match parse_id_token(name, &id.prefix) {
+        Some(v) => format!("recover {}", Counters::format_id(&id.prefix, id.digits, v)),
         None => "mint new ID".to_string(),
     }
 }
 
-/// The ID prefix a bulk registration would use: the template's, else the
-/// default.
-pub fn recursive_prefix(template_slug: Option<&str>) -> String {
+/// The shape of the IDs a bulk registration writes, prefix and digits: the
+/// template's, else the default.
+pub fn recursive_id(template_slug: Option<&str>) -> IdConfig {
     template_slug
         .and_then(|s| template::find_by_slug(s).ok())
-        .map(|t| t.id.prefix)
-        .unwrap_or_else(|| IdConfig::default().prefix)
+        .map(|t| t.id)
+        .unwrap_or_default()
 }
 
 /// The stub template a register without one uses. Public so the guided app can
@@ -504,13 +504,13 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 .bold()
         );
         println!();
-        let prefix = recursive_prefix(args.template_slug.as_deref());
+        let id = recursive_id(args.template_slug.as_deref());
         for path in &targets {
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let id_note = recursive_id_note(&name, &prefix);
+            let id_note = recursive_id_note(&name, &id);
             println!("  {} {}  {}", "+".green().bold(), name, id_note.dimmed());
         }
         println!();

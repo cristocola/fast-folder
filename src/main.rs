@@ -1188,7 +1188,18 @@ fn run() -> Result<()> {
             yes,
             extra,
         }) => run_register(
-            path, recursive, dry_run, template, apply, rename, use_today, created, yes, extra,
+            path,
+            cli::register::RegisterFlags {
+                recursive,
+                dry_run,
+                template,
+                apply,
+                rename,
+                use_today,
+                created,
+                yes,
+            },
+            extra,
         ),
 
         Some(Commands::Apply {
@@ -1231,9 +1242,15 @@ fn start_the_log() {
     {
         fastf::util::log::set_level(level);
     }
+    // `args_os`, read lossily: `args` panics on an argument that is not
+    // Unicode, and a log line is no reason to.
     fastf::util::log::debug(format!(
         "fastf {}",
-        std::env::args().skip(1).collect::<Vec<_>>().join(" ")
+        std::env::args_os()
+            .skip(1)
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
     ));
 }
 
@@ -1333,17 +1350,10 @@ fn run_jobs(action: Option<JobsAction>) -> Result<()> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `flags` as clap parsed them, before what the trailing bucket holds.
 fn run_register(
     path: String,
-    recursive: bool,
-    dry_run: bool,
-    template: Option<String>,
-    apply: bool,
-    rename: bool,
-    use_today: bool,
-    created: Option<String>,
-    yes: bool,
+    mut flags: cli::register::RegisterFlags,
     extra: Vec<String>,
 ) -> Result<()> {
     let classified = classify_for("register", extra)?;
@@ -1351,16 +1361,6 @@ fn run_register(
     // the trailing bucket — everything after the first undeclared token.
     // So the flags are merged first and the constraints checked on the
     // merged set; `RegisterFlags::validate` is the authority.
-    let mut flags = cli::register::RegisterFlags {
-        recursive,
-        dry_run,
-        template,
-        apply,
-        rename,
-        use_today,
-        created,
-        yes,
-    };
     flags.apply_extra(classified.recognized)?;
     flags.validate()?;
     if flags.recursive {

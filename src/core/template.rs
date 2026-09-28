@@ -272,26 +272,29 @@ impl Template {
     /// Three things can carry a token: a folder in `structure`, a file's name,
     /// and an interpolated file's body. This asks about exactly those.
     pub fn interpolates_anything(&self) -> bool {
-        self.structure_has_tokens()
+        self.interpolates("{")
+    }
+
+    /// Whether `token` is anywhere this template would render it: the same
+    /// three places, by the same rules. `{id}` in a file the template
+    /// excludes, or in the body of one it copies verbatim, is never written.
+    pub fn interpolates(&self, token: &str) -> bool {
+        fn in_structure(nodes: &[FolderNode], token: &str) -> bool {
+            nodes
+                .iter()
+                .any(|n| n.name.contains(token) || in_structure(&n.children, token))
+        }
+        in_structure(&self.structure, token)
             || self.files.iter().any(|f| {
                 if crate::core::assets::is_excluded(&f.path, &self.exclude) {
                     return false;
                 }
                 // A name token is substituted whatever the body's fate is:
                 // `verbatim` is about contents, not about where a file lands.
-                f.path.contains('{')
+                f.path.contains(token)
                     || (!crate::core::assets::is_verbatim(&f.path, &self.verbatim)
-                        && f.template.contains('{'))
+                        && f.template.contains(token))
             })
-    }
-
-    fn structure_has_tokens(&self) -> bool {
-        fn any(nodes: &[FolderNode]) -> bool {
-            nodes
-                .iter()
-                .any(|n| n.name.contains('{') || any(&n.children))
-        }
-        any(&self.structure)
     }
 
     /// Load a template from its `template.yaml` manifest. The manifest holds
@@ -808,6 +811,42 @@ mod tests {
                 .validate()
                 .unwrap_or_else(|error| panic!("digits {digits} should be accepted, got: {error}"));
         }
+    }
+
+    /// A token counts where the template would render it, and nowhere else.
+    #[test]
+    fn a_token_in_a_file_that_is_never_rendered_is_not_mentioned() {
+        let file = |path: &str, body: &str| FileEntry {
+            path: path.to_string(),
+            template: body.to_string(),
+            content: String::new(),
+        };
+        let mut template = Template {
+            name: "T".to_string(),
+            slug: "t".to_string(),
+            naming_pattern: "{name}".to_string(),
+            exclude: vec!["*.tmp".to_string()],
+            verbatim: vec!["*.j2".to_string()],
+            files: vec![
+                file("scratch.tmp", "made for {id}"),
+                file("layout.j2", "{id} is the engine's own token here"),
+            ],
+            ..Template::default()
+        };
+        assert!(!template.interpolates("{id}"));
+        assert!(!template.interpolates_anything());
+
+        template
+            .files
+            .push(file("{id}_notes.j2", "kept as written"));
+        assert!(
+            template.interpolates("{id}"),
+            "a verbatim file's name is rendered"
+        );
+        template.files.pop();
+
+        template.files.push(file("README.md", "Project {id}"));
+        assert!(template.interpolates("{id}"));
     }
 
     /// A save that empties the starter todos takes the block out of the

@@ -364,6 +364,85 @@ fn a_tag_is_edited_in_place_and_emptied_it_is_removed() {
     );
 }
 
+/// **The field is all that is drawn on its row.** A tag or a value made
+/// shorter than it was shows what the field holds, not the field's text with
+/// the end of the old value after it.
+#[test]
+fn a_shortened_value_leaves_nothing_of_the_old_one_on_its_row() {
+    let mut app = editing_fixture();
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Tag(tag) if tag == "client/Acme"),
+    );
+    press(&mut app, Key::plain(KeyCode::Enter));
+    for _ in 0.."Acme".len() {
+        press(&mut app, Key::plain(KeyCode::Backspace));
+    }
+    type_text(&mut app, "X");
+    assert!(
+        matches!(&app.pane_edit, Some(PaneEdit::Line { input, .. }) if input.text() == "client/X")
+    );
+
+    let frame = fastf::tui::testing::render_to_string(&app, 120, 40);
+    let row = frame
+        .lines()
+        .find(|line| line.contains("client/X"))
+        .unwrap_or_else(|| panic!("the field is drawn:\n{frame}"));
+    assert!(
+        !row.contains("client/Xcme") && !row.contains("cme"),
+        "the old tag's end is still on the row: {row:?}"
+    );
+
+    // A variable's value, the same.
+    press(&mut app, Key::plain(KeyCode::Esc));
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Variable { slug, .. } if slug == "artist"),
+    );
+    press(&mut app, Key::plain(KeyCode::Enter));
+    for _ in 0.."iana".len() {
+        press(&mut app, Key::plain(KeyCode::Backspace));
+    }
+    let frame = fastf::tui::testing::render_to_string(&app, 120, 40);
+    assert!(
+        !frame.contains("Ariana") && !frame.contains("Ar iana"),
+        "the old value's end is still on the row:\n{frame}"
+    );
+    let row = frame
+        .lines()
+        .find(|line| line.contains("ARTIST"))
+        .unwrap_or_else(|| panic!("the field is drawn:\n{frame}"));
+    assert!(!row.contains("ana"), "{row:?}");
+
+    // And the cursor's bar still runs the width of the row: blanking the
+    // characters took no cell's background with it.
+    let buffer = fastf::tui::testing::render_to_buffer(&app, 120, 40);
+    let y = frame
+        .lines()
+        .position(|line| line.contains("ARTIST"))
+        .expect("the row") as u16;
+    let field = (0..buffer.area.width)
+        .find(|&x| buffer[(x, y)].symbol() == "A" && buffer[(x + 1, y)].symbol() == "R")
+        .expect("the label");
+    // The column before the label is the pane's padding, which only the bar
+    // draws on.
+    let bar = buffer[(field - 1, y)].style();
+    let after = buffer[(field + 30, y)].style();
+    assert_eq!(
+        (after.bg, after.add_modifier),
+        (bar.bg, bar.add_modifier),
+        "the bar is one bar"
+    );
+    assert_ne!(
+        (bar.bg, bar.add_modifier),
+        (
+            buffer[(field - 1, y + 1)].style().bg,
+            buffer[(field - 1, y + 1)].style().add_modifier
+        ),
+        "and the row under it is not lit, so the comparison means something"
+    );
+}
+
 #[test]
 fn a_tag_that_is_not_a_tag_is_refused_under_the_line() {
     let mut app = editing_fixture();

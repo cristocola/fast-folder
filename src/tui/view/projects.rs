@@ -1063,7 +1063,15 @@ fn line_editor(
 ) -> Option<Position> {
     let g = theme.glyphs;
     let line_area = Rect::new(text.x, row_y, text.width, 1);
-    frame.render_widget(Paragraph::new(""), line_area);
+    // The row under the field is drawn first, and a field draws only the
+    // cells its text reaches: without this a value made shorter keeps the end
+    // of the old one after it. The characters go and the styles stay, so the
+    // cursor's bar still runs the width of the row.
+    for x in line_area.left()..line_area.right() {
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, row_y)) {
+            cell.set_symbol(" ");
+        }
+    }
     let caret = input.render_line(
         line_area,
         frame.buffer_mut(),

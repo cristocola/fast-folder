@@ -1,42 +1,17 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use colored::Colorize;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::cli::render;
-use crate::core::template::{self, FileEntry, FolderNode, Template};
+use crate::core::template::{self, Template};
 use crate::util::paths;
 use crate::util::tty;
 
-/// Files larger than this are skipped when generating a template from a folder —
-/// bundling big binaries into a YAML template is almost never what you want.
-const FROM_FOLDER_MAX_FILE_SIZE: u64 = 64 * 1024;
-
-/// Directory names that are skipped during `from-folder` scans. Keeping this
-/// list short and hardcoded is intentional — German-engineering lean, no config
-/// surface area for what are effectively noise directories.
-/// A comma-separated rendering of the private `FROM_FOLDER_IGNORE`, for the help text
-/// and the docs — so a name added to the list cannot go unmentioned. `--help`
-/// listed nine of the twelve, and `.DS_Store`, `venv` and `.next` vanished from
-/// people's templates with nothing anywhere accounting for them.
+/// The names a `from-folder` scan leaves out, for the help text and the docs,
+/// read from the list the scan uses.
 pub fn from_folder_ignored() -> String {
-    FROM_FOLDER_IGNORE.join(", ")
+    crate::core::template_import::IGNORED_NAMES.join(", ")
 }
-
-const FROM_FOLDER_IGNORE: &[&str] = &[
-    ".git",
-    ".DS_Store",
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".venv",
-    "venv",
-    "dist",
-    "build",
-    ".next",
-    ".idea",
-    ".vscode",
-];
 
 pub fn list() -> Result<()> {
     let templates = template::load_all()?;
@@ -272,29 +247,6 @@ pub fn delete(slug: &str, yes: bool) -> Result<()> {
 
 pub type FromFolderReport = crate::core::template_import::FromFolderReport;
 
-/// One binary/large file queued for byte-for-byte bundling into `files/`.
-struct AssetPlan {
-    /// Path relative to the scanned root, for the dry-run listing.
-    rel: String,
-    size: u64,
-}
-
-/// The result of scanning a source folder — a pure plan, nothing written yet.
-#[derive(Default)]
-struct ScanResult {
-    structure: Vec<FolderNode>,
-    text_files: Vec<FileEntry>,
-    assets: Vec<AssetPlan>,
-    folders: usize,
-    skipped: usize,
-}
-
-impl ScanResult {
-    fn bundle_bytes(&self) -> u64 {
-        self.assets.iter().map(|a| a.size).sum()
-    }
-}
-
 /// Generate a template from an existing folder tree (non-interactive core used
 /// by tests). Text files are reproduced into `files/`;
 /// binary/large files are bundled byte-for-byte only when `bundle_assets` is set
@@ -337,7 +289,7 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
     // A dry run reports the same refusal the real run would: a preview that
     // stays silent about the `--force` it needs is not a preview of anything.
     ensure_slug_available(&slug, force)?;
-    let scan = scan_source(&root, bundle_assets)?;
+    let scan = crate::core::template_import::scan(&root, bundle_assets)?;
 
     if dry_run {
         print_from_folder_preview(&slug, &scan, bundle_assets);
@@ -345,7 +297,7 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
     }
 
     if bundle_assets && !scan.assets.is_empty() {
-        let total = scan.bundle_bytes();
+        let total = scan.bundle_bytes;
         if !yes {
             tty::require_tty(
                 "confirm the bundle size",
@@ -376,7 +328,11 @@ pub fn run_from_folder(args: FromFolderArgs) -> Result<()> {
 
 /// Render the scan without writing anything. Same numbers the real run reports,
 /// plus the names, since the point of a preview is to see what was picked up.
-fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool) {
+fn print_from_folder_preview(
+    slug: &str,
+    scan: &crate::core::template_import::Scan,
+    bundle_assets: bool,
+) {
     println!(
         "\n{}",
         "Preview  ·  dry run — nothing will be written"
@@ -391,18 +347,18 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
     }
     if !scan.text_files.is_empty() {
         println!("\n{}", "Files:".bold());
-        for f in &scan.text_files {
-            println!("  {} {}", "•".cyan(), f.path.green());
+        for path in &scan.text_files {
+            println!("  {} {}", "•".cyan(), path.green());
         }
     }
     if !scan.assets.is_empty() {
         println!("\n{}", "Bundled assets (copied byte-for-byte):".bold());
-        for a in &scan.assets {
+        for (path, bytes) in &scan.assets {
             println!(
                 "  {} {}  {}",
                 "•".cyan(),
-                a.rel.dimmed(),
-                crate::util::human_bytes::human_bytes(a.size).dimmed()
+                path.dimmed(),
+                crate::util::human_bytes::human_bytes(*bytes).dimmed()
             );
         }
     }
@@ -421,7 +377,7 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
             ", {} asset{} ({})",
             scan.assets.len(),
             if scan.assets.len() == 1 { "" } else { "s" },
-            crate::util::human_bytes::human_bytes(scan.bundle_bytes())
+            crate::util::human_bytes::human_bytes(scan.bundle_bytes)
         ));
     }
     println!("{summary}");
@@ -436,36 +392,6 @@ fn print_from_folder_preview(slug: &str, scan: &ScanResult, bundle_assets: bool)
             .dimmed()
         );
     }
-}
-
-/// A folder scan, print-free: what the generated template would hold.
-pub struct ScanSummary {
-    pub structure: Vec<FolderNode>,
-    pub text_files: Vec<String>,
-    /// `(path relative to the source, bytes)`.
-    pub assets: Vec<(String, u64)>,
-    pub folders: usize,
-    /// Binary or oversized files left out because bundling was not asked for.
-    pub skipped: usize,
-    pub bundle_bytes: u64,
-}
-
-/// `scan_source` as data. The guided app previews with this, so the app and
-/// `--dry-run` report the same scan.
-pub fn scan_for_preview(root: &Path, bundle_assets: bool) -> Result<ScanSummary> {
-    let scan = scan_source(root, bundle_assets)?;
-    Ok(ScanSummary {
-        bundle_bytes: scan.bundle_bytes(),
-        text_files: scan.text_files.iter().map(|f| f.path.clone()).collect(),
-        assets: scan
-            .assets
-            .iter()
-            .map(|asset| (asset.rel.clone(), asset.size))
-            .collect(),
-        folders: scan.folders,
-        skipped: scan.skipped,
-        structure: scan.structure,
-    })
 }
 
 fn validate_source(source: &str) -> Result<PathBuf> {
@@ -537,84 +463,4 @@ fn print_from_folder_summary(slug: &str, report: &FromFolderReport) {
 /// path is built from it.
 fn validate_slug(slug: &str) -> Result<()> {
     crate::core::validated::TemplateSlug::parse(slug).map(|_| ())
-}
-
-/// Walk `root` once, classifying every file into text (reproduced as an editable
-/// `FileEntry`) or asset (binary/large — bundled when `bundle_assets`, else
-/// counted as skipped). Nothing is written.
-fn scan_source(root: &Path, bundle_assets: bool) -> Result<ScanResult> {
-    let mut result = ScanResult::default();
-    let structure = scan_dir(root, root, bundle_assets, &mut result)?;
-    result.structure = structure;
-    Ok(result)
-}
-
-fn scan_dir(
-    root: &Path,
-    current: &Path,
-    bundle_assets: bool,
-    out: &mut ScanResult,
-) -> Result<Vec<FolderNode>> {
-    let mut nodes = Vec::new();
-    let entries =
-        fs::read_dir(current).with_context(|| format!("reading {}", current.display()))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        if FROM_FOLDER_IGNORE.iter().any(|n| *n == name) {
-            continue;
-        }
-
-        let path = entry.path();
-        let ft = entry.file_type()?;
-
-        if ft.is_dir() {
-            out.folders += 1;
-            let children = scan_dir(root, &path, bundle_assets, out)?;
-            nodes.push(FolderNode {
-                name: name.clone(),
-                children,
-            });
-        } else if ft.is_file() {
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            classify_file(root, &path, size, bundle_assets, out);
-        }
-        // symlinks, fifos, etc. are intentionally skipped
-    }
-
-    Ok(nodes)
-}
-
-/// Route one file into the scan: small UTF-8 text becomes an editable
-/// `FileEntry`; everything else (binary, or larger than the text cap) is an
-/// asset — bundled byte-for-byte when `bundle_assets`, otherwise skipped. The
-/// reserved auto-gen filename is never reproduced (fastf owns it).
-fn classify_file(root: &Path, path: &Path, size: u64, bundle_assets: bool, out: &mut ScanResult) {
-    let rel = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    if crate::core::project_info::path_is_reserved(&rel) {
-        return;
-    }
-
-    if size <= FROM_FOLDER_MAX_FILE_SIZE
-        && let Ok(content) = fs::read_to_string(path)
-    {
-        out.text_files.push(FileEntry {
-            path: rel,
-            template: String::new(),
-            content,
-        });
-        return;
-    }
-
-    if bundle_assets {
-        out.assets.push(AssetPlan { rel, size });
-    } else {
-        out.skipped += 1;
-    }
 }

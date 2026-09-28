@@ -515,6 +515,58 @@ fn from_folder_can_be_driven_without_a_terminal() {
     );
 }
 
+/// **`from-folder --dry-run` is the scan the run makes**: it refuses what the
+/// run refuses and lists what the run takes, because both read
+/// `core::template_import`. Where a second scan would differ: a tree past the
+/// walk's depth limit, fastf's own create journal at the root, a source that
+/// is a link.
+#[test]
+fn a_from_folder_dry_run_is_the_scan_the_run_makes() {
+    let sb = Sandbox::new();
+
+    let deep = sb.tmp.path().join("deep");
+    let mut bottom = deep.clone();
+    for _ in 0..70 {
+        bottom.push("d");
+    }
+    fs::create_dir_all(&bottom).unwrap();
+    let deep = deep.display().to_string();
+    let run = sb.fails_headless(&["template", "from-folder", &deep, "deep"]);
+    let preview = sb.fails_headless(&["template", "from-folder", &deep, "deep", "--dry-run"]);
+    assert!(run.contains("too deep"), "{run}");
+    assert_eq!(preview, run, "the preview's refusal is the run's");
+
+    let src = sb.tmp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("notes.txt"), "hello").unwrap();
+    fs::write(src.join(".fastf-create-v2.json"), "{}").unwrap();
+    let source = src.display().to_string();
+    let preview = sb.ok(&["template", "from-folder", &source, "kit", "--dry-run"]);
+    assert!(
+        preview.contains("notes.txt") && preview.contains("0 folders, 1 text file"),
+        "{preview}"
+    );
+    assert!(!preview.contains(".fastf-create-v2.json"), "{preview}");
+    let run = sb.ok(&["template", "from-folder", &source, "kit"]);
+    assert!(run.contains("0 folders, 1 text file"), "{run}");
+    assert!(
+        !sb.install
+            .join("templates/kit/files/.fastf-create-v2.json")
+            .exists()
+    );
+
+    #[cfg(unix)]
+    {
+        let link = sb.tmp.path().join("link");
+        std::os::unix::fs::symlink(&src, &link).unwrap();
+        let link = link.display().to_string();
+        let run = sb.fails_headless(&["template", "from-folder", &link, "linked"]);
+        let preview = sb.fails_headless(&["template", "from-folder", &link, "linked", "--dry-run"]);
+        assert!(run.contains("not a real directory"), "{run}");
+        assert_eq!(preview, run, "the preview's refusal is the run's");
+    }
+}
+
 /// A terminal is on stderr and stdin; stdout is the output. `fastf new t >
 /// out.txt` refused to prompt because the guard probed the wrong stream.
 #[cfg(unix)]

@@ -244,7 +244,7 @@ fn preview_from_folder(
     tpl::ensure_slug_available(&request.slug, request.force).map_err(|error| {
         PreviewRefusal::on(crate::tui::app::wizard::FIELD_FORCE, format!("{error:#}"))
     })?;
-    let scan = tpl::scan_for_preview(&root, request.bundle_assets)
+    let scan = crate::core::template_import::scan(&root, request.bundle_assets)
         .map_err(|error| PreviewRefusal::on(FIELD_SOURCE, format!("{error:#}")))?;
     Ok(Preview::FromFolder(Box::new(FromFolderPreview {
         slug: request.slug.clone(),

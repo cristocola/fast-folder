@@ -42,7 +42,10 @@ flat `files:` block would be preserved instead of dropped.
 is the create spec, and regenerating over it would merge old files under a
 replaced `structure`. `core::template_import` is the from-folder engine and
 `operations::template_from_folder` the locked entry point, which rescans under
-`DataLock` whatever the CLI pre-scanned. Text (UTF-8 ≤ 64 KB) becomes editable
+`DataLock` whatever a surface pre-scanned. **A preview reads
+`template_import::scan`, the scan the run makes** — `--dry-run`, the bundle
+confirmation and the app's preview alike — so there is one depth limit, one
+list of ignored names and one set of refusals. Text (UTF-8 ≤ 64 KB) becomes editable
 files, binary and large files are bundled only on request, and a root
 `PROJECT_INFO.md` is excluded.
 

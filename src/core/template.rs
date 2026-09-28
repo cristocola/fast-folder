@@ -252,6 +252,7 @@ impl Template {
         "post_create",
         "tags",
         "tag_from",
+        "todo",
         "files",
         "dir",
     ];
@@ -795,19 +796,54 @@ mod tests {
         }
     }
 
+    /// A save that empties the starter todos takes the block out of the
+    /// manifest, and a key fastf does not own stays where it was.
+    #[test]
+    fn a_save_without_todos_takes_the_block_out_of_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("template.yaml");
+        let mut template = Template {
+            name: "Edit".to_string(),
+            slug: "edit".to_string(),
+            naming_pattern: "{id}".to_string(),
+            todo: vec![TodoBlock {
+                phase: Some("Edit".to_string()),
+                tasks: vec!["Rough cut".to_string()],
+            }],
+            ..Template::default()
+        };
+        template.save_to_file(&manifest).unwrap();
+        let mut written = fs::read_to_string(&manifest).unwrap();
+        assert!(written.contains("Rough cut"), "{written}");
+        written.push_str("studio_note: keep me\n");
+        fs::write(&manifest, written).unwrap();
+
+        template.todo.clear();
+        template.save_to_file(&manifest).unwrap();
+        let written = fs::read_to_string(&manifest).unwrap();
+        assert!(!written.contains("todo"), "{written}");
+        assert!(!written.contains("Rough cut"), "{written}");
+        assert!(written.contains("studio_note: keep me"), "{written}");
+    }
+
     /// A field added to `Template` without being added to `OWNED_KEYS` would be
     /// preserved from the old manifest instead of updated, so an edit made in the
     /// TUI builder would appear to save and change nothing.
     #[test]
     fn owned_keys_covers_every_serialized_field() {
-        // Populated so nothing is skipped: `verbatim` and `exclude` are omitted
-        // when empty, and the two `#[serde(skip)]` fields never appear at all.
+        // Populated so nothing is skipped: `verbatim`, `exclude` and `todo`
+        // are omitted when empty, and the two `#[serde(skip)]` fields never
+        // appear at all.
         let tmpl = Template {
             name: "T".to_string(),
             slug: "t".to_string(),
             naming_pattern: "{id}".to_string(),
             verbatim: vec!["*.png".to_string()],
             exclude: vec!["*.tmp".to_string()],
+            todo: vec![TodoBlock {
+                phase: Some("Edit".to_string()),
+                tasks: vec!["Rough cut".to_string()],
+            }],
             ..Template::default()
         };
         let serialized = crate::util::yaml::serialized_keys(&tmpl);

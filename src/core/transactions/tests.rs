@@ -1093,3 +1093,32 @@ fn a_project_that_never_holds_still_is_published_as_last_caught_up() {
         "the last line is for the merge"
     );
 }
+
+/// **A probe fastf cannot take back stops the copy before it starts.** Left in
+/// the copy's folder it is an entry the record does not hold, and the move
+/// would be refused by its own verification after every file was copied.
+#[cfg(debug_assertions)]
+#[test]
+fn a_case_probe_that_cannot_be_removed_stops_the_copy_before_it_starts() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source");
+    let staging = temp.path().join("staging");
+    fs::create_dir_all(source.join("sub")).unwrap();
+    fs::write(source.join("sub/a.txt"), "aaa").unwrap();
+    fs::create_dir(&staging).unwrap();
+    let manifest = MoveManifest::scan(&source).unwrap();
+
+    let refused = crate::util::faults::with_thread_fault("copy:case-probe:eacces", || {
+        copy_to_staging(
+            &manifest,
+            &source,
+            &staging,
+            &Mutex::new(Progress::new(&[])),
+            &AtomicBool::new(false),
+        )
+    });
+    let said = format!("{:#}", refused.unwrap_err());
+    assert!(said.contains("probe"), "{said}");
+    assert!(said.contains("Nothing was copied"), "{said}");
+    assert!(!staging.join("sub").exists(), "no name was made");
+}

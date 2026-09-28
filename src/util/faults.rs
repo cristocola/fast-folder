@@ -394,6 +394,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // fails (`remove:unlink:enotconn-3`, `copy:write:eio-1`).
     "remove:unlink",
     "copy:write",
+    // Taking back the probe a copy makes to ask whether its target ignores
+    // case, failed the way a mount fails (`copy:case-probe:eacces`).
+    "copy:case-probe",
     // A decision: a mount that does not answer is waited for a second, not
     // two minutes (`util::fs_retry::mount_wait`), so a move pauses in a test.
     "fs:short-mount-wait",

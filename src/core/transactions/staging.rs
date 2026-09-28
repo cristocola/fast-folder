@@ -26,7 +26,7 @@ pub fn copy_to_staging(
     crate::util::paths::require_real_directory(source, "move source")?;
     crate::util::paths::require_real_directory(staging, "move staging")?;
     manifest.validate()?;
-    if target_ignores_case(staging) {
+    if probe_case(staging)? {
         let clashes = case_clashes(manifest);
         if !clashes.is_empty() {
             let count = clashes.len();
@@ -322,17 +322,38 @@ fn catch_up(
     Ok(())
 }
 
-/// Whether the filesystem holding `staging` — a folder fastf made empty a
-/// moment ago — takes two names that differ only in case for one.
+/// [`probe_case`] as the tests written before it ask it.
+#[cfg(test)]
 pub(super) fn target_ignores_case(staging: &Path) -> bool {
+    probe_case(staging).unwrap_or(false)
+}
+
+/// Whether the filesystem holding `staging` — a folder fastf made empty a
+/// moment ago — takes two names that differ only in case for one. An error
+/// when the probe it made cannot be taken back: left in the copy's folder it
+/// is an entry the record does not hold, which the move's own verification
+/// refuses once everything is copied.
+pub(super) fn probe_case(staging: &Path) -> Result<bool> {
     let upper = staging.join(".Fastf-Case-Probe");
     let lower = staging.join(".fastf-case-probe");
     let Ok(()) = fs::write(&upper, b"") else {
-        return false;
+        return Ok(false);
     };
     let ignores = fs::symlink_metadata(&lower).is_ok();
-    let _ = fs::remove_file(&upper);
-    ignores
+    let removed = crate::util::fs_retry::with_retry(&upper, || {
+        crate::util::faults::check_io("copy:case-probe")?;
+        crate::util::fs_retry::remove_file(&upper)
+    });
+    match removed {
+        Ok(()) => Ok(ignores),
+        Err(error) if crate::util::paths::is_absence(&error) => Ok(ignores),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "removing the probe fastf made at {}. Nothing was copied.",
+                crate::util::paths::display_path(&upper)
+            )
+        }),
+    }
 }
 
 /// Pairs of recorded names that a filesystem ignoring case would take for

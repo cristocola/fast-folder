@@ -220,7 +220,10 @@ impl App {
             CommandId::MarkNone => {
                 let cleared = self.library.marks.len();
                 self.library.marks.clear();
-                self.info(format!("{cleared} marks cleared"));
+                self.info(format!(
+                    "{cleared} mark{} cleared",
+                    crate::util::plural::s(cleared)
+                ));
                 Vec::new()
             }
             CommandId::AddTag => self.open_add_tag(),
@@ -261,12 +264,10 @@ impl App {
             CommandId::Rename => self.open_rename_prompt(),
             CommandId::Move => self.open_move_picker(),
             CommandId::CopyTo => {
-                let mut prompt = TextPrompt::new(
+                self.modals.push(Modal::TextPrompt(TextPrompt::new(
                     validators::COPY_TO_PROMPT,
                     TextThen::CopyTo(self.targets_now()),
-                );
-                prompt.input = crate::tui::widgets::input::LineEdit::default();
-                self.modals.push(Modal::TextPrompt(prompt));
+                )));
                 Vec::new()
             }
             CommandId::Unregister => self.confirm_unregister(),

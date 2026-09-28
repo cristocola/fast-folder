@@ -709,7 +709,7 @@ impl Runtime {
     /// Give the terminal back, run `$EDITOR` on a scratch file for a journal
     /// note, and take it again. The editor's text is returned; the append
     /// itself runs as an ordinary `Action` on a worker.
-    fn run_note_editor(&mut self, project: Box<crate::core::library::Project>) -> Result<Resumed> {
+    fn run_note_editor(&mut self, project: Box<Project>) -> Result<Resumed> {
         use crate::core::config::Config;
 
         self.input.pause();
@@ -1044,7 +1044,7 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
         Action::Apply(request) => apply_template(&request),
         Action::Register(request) if request.recursive => register_recursively(request),
         Action::Register(request) => {
-            let outcome = register_one(&request, &request.path.clone())?;
+            let outcome = register_one(&request, &request.path)?;
             let project = outcome.project;
             let path = project.path.clone();
             Ok(ActionOutcome::new(
@@ -1103,7 +1103,7 @@ fn run_action(action: Action) -> Result<ActionOutcome> {
         }
         Action::ResolveAttention { path, action } => {
             let said = crate::core::operations::resolve_attention(&path, action)?;
-            Ok(ActionOutcome::new(ListChange::Reload, for_the_app(&said)))
+            Ok(ActionOutcome::new(ListChange::Reload, said))
         }
         Action::AppendNote { project, text } => {
             crate::core::operations::append_note(&project, &text)?;

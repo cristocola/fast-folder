@@ -833,7 +833,7 @@ fn note_more_line(theme: &Theme, more: usize) -> Line<'static> {
             "{:<10} {} {more} more line{}",
             "",
             g.ellipsis,
-            if more == 1 { "" } else { "s" }
+            crate::util::plural::s(more)
         ),
         theme.dim(),
     ))

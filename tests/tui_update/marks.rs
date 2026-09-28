@@ -71,6 +71,15 @@ fn minus_clears_the_marks_and_says_so() {
         "{:?}",
         app.status.text
     );
+
+    // A count reads `1 mark`.
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch('-'));
+    assert!(
+        app.status.text.contains("1 mark cleared"),
+        "{:?}",
+        app.status.text
+    );
 }
 
 #[test]

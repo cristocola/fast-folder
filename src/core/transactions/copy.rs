@@ -176,6 +176,18 @@ fn copy_file_again(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<Option<ManifestEntry>> {
+    copy_file_again_sleeping(std::thread::sleep, entry, source, staging, progress, cancel)
+}
+
+/// [`copy_file_again`], pausing through `sleep`.
+pub(super) fn copy_file_again_sleeping(
+    mut sleep: impl FnMut(std::time::Duration),
+    entry: &ManifestEntry,
+    source: &Path,
+    staging: &Path,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<Option<ManifestEntry>> {
     use crate::util::fs_retry::ErrorClass;
     const PAUSES_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
     let destination = staging.join(&entry.path);
@@ -194,7 +206,7 @@ fn copy_file_again(
         }
         match crate::util::fs_retry::class_of(&error) {
             Some(ErrorClass::Transient | ErrorClass::Locked) if pauses < PAUSES_MS.len() => {
-                std::thread::sleep(std::time::Duration::from_millis(PAUSES_MS[pauses]));
+                sleep(std::time::Duration::from_millis(PAUSES_MS[pauses]));
                 pauses += 1;
             }
             Some(ErrorClass::NotConnected) if std::time::Instant::now() < deadline => {

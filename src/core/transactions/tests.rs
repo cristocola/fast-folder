@@ -236,6 +236,127 @@ fn a_refused_link_is_said_in_words() {
     assert!(refusal.contains("--links"), "{refusal}");
 }
 
+/// One file of a project, to be copied into an empty staging folder.
+#[cfg(all(unix, debug_assertions))]
+fn one_file_to_copy(temp: &Path) -> (ManifestEntry, std::path::PathBuf, std::path::PathBuf) {
+    let source = temp.join("source");
+    let staging = temp.join("staging");
+    fs::create_dir(&source).unwrap();
+    fs::create_dir(&staging).unwrap();
+    fs::write(source.join("take.wav"), vec![7_u8; 3000]).unwrap();
+    let entry = MoveManifest::scan(&source)
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|entry| entry.path == Path::new("take.wav"))
+        .unwrap();
+    (entry, source, staging)
+}
+
+/// A write the mount fails is made again, whole, on the schedule every call
+/// asked again by class is on; what the failed tries left is not in the way.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_file_is_copied_again_on_the_schedule_of_its_class() {
+    let temp = tempfile::tempdir().unwrap();
+    let (entry, source, staging) = one_file_to_copy(temp.path());
+    let progress = Mutex::new(Progress::new(&[]));
+    let mut pauses = Vec::new();
+    let copied = crate::util::faults::with_thread_fault("copy:write:eio-3", || {
+        copy_file_again_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            &entry,
+            &source,
+            &staging,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    });
+    assert_eq!(pauses, [200, 400, 800]);
+    assert_eq!(copied.unwrap().unwrap().bytes, 3000);
+    assert_eq!(
+        fs::read(staging.join("take.wav")).unwrap(),
+        vec![7_u8; 3000]
+    );
+}
+
+/// And it is given up on after six more tries, with the error as it came.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_file_that_never_copies_is_given_up_on_after_six_more_tries() {
+    let temp = tempfile::tempdir().unwrap();
+    let (entry, source, staging) = one_file_to_copy(temp.path());
+    let progress = Mutex::new(Progress::new(&[]));
+    let mut pauses = Vec::new();
+    let copied = crate::util::faults::with_thread_fault("copy:write:eio", || {
+        copy_file_again_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            &entry,
+            &source,
+            &staging,
+            &progress,
+            &AtomicBool::new(false),
+        )
+    });
+    assert_eq!(pauses, [200, 400, 800, 1600, 3200, 5000]);
+    let error = copied.unwrap_err();
+    assert_eq!(
+        crate::util::fs_retry::class_of(&error),
+        Some(crate::util::fs_retry::ErrorClass::Transient),
+        "{error:#}"
+    );
+}
+
+/// A cancel ends the asking: the error is the answer, with no pause taken.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_cancelled_copy_is_not_made_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let (entry, source, staging) = one_file_to_copy(temp.path());
+    let progress = Mutex::new(Progress::new(&[]));
+    let mut pauses = Vec::new();
+    let copied = crate::util::faults::with_thread_fault("copy:write:eio", || {
+        copy_file_again_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            &entry,
+            &source,
+            &staging,
+            &progress,
+            &AtomicBool::new(true),
+        )
+    });
+    assert!(copied.is_err());
+    assert!(pauses.is_empty(), "{pauses:?}");
+}
+
+/// A record's removal waits out a mount that is still uploading the record's
+/// own files: twenty pauses of a second, and the error as it came after them.
+#[cfg(unix)]
+#[test]
+fn a_record_still_uploading_is_asked_about_twenty_more_times() {
+    let mut pauses = Vec::new();
+    let mut asked = 0;
+    let answer: std::io::Result<()> = through_uploads(
+        |pause| pauses.push(pause.as_millis() as u64),
+        || {
+            asked += 1;
+            Err(std::io::Error::from_raw_os_error(libc::EIO))
+        },
+    );
+    assert_eq!(pauses, vec![1000; 20]);
+    assert_eq!(asked, 21);
+    assert_eq!(answer.unwrap_err().raw_os_error(), Some(libc::EIO));
+
+    // Any other error is the answer at once.
+    let mut pauses = Vec::new();
+    let refused: std::io::Result<()> = through_uploads(
+        |pause| pauses.push(pause.as_millis() as u64),
+        || Err(std::io::Error::from_raw_os_error(libc::EACCES)),
+    );
+    assert_eq!(refused.unwrap_err().raw_os_error(), Some(libc::EACCES));
+    assert!(pauses.is_empty());
+}
+
 /// A missing source is an error, never an empty manifest that would verify
 /// against an empty destination.
 #[test]

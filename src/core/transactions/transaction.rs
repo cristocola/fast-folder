@@ -543,26 +543,32 @@ impl MoveTransaction {
         // A cloud mount refuses to remove a folder whose files it is still
         // uploading — the record's last files were written seconds ago — and
         // says so with an I/O error that clears once they are up.
-        let mut waited = 0;
-        loop {
-            let removed = crate::util::fs_retry::with_retry(&self.operation_dir, || {
+        through_uploads(std::thread::sleep, || {
+            crate::util::fs_retry::with_retry(&self.operation_dir, || {
                 crate::util::fs_retry::remove_dir_all(&self.operation_dir)
-            });
-            match removed {
-                Ok(()) => {
-                    crate::core::records::remove(&self.journal.operation_id);
-                    return Ok(());
-                }
-                Err(error) if is_io_error(&error) && waited < RECORD_REMOVAL_WAIT_MS => {
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
-                    waited += 1000;
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("removing move transaction {}", self.operation_dir.display())
-                    });
-                }
+            })
+        })
+        .with_context(|| format!("removing move transaction {}", self.operation_dir.display()))?;
+        crate::core::records::remove(&self.journal.operation_id);
+        Ok(())
+    }
+}
+
+/// Ask `op` again, a second apart, for as long as it answers with the I/O
+/// error of a mount still uploading, up to [`RECORD_REMOVAL_WAIT_MS`] of
+/// pauses; pausing through `sleep`.
+pub(super) fn through_uploads<T>(
+    mut sleep: impl FnMut(std::time::Duration),
+    mut op: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut waited = 0;
+    loop {
+        match op() {
+            Err(error) if is_io_error(&error) && waited < RECORD_REMOVAL_WAIT_MS => {
+                sleep(std::time::Duration::from_millis(1000));
+                waited += 1000;
             }
+            answer => return answer,
         }
     }
 }

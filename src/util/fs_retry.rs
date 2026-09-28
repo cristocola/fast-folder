@@ -180,6 +180,16 @@ pub fn mount_wait() -> Duration {
 pub fn with_retry_for<T>(
     path: &Path,
     mount_wait: Duration,
+    op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    with_retry_sleeping(std::thread::sleep, path, mount_wait, op)
+}
+
+/// [`with_retry_for`], pausing through `sleep`.
+fn with_retry_sleeping<T>(
+    mut sleep: impl FnMut(Duration),
+    path: &Path,
+    mount_wait: Duration,
     mut op: impl FnMut() -> io::Result<T>,
 ) -> io::Result<T> {
     let mut tries = 0;
@@ -201,7 +211,7 @@ pub fn with_retry_for<T>(
                     "{}: {error}; asking again",
                     crate::util::paths::display_path(path)
                 ));
-                std::thread::sleep(Duration::from_millis(CLASS_BACKOFF_MS[tries]));
+                sleep(Duration::from_millis(CLASS_BACKOFF_MS[tries]));
                 tries += 1;
             }
             ErrorClass::NotConnected if std::time::Instant::now() < deadline => {
@@ -210,7 +220,7 @@ pub fn with_retry_for<T>(
                     crate::util::paths::display_path(path)
                 ));
                 let mount = mount.get_or_insert_with(|| crate::util::fs_kind::mount_identity(path));
-                wait_for_mount(path, mount.as_deref(), deadline);
+                wait_for_mount_sleeping(&mut sleep, path, mount.as_deref(), deadline);
             }
             _ => return Err(error),
         }
@@ -294,6 +304,16 @@ pub fn list_dir(
 /// empty folder that answers "nothing there" for everything under it: that
 /// is not the mount being back.
 pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Instant) {
+    wait_for_mount_sleeping(&mut std::thread::sleep, path, mount, deadline)
+}
+
+/// [`wait_for_mount`], pausing through `sleep`.
+fn wait_for_mount_sleeping(
+    sleep: &mut impl FnMut(Duration),
+    path: &Path,
+    mount: Option<&str>,
+    deadline: std::time::Instant,
+) {
     while std::time::Instant::now() < deadline {
         let answers = match crate::util::paths::presence(path) {
             crate::util::paths::Presence::Unknown(error) => {
@@ -306,7 +326,7 @@ pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Ins
         if answers && same_mount {
             return;
         }
-        std::thread::sleep(Duration::from_secs(1));
+        sleep(Duration::from_secs(1));
     }
 }
 
@@ -357,17 +377,28 @@ fn retry<T>(op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     retry_on(&BACKOFF_MS, op)
 }
 
-fn retry_on<T>(schedule: &[u64], mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+fn retry_on<T>(schedule: &[u64], op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    retry_sleeping(std::thread::sleep, is_transient, schedule, op)
+}
+
+/// [`retry_on`], pausing through `sleep` and asking `transient` what an error
+/// is.
+fn retry_sleeping<T>(
+    mut sleep: impl FnMut(Duration),
+    transient: impl Fn(&io::Error) -> bool,
+    schedule: &[u64],
+    mut op: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
     let mut last = match op() {
         Ok(value) => return Ok(value),
-        Err(err) if is_transient(&err) => err,
+        Err(err) if transient(&err) => err,
         Err(err) => return Err(err),
     };
     for &delay in schedule {
-        std::thread::sleep(Duration::from_millis(delay));
+        sleep(Duration::from_millis(delay));
         match op() {
             Ok(value) => return Ok(value),
-            Err(err) if is_transient(&err) => last = err,
+            Err(err) if transient(&err) => last = err,
             Err(err) => return Err(err),
         }
     }
@@ -564,6 +595,163 @@ pub fn remove_dir_all(path: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    // ---- the schedules, pinned ------------------------------------------
+    //
+    // Each test below asks a call that always fails and writes down every
+    // pause it takes instead of waiting it out. `by_class` and `contended`
+    // are the only lines that know how the loops are built.
+
+    /// An error of the class a mount gives and takes back.
+    fn transient() -> io::Error {
+        #[cfg(unix)]
+        let code = libc::EIO;
+        // ERROR_IO_DEVICE.
+        #[cfg(windows)]
+        let code = 1117;
+        io::Error::from_raw_os_error(code)
+    }
+
+    /// An error of the class a program holding the file gives.
+    fn locked() -> io::Error {
+        #[cfg(unix)]
+        let code = libc::EBUSY;
+        // ERROR_SHARING_VIOLATION.
+        #[cfg(windows)]
+        let code = 32;
+        io::Error::from_raw_os_error(code)
+    }
+
+    /// A call asked again by what its error means, its pauses recorded.
+    fn by_class(
+        mount_wait: Duration,
+        op: impl FnMut() -> io::Result<()>,
+    ) -> (io::Result<()>, Vec<u64>) {
+        let temp = tempfile::tempdir().unwrap();
+        let mut pauses = Vec::new();
+        let answer = with_retry_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            temp.path(),
+            mount_wait,
+            op,
+        );
+        (answer, pauses)
+    }
+
+    /// A call asked again on `schedule` whatever its error, its pauses
+    /// recorded: what Windows contention does, on any platform.
+    fn contended(
+        schedule: &[u64],
+        op: impl FnMut() -> io::Result<()>,
+    ) -> (io::Result<()>, Vec<u64>) {
+        let mut pauses = Vec::new();
+        let answer = retry_sleeping(
+            |pause| pauses.push(pause.as_millis() as u64),
+            |_| true,
+            schedule,
+            op,
+        );
+        (answer, pauses)
+    }
+
+    #[test]
+    fn an_error_a_mount_takes_back_is_asked_six_more_times() {
+        for error in [transient, locked] {
+            let mut asked = 0;
+            let (answer, pauses) = by_class(Duration::from_secs(1), || {
+                asked += 1;
+                Err(error())
+            });
+            assert_eq!(pauses, [200, 400, 800, 1600, 3200, 5000]);
+            assert_eq!(asked, 7, "once, and once after each pause");
+            assert_eq!(
+                answer.unwrap_err().raw_os_error(),
+                error().raw_os_error(),
+                "and the last error is the answer"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answer_ends_the_asking_where_it_comes() {
+        let mut asked = 0;
+        let (answer, pauses) = by_class(Duration::from_secs(1), || {
+            asked += 1;
+            if asked < 4 { Err(transient()) } else { Ok(()) }
+        });
+        assert!(answer.is_ok());
+        assert_eq!(pauses, [200, 400, 800]);
+    }
+
+    #[test]
+    fn an_error_that_asking_again_cannot_change_is_the_answer_at_once() {
+        let mut asked = 0;
+        let (answer, pauses) = by_class(Duration::from_secs(1), || {
+            asked += 1;
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "no"))
+        });
+        assert_eq!(answer.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!((asked, pauses.len()), (1, 0));
+    }
+
+    /// A mount that stays gone is asked about until the wait is over, and no
+    /// longer. The folder asked about is there, so nothing is waited out
+    /// between two asks: only the deadline ends it.
+    #[test]
+    fn a_mount_that_stays_gone_is_given_up_on_when_the_wait_is_over() {
+        let wait = Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        let mut asked = 0_u64;
+        let (answer, pauses) = by_class(wait, || {
+            asked += 1;
+            Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
+        });
+        assert_eq!(answer.unwrap_err().kind(), io::ErrorKind::NotConnected);
+        assert!(asked > 1, "asked again while the wait lasted");
+        assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
+        assert!(started.elapsed() < wait + Duration::from_secs(2));
+        assert!(pauses.is_empty(), "a mount is waited for, not paused for");
+    }
+
+    #[test]
+    fn contention_is_waited_out_in_a_third_of_a_second() {
+        let mut asked = 0;
+        let (answer, pauses) = contended(&BACKOFF_MS, || {
+            asked += 1;
+            Err(locked())
+        });
+        assert_eq!(pauses, [10, 20, 40, 80, 160]);
+        assert_eq!(asked, 6);
+        assert_eq!(answer.unwrap_err().raw_os_error(), locked().raw_os_error());
+    }
+
+    #[test]
+    fn a_folder_rename_is_given_two_and_a_half_seconds() {
+        let mut asked = 0;
+        let (answer, pauses) = contended(&DIR_BACKOFF_MS, || {
+            asked += 1;
+            Err(locked())
+        });
+        assert_eq!(pauses, [20, 50, 100, 200, 400, 700, 1000]);
+        assert_eq!(asked, 8);
+        assert!(answer.is_err());
+    }
+
+    /// What counts as contention is four Windows codes, and nothing anywhere
+    /// else.
+    #[test]
+    fn contention_is_four_windows_codes() {
+        let contention = |code: i32| is_transient(&io::Error::from_raw_os_error(code));
+        // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION,
+        // ERROR_DIR_NOT_EMPTY.
+        for code in [5, 32, 33, 145] {
+            assert_eq!(contention(code), cfg!(windows), "code {code}");
+        }
+        // ERROR_FILE_NOT_FOUND, ERROR_DISK_FULL, ERROR_USER_MAPPED_FILE.
+        for code in [2, 112, 1224] {
+            assert!(!contention(code), "code {code}");
+        }
+    }
+
     /// A call that fails the way a mount does is asked again by what the
     /// error means: transient and locked with backoff, and not again when
     /// asking again changes nothing.
@@ -742,9 +930,9 @@ mod tests {
         // sweep could ever fix.
         let target = dir.path().join("absent").join("target.md");
         let err = rename(&tmp, &target).unwrap_err();
-        assert_ne!(
+        assert_eq!(
             err.kind(),
-            io::ErrorKind::AlreadyExists,
+            io::ErrorKind::NotFound,
             "the original failure is what is reported: {err}"
         );
         assert!(tmp.exists(), "and the source is left where it was");
@@ -765,8 +953,7 @@ mod tests {
     }
 
     #[test]
-    fn retry_gives_up_and_returns_last_error() {
-        // Non-transient on every platform → exactly one attempt.
+    fn an_error_that_is_not_contention_is_asked_once() {
         let attempts = AtomicU32::new(0);
         let err = retry(|| -> io::Result<()> {
             attempts.fetch_add(1, Ordering::Relaxed);

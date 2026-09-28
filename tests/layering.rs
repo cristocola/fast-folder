@@ -779,9 +779,14 @@ fn no_key_line_is_written_by_hand() {
 
     let mut offenders = Vec::new();
     for path in sources("tui") {
+        // Anywhere under `view/`, a folder of its own included.
         let in_view = path
-            .parent()
-            .is_some_and(|d| d.file_name().is_some_and(|n| n == "view"));
+            .strip_prefix(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("src")
+                    .join("tui"),
+            )
+            .is_ok_and(|below| below.starts_with("view"));
         if !in_view {
             continue;
         }

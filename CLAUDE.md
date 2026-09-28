@@ -286,9 +286,10 @@ silently ignored; a field whose Rust name differs carries `serde(rename)` plus a
 `alias` for older spellings (`recent_default_limit`).
 
 **A value sitting in `config.toml` parses leniently; `config set` is strict.**
-An unknown word reads as the default (`#[serde(other)]` on
-`NameCollision::Suffix`, the lenient parse of `theme`, `motion` and
-`log_level`), because a config that will not parse stops every command. The
+An unknown word reads as the default (`NameCollision`'s own `Deserialize`,
+the lenient parse of `theme`, `motion` and `log_level`,
+`resolve_recent_limit` for a limit of zero), and a known one is read whatever
+its case, because a config that will not parse stops every command. The
 setter refuses the same word, since a typo at the command line is a mistake to
 report.
 

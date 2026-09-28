@@ -24,7 +24,10 @@ pub struct RecentArgs {
 
 pub fn run(args: RecentArgs) -> Result<()> {
     let cfg = Config::load()?;
-    let limit = args.limit.unwrap_or(cfg.recent_default_limit).max(1);
+    let limit = args
+        .limit
+        .unwrap_or_else(|| cfg.resolve_recent_limit())
+        .max(1);
 
     // Nothing below this line can be read from a desktop launcher: stdout and
     // stderr are journald sockets there, and the picker has no terminal to draw

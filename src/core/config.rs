@@ -161,11 +161,11 @@ fn default_register_naming_pattern() -> String {
 }
 /// What a create does when the folder name it computed already exists.
 ///
-/// `#[serde(other)]` on the default makes *anything* but `"error"` — including
-/// a typo — mean "add a suffix". A stricter enum would turn somebody's
-/// `on_name_collision = "sufix"` into a config that no longer parses, which is
-/// a worse answer than the one they meant.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// *Anything* but `error` — a typo included — means "add a suffix". A
+/// stricter reading would turn somebody's `on_name_collision = "sufix"` into a
+/// config that no longer parses, which is a worse answer than the one they
+/// meant. `error` is read whatever its case and the space around it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NameCollision {
     /// Refuse the create.
@@ -173,8 +173,18 @@ pub enum NameCollision {
     /// Try `name_2`, `name_3`, … Each is a single atomic claim. Also what any
     /// unrecognized value means.
     #[default]
-    #[serde(other)]
     Suffix,
+}
+
+impl<'de> Deserialize<'de> for NameCollision {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let written = String::deserialize(deserializer)?;
+        Ok(if written.trim().eq_ignore_ascii_case("error") {
+            NameCollision::Error
+        } else {
+            NameCollision::Suffix
+        })
+    }
 }
 
 impl NameCollision {
@@ -243,6 +253,16 @@ impl Config {
     /// config leaves creates working instead of blocking them.
     pub fn suffix_on_name_collision(&self) -> bool {
         self.on_name_collision == NameCollision::Suffix
+    }
+
+    /// How many projects `fastf recent` lists when it is not told. A limit of
+    /// zero, which only a hand can write, is read as the default: the flag and
+    /// `config set` refuse it, and no list is nobody's wish.
+    pub fn resolve_recent_limit(&self) -> usize {
+        match self.recent_default_limit {
+            0 => default_recent_limit(),
+            limit => limit,
+        }
     }
 
     /// Resolve base directory: configured path, or the user's home directory.
@@ -474,6 +494,41 @@ mod tests {
     /// The `#[serde(other)]` case is the load-bearing one: a config file
     /// holding a typo keeps working. A stricter enum would refuse to parse it,
     /// and a config that will not parse is how every command stops.
+    /// A value written by hand is read by what it says, whatever its case and
+    /// the space around it: `"Error"` is `error`, not a typo that means
+    /// `suffix`.
+    #[test]
+    fn name_collision_is_read_whatever_its_case() {
+        for written in ["error", "Error", "ERROR", " error "] {
+            let config: Config =
+                toml::from_str(&format!("on_name_collision = \"{written}\"")).unwrap();
+            assert_eq!(
+                config.on_name_collision,
+                NameCollision::Error,
+                "{written:?}"
+            );
+        }
+        for written in ["suffix", "Suffix", "sufix", ""] {
+            let config: Config =
+                toml::from_str(&format!("on_name_collision = \"{written}\"")).unwrap();
+            assert_eq!(
+                config.on_name_collision,
+                NameCollision::Suffix,
+                "{written:?}"
+            );
+        }
+    }
+
+    /// A limit of nothing is no limit anybody means: read as the default, the
+    /// way every value that cannot be meant is.
+    #[test]
+    fn a_recent_limit_of_zero_is_read_as_the_default() {
+        let config: Config = toml::from_str("recent_limit = 0").unwrap();
+        assert_eq!(config.resolve_recent_limit(), 20);
+        let config: Config = toml::from_str("recent_limit = 5").unwrap();
+        assert_eq!(config.resolve_recent_limit(), 5);
+    }
+
     #[test]
     fn name_collision_round_trips_and_tolerates_a_typo() {
         // Serialized as part of a whole config: TOML has no representation for

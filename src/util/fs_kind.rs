@@ -332,8 +332,8 @@ mod tests {
 
     const MOUNTINFO: &str = "\
 42 1 0:34 /@ / rw,noatime shared:1 - btrfs /dev/mapper/root rw
-28 42 0:82 / /mnt/cloud_proj rw,nosuid shared:641 - fuse.rclone r2:proj/cloud_proj rw
-540 42 0:124 / /mnt/laptop\\040projects rw,nosuid shared:264 - fuse.sshfs host:/p rw
+28 42 0:82 / /mnt/cloud rw,nosuid shared:641 - fuse.rclone remote:bucket/projects rw
+540 42 0:124 / /mnt/other\\040machine rw,nosuid shared:264 - fuse.sshfs host:/p rw
 541 42 0:125 / /mnt/share rw shared:265 - cifs //nas/share rw
 ";
 
@@ -341,12 +341,12 @@ mod tests {
     fn the_longest_mount_that_holds_the_path_decides() {
         let kind =
             |path: &str| mount_of(MOUNTINFO, Path::new(path)).map(|(_, kind)| from_type_name(kind));
-        assert_eq!(kind("/mnt/cloud_proj/lab"), Some(FsKind::Rclone));
-        assert_eq!(kind("/mnt/laptop projects/x"), Some(FsKind::Sshfs));
+        assert_eq!(kind("/mnt/cloud/lab"), Some(FsKind::Rclone));
+        assert_eq!(kind("/mnt/other machine/x"), Some(FsKind::Sshfs));
         assert_eq!(kind("/mnt/share"), Some(FsKind::Smb));
         assert_eq!(kind("/home/user/Projects"), Some(FsKind::Local));
         // A sibling whose name only starts the same is not inside the mount.
-        assert_eq!(kind("/mnt/cloud_projects"), Some(FsKind::Local));
+        assert_eq!(kind("/mnt/cloudy"), Some(FsKind::Local));
     }
 
     #[test]

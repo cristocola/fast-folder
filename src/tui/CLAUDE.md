@@ -521,13 +521,14 @@ wider earlier one. Widths come from the rows, never the sizes, so a landing size
 cannot reflow the table; the size cell is `rows::SIZE_CELL`, right-aligned, header
 included.
 
-**The base is promoted above the date when the visible rows span more than one
-base** — a question about the rows on screen, not the configuration. The
+**The base is promoted above the date when the rows the filter keeps span more
+than one base** — a question about the list, not the configuration. The
 *claim* is another question: `LibraryState.widths`, `many_bases` and
 `base_width` are measured in `recompute` over the **whole library**, so
 `App::table_min_width` can claim the base column before long names take its
 room, and so a claim that shrank as a query was typed cannot move the pane on
-every keystroke; the view's `choose_columns` still measures the rows on screen.
+every keystroke; the view's `choose_columns` still measures the rows in the
+list.
 
 **Width is display columns, never bytes or characters** (`Проекты` is seven
 columns and fourteen bytes): `view::fit`, `view::pad`, and

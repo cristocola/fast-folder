@@ -26,6 +26,8 @@ use crate::util::size_scan::SizeCell;
 /// The widest a template column gets before it is clamped.
 const TEMPLATE_MAX: usize = 16;
 const BASE_MAX: usize = 14;
+/// The widest the pane's variable labels are drawn.
+const LABEL_MAX: usize = 18;
 /// The date column: `YYYY-MM-DD`.
 const DATE_CELL: usize = 10;
 /// The widest a tags column gets before it is clamped: three short tags and
@@ -255,8 +257,9 @@ fn table_block(app: &App, frame: &mut Frame, area: Rect, focused: bool) -> Rect 
     full_inner
 }
 
-/// Widths measured from every row shown, never from the sizes, so a landing
-/// snapshot cannot reflow the table.
+/// Widths measured from every row the list holds — the rows the filter
+/// keeps, scrolled to or not, so a scroll cannot move a column — and never
+/// from the sizes, so a landing snapshot cannot reflow the table.
 fn measured_widths(app: &App) -> (usize, usize, usize, usize, usize, bool) {
     let mut id_w = 4usize;
     let mut name_w = 8usize;
@@ -264,7 +267,7 @@ fn measured_widths(app: &App) -> (usize, usize, usize, usize, usize, bool) {
     let mut template_w = 8usize;
     let mut tags_w = 0usize;
     // Whether the base column is worth promoting is a question about the rows
-    // on screen, not about the configuration: two bases with one unmounted
+    // in the list, not about the configuration: two bases with one unmounted
     // shows one base's projects, and a column repeating one word earns nothing.
     let mut first_base: Option<&std::path::Path> = None;
     let mut many_bases = false;
@@ -637,7 +640,8 @@ fn todo_in_editor(app: &App) -> Option<usize> {
     }
 }
 
-/// The width of the variables' label column: the widest label, at most 18.
+/// The width of the variables' label column: the widest label, at most
+/// `LABEL_MAX`.
 fn key_width(rows: &[PaneRow]) -> usize {
     rows.iter()
         .filter_map(|row| match row {
@@ -646,7 +650,7 @@ fn key_width(rows: &[PaneRow]) -> usize {
         })
         .max()
         .unwrap_or(0)
-        .min(18)
+        .min(LABEL_MAX)
 }
 
 /// One row of the pane as a line, before its wash and its cursor.

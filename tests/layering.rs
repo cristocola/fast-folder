@@ -2,8 +2,7 @@
 //!
 //! `core` and `util` are the parts of fastf that both surfaces — the CLI and the
 //! guided TUI — sit on top of. A prompt inside one of them is a prompt a
-//! non-interactive caller cannot answer, which is how `core::vars::collect_vars`
-//! came to block scripted variable collection until it was moved to `tui`.
+//! non-interactive caller cannot answer, and a scripted run blocks on it.
 //!
 //! A source scan is the only check that holds here: an import is not something a
 //! runtime test can observe, and the rule has to fail the build the moment it is
@@ -77,8 +76,8 @@ fn core_does_not_prompt() {
 /// `fastf copy lullaby`'s picker and the guided app look like one tool.
 ///
 /// A scan, because the point is that nothing reintroduces it: a second prompt
-/// library is a second set of cancel semantics, and inconsistent cancelling is
-/// the defect this whole area exists to have fixed.
+/// library is a second set of cancel semantics, and Esc has to back out of
+/// every prompt the same way.
 #[test]
 fn dialoguer_is_gone() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -129,9 +128,8 @@ fn dialoguer_is_gone() {
 fn core_and_util_do_not_render() {
     const RENDERING: [&str; 5] = ["use colored", "println!", "eprintln!", "print!", "eprint!"];
     // Matched on the file name, not a `"util/diag.rs"` suffix: `Path::display`
-    // uses the platform separator, so a `/` suffix never matches on Windows —
-    // and the first version of this list flagged `util::diag` itself there, on
-    // the one platform nobody ran it on locally.
+    // uses the platform separator, so a `/` suffix never matches on Windows
+    // and the list would flag `util::diag` itself there.
     const ALLOWED: [&str; 2] = ["diag.rs", "trace.rs"];
 
     let mut offenders = Vec::new();
@@ -156,7 +154,7 @@ fn core_and_util_do_not_render() {
                 if in_tests {
                     continue;
                 }
-                // A comment may name what it replaced.
+                // A comment may name a macro without calling it.
                 if line.trim_start().starts_with("//") {
                     continue;
                 }
@@ -210,11 +208,8 @@ fn core_and_util_do_not_import_the_surfaces() {
     );
 }
 
-/// An earlier attempt at a cancel contract moved twenty-nine prompts to
-/// `interact_opt` by hand and missed several, so Esc backed out of some menus
-/// and was swallowed by others. Consistency is the whole feature, and it cannot
-/// be kept by remembering: **two modules take the terminal**, and nothing else
-/// may.
+/// **Two modules take the terminal**, and nothing else may: Esc has to back
+/// out of every prompt the same way, and that cannot be kept by remembering.
 ///
 /// `tui::runtime` owns the alternate screen for the guided app; `tui::inline`
 /// owns the last few rows for a command-line prompt. A third owner is two
@@ -262,9 +257,7 @@ fn only_the_runtime_touches_the_terminal() {
 
 /// The same rule one layer down. `util` is under `core`.
 ///
-/// `util::live_select` used to be the exception; it went with the ratatui
-/// rebuild (v3.0.0). The one
-/// thing `util` may still do about a terminal is ask whether there *is* one
+/// The one thing `util` may do about a terminal is ask whether there *is* one
 /// (`util::tty`) and put the cursor back after a signal (`util::interrupt`).
 #[test]
 fn util_does_not_prompt() {
@@ -332,10 +325,9 @@ fn ratatui_and_crossterm_stay_under_tui() {
 /// Every mutation of the templates directory goes through `core::operations`,
 /// which holds `DataLock`.
 ///
-/// Eight of nine template writers used to bypass the lock. A manifest written
-/// with no lock held can be read half-finished by a `fastf new` in another
-/// terminal — `load_all` is what every create reads — and a `remove_dir_all`
-/// racing a create removes files out from under it.
+/// A manifest written with no lock held can be read half-finished by a
+/// `fastf new` in another terminal — `load_all` is what every create reads —
+/// and a `remove_dir_all` racing a create removes files out from under it.
 ///
 /// A source scan is the only check that holds: the rule is about which function
 /// is called, and a runtime test would only catch the race it happened to
@@ -537,9 +529,7 @@ fn core_renames_a_folder_through_rename_dir() {
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same
 /// process-global variables is one lock too many: they race each other and every
-/// `env::var` in the binary. The lib had two — `trace::tests::TEST_LOCK` for
-/// `FASTF_TRACE_FILE` and `interrupt::TEST_LOCK`, borrowed as `SERIAL` by
-/// `project`'s tests, for `FASTF_INSTALL_DIR`.
+/// `env::var` in the binary.
 ///
 /// Under `src/`, the one place is `util::test_env`. Under `tests/`, it is
 /// `common::env`. A helper that reaches for `set_var` itself looks like
@@ -599,11 +589,8 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
 
 /// **The arrows are spelled in one place, and the hint bar spells nothing.**
 ///
-/// Seven surfaces used to write `↑↓` into a key line by hand — the palette's,
-/// the picker's, the pager's, the search bar's, the preview's, the guide's and
-/// the one every list on a dialog shares. They were all correct on the day
-/// they were written, which is the drift the registry exists to prevent, and a
-/// runtime test cannot see a string literal.
+/// A key line written by hand is correct on the day it is written and drifts
+/// from the registry after, and a runtime test cannot see a string literal.
 ///
 /// Two rules, and they differ because the surfaces do:
 ///
@@ -616,8 +603,8 @@ fn environment_mutation_goes_through_one_guard_per_binary() {
 ///
 /// The key lines a widget draws inside its own frame keep their literals:
 /// `Ctrl-S` in a text area and `Tab` in a form are the widget's, not the
-/// registry's, and naming them where they are consumed is the honest
-/// exception `src/tui/CLAUDE.md` has always made for them.
+/// registry's, and naming them where they are consumed is the exception
+/// `src/tui/CLAUDE.md` makes for them.
 #[test]
 fn no_key_line_is_written_by_hand() {
     const ARROWS: [&str; 5] = ["↑↓", "↑ ↓", "\"↑\"", "\"↓\"", "\"←\""];

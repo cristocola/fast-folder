@@ -132,13 +132,13 @@ fn ssh_connection_suppresses_it() {
     assert!(!rec.was_called(), "an ssh session must not open a window");
 }
 
-/// The loop guard, and the one job `FASTF_RELAUNCHED` still has. Inside the
+/// The loop guard, and the one job `FASTF_RELAUNCHED` has. Inside the
 /// relaunched process the terminal may still not be a terminal — a `terminal`
 /// command that is not an emulator at all, say — and a second relaunch would
 /// fork a window per attempt forever. The variable is inherited, so a descendant
 /// that wrongly reads it opens no window: suppression is the safe direction, and
-/// it is why this half stayed an environment variable when the claim "I am the
-/// rerun" moved to argv.
+/// it is why this half is an environment variable while the claim "I am the
+/// rerun" is on argv.
 #[test]
 fn a_relaunched_child_with_no_tty_falls_through_to_plain_output() {
     let (sb, rec) = sandbox_with_recorder();
@@ -218,12 +218,10 @@ fn an_ambiguous_query_from_a_launcher_opens_a_terminal_instead_of_erroring() {
 
 /// Every one of `recent`'s refusals is below the hand-off, `--limit` included.
 ///
-/// `--since`, `--template` and `--base` were validated after the relaunch for
-/// the reason `cli::search` spells out — from a launcher the message goes to a
-/// journald socket nobody reads, and the relaunched process asks the same
-/// question again in the window it opened. `--limit 0` was refused *above* it,
-/// so from a desktop launcher it failed into the journal with no window at all
-/// while its three siblings got one.
+/// The reason is the one `cli::search` spells out: from a launcher the message
+/// goes to a journald socket nobody reads, and the relaunched process asks the
+/// same question again in the window it opens. A refusal *above* the hand-off
+/// fails into the journal with no window at all.
 #[test]
 fn a_bad_limit_from_a_launcher_opens_a_terminal_like_every_other_refusal() {
     let (sb, rec) = sandbox_with_recorder();

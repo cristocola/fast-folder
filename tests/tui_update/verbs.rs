@@ -66,12 +66,11 @@ fn a_tag_over_marks_is_asked_once_and_runs_as_a_job_in_display_order() {
     );
 }
 
-/// **The batch's effects are the app's too.** They were dropped, so a
-/// `Reload` — which `discover` arms by setting `inflight` *before* returning
-/// the effect that answers it — left the app waiting on a generation nothing
-/// would send, and every later patch only set `dirty`. A batch re-derive of
-/// tags rewrote every file, showed nothing, and froze the list for the rest of
-/// the session.
+/// **The batch's effects are the app's too.** `discover` arms a `Reload` by
+/// setting `inflight` *before* returning the effect that answers it, so a
+/// dropped effect leaves the app waiting on a generation nothing will send,
+/// every later patch only sets `dirty`, and the list is frozen for the rest
+/// of the session.
 #[test]
 fn a_batch_item_returns_the_effects_its_change_asked_for() {
     use fastf::tui::command::CommandId;
@@ -108,9 +107,8 @@ fn a_batch_item_returns_the_effects_its_change_asked_for() {
 }
 
 /// Marks are kept by path and survive a filter change; `targets()` intersects
-/// them with the rows on screen. When the two disagreed, `batching()` said yes
-/// and every batch verb hit an early return with no picker, no dialog and no
-/// message — which is what "batch tagging does nothing" was.
+/// them with the rows on screen, and an empty intersection is said out loud
+/// rather than a batch verb returning with no picker, no dialog and no message.
 #[test]
 fn a_verb_aimed_at_marks_a_filter_hides_says_so() {
     use fastf::tui::command::CommandId;

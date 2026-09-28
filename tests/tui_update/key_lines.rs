@@ -51,7 +51,7 @@ fn space_ticks_a_multi_pick_and_types_in_a_picker() {
     assert!(app.modals.is_empty());
 }
 
-/// Enter and Esc on a one-line prompt are commands now, which is what lets
+/// Enter and Esc on a one-line prompt are commands, which is what lets
 /// `Context::Prompt` have a help at all.
 #[test]
 fn a_prompt_confirms_and_cancels_through_the_registry() {

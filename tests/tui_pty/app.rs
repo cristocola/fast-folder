@@ -26,11 +26,9 @@ fn the_app_opens_and_quits_cleanly() {
     assert!(text.contains("Goodbye."), "expected a clean exit:\n{text}");
 }
 
-/// The headline regression, now closed from the other side. Register used to ask
-/// for the path *first* and reject it *last*, so a typo cost three more answered
-/// prompts and the whole session. Every answer is on one screen now, the path is
-/// checked when the form is submitted, and the text it rejected stays on the
-/// line to be corrected.
+/// Register asks every answer on one screen and checks the path when the form
+/// is submitted, so a typo costs neither the other answers nor the session: the
+/// text it rejected stays on the line to be corrected.
 #[test]
 fn a_bad_register_path_is_corrected_in_place() {
     let sb = Sandbox::new();
@@ -120,7 +118,7 @@ fn an_invalid_setting_is_corrected_in_place() {
 
 /// Ctrl-C at the root, where nothing is in flight. In raw mode it is a key,
 /// not a signal — and it must still say `aborted.`, exit 130 and give the
-/// cursor back, exactly as the signal did.
+/// cursor back, exactly as the signal does.
 #[test]
 fn ctrl_c_at_the_root_is_honest_and_restores_the_cursor() {
     let sb = Sandbox::new();
@@ -147,9 +145,9 @@ fn ctrl_c_at_the_root_is_honest_and_restores_the_cursor() {
 
 /// **The app never asks the terminal for the mouse.** A terminal that reports
 /// the mouse hands every drag to the program, so text can no longer be
-/// selected — which is what the app did until it stopped. The wheel stays the
-/// terminal's, which sends arrow keys on the alternate screen. Checked against
-/// a `config.toml` that still says `mouse = "on"` from v3.6.0.
+/// selected. The wheel stays the terminal's, which sends arrow keys on the
+/// alternate screen. Checked against a `config.toml` that still says
+/// `mouse = "on"` from v3.6.0.
 #[test]
 fn the_app_never_asks_the_terminal_for_the_mouse() {
     let sb = Sandbox::new();
@@ -168,9 +166,9 @@ fn the_app_never_asks_the_terminal_for_the_mouse() {
     }
 }
 
-/// A `config.toml` that exists but does not parse changes which directory is
-/// the library, so the app that used to open on the home directory — with the
-/// real projects nowhere in sight — has to refuse instead.
+/// A `config.toml` that exists but does not parse stops the app: the config
+/// decides which directory is the library, and a default in its place opens on
+/// the home directory with the real projects nowhere in sight.
 #[test]
 fn a_corrupt_config_stops_the_app() {
     let sb = Sandbox::new();
@@ -238,10 +236,10 @@ fn adding_a_base_does_not_revert_a_concurrent_edit() {
 }
 
 /// The second Ctrl-C exits straight from the signal handler, bypassing `main`'s
-/// error path — so the shell got its terminal back with the cursor still
-/// hidden. The template's post-create command ignores SIGINT (and `SIG_IGN` is
-/// inherited across exec), which keeps fastf blocked long enough for the second
-/// interrupt to land on the path under test.
+/// error path — so the handler itself must show the cursor, or the shell gets
+/// its terminal back blind. The template's post-create command ignores SIGINT
+/// (and `SIG_IGN` is inherited across exec), which keeps fastf blocked long
+/// enough for the second interrupt to land on the path under test.
 #[test]
 fn a_second_ctrl_c_restores_the_cursor() {
     let sb = Sandbox::new();
@@ -416,8 +414,7 @@ fn esc_in_the_create_wizard_creates_nothing() {
 }
 
 /// A required variable left empty is named where it was asked for, and Esc from
-/// there still creates nothing. This is the dead end the old build had no exit
-/// from at all — an empty answer re-prompted forever and Esc did nothing.
+/// there still creates nothing.
 #[test]
 fn a_required_variable_is_named_and_esc_still_creates_nothing() {
     let sb = Sandbox::new();
@@ -492,10 +489,9 @@ fn esc_in_a_settings_field_leaves_the_value_unchanged() {
     );
 }
 
-/// `template from-folder` asked path, slug and force, then rejected the slug —
-/// last. It is a form now: the slug is refused on its own line, corrected
-/// there, and the preview shows what the scan picked up before anything is
-/// written.
+/// `template from-folder` is a form: a bad slug is refused on its own line and
+/// corrected there, and the preview shows what the scan picked up before
+/// anything is written.
 #[test]
 fn a_bad_template_slug_is_refused_at_its_own_prompt() {
     let sb = Sandbox::new();
@@ -585,9 +581,8 @@ fn a_relative_base_directory_is_corrected_in_place() {
     );
 }
 
-/// The register naming pattern is the one config key the old menu could not
-/// edit at all, and `{id}` is the rule that stops two folders renaming onto
-/// each other.
+/// The register naming pattern is editable in the settings screen, and `{id}`
+/// is the rule that stops two folders renaming onto each other.
 #[test]
 fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
     let sb = Sandbox::new();
@@ -627,12 +622,8 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
 
 /// The caret is visible, and it sits in the line being edited.
 ///
-/// The regression this pins cost a release: `prompt::text` drew its line with
-/// `write_line`, which ends the block a row *below* the text, and the editor
-/// hid the caret for the repaint — so a rename, or any other text field, had
-/// no insertion point at all. Every text field in the app is native now, so
-/// this reads the caret out of the frame a person saw rather than out of the
-/// escape sequence that put it there.
+/// It is read out of the frame a person saw rather than out of the escape
+/// sequence that put it there.
 #[test]
 fn a_text_field_parks_a_visible_caret_after_the_text() {
     let sb = Sandbox::new();

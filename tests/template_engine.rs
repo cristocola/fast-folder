@@ -31,8 +31,8 @@ fn sandboxed<R>(body: impl FnOnce(&Path) -> R) -> R {
 #[test]
 fn template_load_strips_reserved_project_info_entry() {
     sandboxed(|install| {
-        // Mirrors the user's `general.yaml`: a real template with a
-        // `PROJECT_INFO.md` file entry left over from the pre-fix builder.
+        // A `general.yaml` as an older builder wrote it: a real template with
+        // a `PROJECT_INFO.md` file entry in it.
         let yaml = r#"name: General
 slug: general
 naming_pattern: "{id}_{title}"
@@ -161,10 +161,10 @@ files:
 /// **The preview names the file the create writes.**
 ///
 /// A template file called `pkg/__init__.py` carries no token, so there is no
-/// vanished variable and nothing to clean up — but every preview ran each
-/// path segment through the separator collapse anyway, so the dry run listed
-/// `pkg/init_.py` while the copy wrote `pkg/__init__.py`. A `structure:` entry
-/// named `__pycache__` had the same split.
+/// vanished variable and nothing to clean up: a preview that runs each path
+/// segment through the separator collapse anyway lists `pkg/init_.py` while
+/// the copy writes `pkg/__init__.py`. A `structure:` entry named `__pycache__`
+/// is the same case.
 #[test]
 fn a_literal_dunder_is_previewed_as_the_name_it_will_be_written_as() {
     sandboxed(|install| {
@@ -324,9 +324,9 @@ fn in_memory(slug: &str) -> template::Template {
     }
 }
 
-/// The builder's edit mode can change a slug. It used to write the new manifest
-/// into a fresh directory and leave the old one behind — a second template with
-/// the same contents under the old name. `original_slug` renames instead.
+/// The builder's edit mode can change a slug. A new manifest written into a
+/// fresh directory leaves the old one behind — a second template with the same
+/// contents under the old name — so `original_slug` renames instead.
 #[test]
 fn renaming_a_templates_slug_moves_its_directory_rather_than_duplicating_it() {
     sandboxed(|install| {
@@ -391,13 +391,12 @@ fn renaming_a_template_onto_an_existing_slug_is_refused() {
     });
 }
 
-/// Saving a **new** template onto a slug that already exists overwrote the
-/// manifest in place: the builder's `template new` had no `original_slug`, so
-/// the rename guard above never looked, and typing `general` as the slug of a
-/// new template replaced the bundled one — its variables, its structure and
-/// its naming pattern gone, with a `✓ Saved` on the status line. Renaming onto
-/// an occupied slug has always been refused; creating onto one is the same
-/// collision reached by the other door.
+/// Saving a **new** template onto a slug that already exists is refused: a new
+/// template has no `original_slug`, so the rename guard above never looks, and
+/// typing `general` as the slug of a new template would replace the bundled
+/// one — its variables, its structure and its naming pattern gone, with a
+/// `✓ Saved` on the status line. Creating onto an occupied slug is the same
+/// collision as renaming onto one, reached by the other door.
 #[test]
 fn a_new_template_may_not_overwrite_one_that_already_exists() {
     sandboxed(|install| {
@@ -508,12 +507,11 @@ fn a_template_directory_that_is_a_link_is_never_deleted_through() {
 
 /// **A dry run promises exactly what the create writes — previews included.**
 ///
-/// "Files:" walked the real tree and applied `exclude`; "Previews:" iterated
-/// the in-memory text buffer, which is every UTF-8 file under `files/`
-/// regardless of any glob, because its job is to feed the editors. So one dry
-/// run answered "what will be written?" two different ways: an excluded file
-/// was previewed with a body it would never have, and a `verbatim` file was
-/// previewed with its `{braces}` filled in — the opposite of what lands.
+/// The in-memory text buffer is every UTF-8 file under `files/` regardless of
+/// any glob, because its job is to feed the editors. Previews read from it
+/// answer "what will be written?" differently from "Files:": an excluded file
+/// previewed with a body it will never have, and a `verbatim` file previewed
+/// with its `{braces}` filled in — the opposite of what lands.
 #[test]
 fn a_dry_run_previews_only_the_files_the_create_writes() {
     sandboxed(|install| {
@@ -624,12 +622,9 @@ exclude: [".DS_Store", "*.tmp"]
 /// **A design guard, not a regression:** one file, one spelling, in both lists
 /// of one report.
 ///
-/// It passes on the build before the fix, because the two renderings agreed for
-/// this template — but they were *two* renderings: the file list used
-/// `assets::interp_rel_with` and the previews `naming::interpolate` over the
-/// whole path, which is the pair commit 7a704bd separated for exactly the case
-/// where they disagree. Now there is one list and one rendering, and this says
-/// so out loud.
+/// `assets::interp_rel_with` per segment and `naming::interpolate` over the
+/// whole path agree for this template and disagree for others, so both lists
+/// come from one list and one rendering, and this says so out loud.
 #[test]
 fn a_preview_path_is_spelled_the_way_the_file_list_spells_it() {
     sandboxed(|install| {
@@ -721,11 +716,10 @@ fn a_preview_reports_the_date_the_create_writes() {
 
 /// **`apply` asks only when there is something an answer could change.**
 ///
-/// It asked whenever any text file had a body at all — the same unfiltered
-/// buffer the dry-run previews read — so a template whose only text was an
-/// `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
-/// literally, or a plain README with no token in it, put a prompt in front of
-/// a user whose answer nothing could use.
+/// A text file with a body is not reason enough: a template whose only text is
+/// an `exclude`d `.DS_Store`, or a `verbatim` file whose `{braces}` are meant
+/// literally, or a plain README with no token in it, would put a prompt in
+/// front of a user whose answer nothing could use.
 #[test]
 fn a_template_that_interpolates_nothing_has_nothing_to_ask() {
     sandboxed(|install| {
@@ -791,10 +785,9 @@ structure:
 /// **A template is addressed by the folder it lives in.**
 ///
 /// Every lookup builds `templates/<slug>/template.yaml` from the slug, so a
-/// manifest whose `slug:` disagreed with its directory named a template no
-/// command could open: `fastf template list` printed it and `template show`
-/// answered "not found — run `fastf template list`", pointing at the list that
-/// had just named it.
+/// manifest's `slug:` that disagrees with its directory names a template no
+/// command can open: listed by it, `template show` answers "not found — run
+/// `fastf template list`", pointing at the list that has just named it.
 #[test]
 fn a_template_is_addressed_by_the_directory_it_lives_in() {
     sandboxed(|install| {
@@ -833,10 +826,10 @@ fn a_template_is_addressed_by_the_directory_it_lives_in() {
 /// **Two templates cannot answer to one slug.**
 ///
 /// A manifest field cannot be unique. Two folders both declaring `slug:
-/// general` both listed, and `find_by_slug` resolved both to whichever came
-/// first — so picking the second previewed and created the *first* template,
-/// with the right ID and the wrong files, and no error anywhere. A directory
-/// name is unique by construction.
+/// general`, resolved by that field, both answer to whichever is read first —
+/// so picking the second previews and creates the *first* template, with the
+/// right ID and the wrong files, and no error anywhere. A directory name is
+/// unique by construction.
 #[test]
 fn two_templates_cannot_answer_to_one_slug() {
     sandboxed(|install| {
@@ -924,9 +917,8 @@ fn editing_a_mismatched_template_repairs_its_manifest() {
 /// `structure:` becomes real directories, and `Template::validate` is the one
 /// gate every load and every save goes through — so bounding it here is what
 /// lets `structure_has_tokens`, `interpolated_structure`, `walk_structure` and
-/// `create_structure` walk it with no bound of their own. None of them had one,
-/// and `template from-folder` could generate a tree as deep as the folder it
-/// read.
+/// `create_structure` walk it with no bound of their own, and
+/// `template from-folder` generates a tree as deep as the folder it reads.
 ///
 /// The refusal has to come from the descent rather than from a count taken
 /// first, or the stack is already gone by the time anybody says so.

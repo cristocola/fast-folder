@@ -120,11 +120,11 @@ fn corrupt_cache_self_heals() {
 /// Projects whose metadata cannot be parsed are skipped, and must not take the
 /// rest of the library down with them — **and each one says so.**
 ///
-/// Skipping in silence is what made a project disappear: `docs/projects.md`
-/// invites the user to edit this file, and a single bad line took the folder
-/// out of `recent`, `search` and the app with nothing said anywhere and
-/// `reindex` reporting the smaller count as a success. A folder fastf cannot
-/// read is a folder the user still has.
+/// Skipping in silence makes a project disappear: `docs/projects.md` invites
+/// the user to edit this file, and a single bad line would take the folder out
+/// of `recent`, `search` and the app with nothing said anywhere and `reindex`
+/// reporting the smaller count as a success. A folder fastf cannot read is a
+/// folder the user still has.
 #[test]
 fn unparseable_metadata_is_skipped_but_never_in_silence() {
     sandbox(|_install, base| {
@@ -180,12 +180,11 @@ fn a_folder_with_no_metadata_at_all_is_passed_over_in_silence() {
 /// A hand-edit that drops a field which is not the project's identity must not
 /// drop the project.
 ///
-/// Deserialization is all-or-nothing, so one missing `created:` line used to
-/// mean `read_project_meta` answered `None` and the folder stopped being a
-/// project. `created`, `folder`, `path` and `template_name` are none of them
-/// identity — `created` already had a fallback, and `folder`/`path` are
-/// re-derived from the directory and never read — so they default now, and
-/// only `id` and `template` are load-bearing.
+/// Deserialization is all-or-nothing, so only `id` and `template` are
+/// load-bearing. `created`, `folder`, `path` and `template_name` are none of
+/// them identity — `created` falls back to the folder's date, and
+/// `folder`/`path` are re-derived from the directory and never read — so they
+/// default.
 #[test]
 fn metadata_missing_a_field_that_is_not_identity_is_still_a_project() {
     sandbox(|_install, base| {
@@ -468,12 +467,11 @@ fn destroyed_counter_self_heals_from_the_projects_on_disk() {
 
 /// A pathologically deep tree degrades instead of blowing the stack.
 ///
-/// Unix only, and for two separate reasons that both belong to the setup rather
-/// than to fastf. Building a 100-level tree needs a path past Windows'
-/// MAX_PATH, which `create_dir_all` refuses without long-path support; and a
-/// Windows test thread's 1 MiB stack is what proved the *old* 256-level limit
-/// was too generous in the first place. The limit itself is cross-platform and
-/// is what this pins: the walk stops and says where.
+/// Unix only, for a reason that belongs to the setup rather than to fastf:
+/// building a 100-level tree needs a path past Windows' MAX_PATH, which
+/// `create_dir_all` refuses without long-path support. The limit itself is
+/// cross-platform (`src/core/CLAUDE.md` says why it is 64) and is what this
+/// pins: the walk stops and says where.
 #[cfg(unix)]
 #[test]
 fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
@@ -502,14 +500,12 @@ fn a_very_deep_tree_is_refused_rather_than_overflowing_the_stack() {
 
 /// The same limit, on the walk a cross-device move and every `copy-to` run.
 ///
-/// `assets::walk` above was the only one of the crate's five recursive walks
-/// with a *live* guard. Three others checked `depth` in a `_at` function and
-/// then recursed through the wrapper that starts at zero, so the limit could
-/// never be reached: this one, `template_import::scan_dir_at` below, and
-/// `util::tree_size`. Deny-by-default is the manifest's whole contract — it
-/// fails a move rather than omitting anything — so an unbounded recursion here
-/// is a stack overflow in the middle of the one operation that must not be
-/// interrupted.
+/// A walk that checks `depth` in a `_at` function must recurse through it, not
+/// through the wrapper that starts at zero, or the limit can never be reached
+/// (`src/core/CLAUDE.md`, *Thread the depth*). Deny-by-default is the
+/// manifest's whole contract — it fails a move rather than omitting anything —
+/// so an unbounded recursion here is a stack overflow in the middle of the one
+/// operation that must not be interrupted.
 #[cfg(unix)]
 #[test]
 fn a_move_manifest_refuses_a_tree_past_the_depth_limit() {
@@ -563,9 +559,9 @@ fn reading_a_template_out_of_a_folder_refuses_a_tree_past_the_depth_limit() {
 // ---------------------------------------------------------------------------
 
 /// `SafeRelativePath` proves the *text* of `docs/new.md` cannot escape the apply
-/// target. Nothing proved the same about the filesystem, and `create_dir_all`
-/// walks straight through an existing `docs -> outside`: the file landed outside
-/// the folder while every lexical check passed.
+/// target, not that the filesystem keeps it inside: `create_dir_all` walks
+/// straight through an existing `docs -> outside`, and the file lands outside
+/// the folder while every lexical check passes.
 #[cfg(unix)]
 #[test]
 fn apply_refuses_to_write_through_a_link_in_the_target() {
@@ -677,15 +673,14 @@ fn plant_cache(base: &Path, dirs: &[&str]) {
 }
 
 /// The counter floor reads through a *different* function from discovery, and
-/// it used to keep reading a cache it had already rejected an entry from.
+/// abandons a cache it rejected an entry from just as discovery does.
 ///
-/// `max_id` → `max_id_in_base` → `library::resolve::read_base_readonly`, which
-/// `filter_map`ped the rejected entry away and carried on with the rest.
-/// `discover_base` does the documented thing — abandons the file and goes back
-/// to the folders — and the rule says why: an entry naming anything but a direct
-/// child of its own base means the file is no longer fastf's own bookkeeping, so
-/// nothing else in it is evidence either. Of all the readers, this is the one
-/// where believing half a forged file matters most: it decides the next ID.
+/// `max_id` → `max_id_in_base` → `library::resolve::read_base_readonly` goes
+/// back to the folders rather than carrying on with the entries that survive:
+/// an entry naming anything but a direct child of its own base means the file
+/// is no longer fastf's own bookkeeping, so nothing else in it is evidence
+/// either. Of all the readers, this is the one where believing half a forged
+/// file matters most: it decides the next ID.
 #[test]
 fn a_forged_cache_is_abandoned_by_the_counter_floor_too() {
     sandbox(|_install, base| {
@@ -774,7 +769,7 @@ fn a_forged_cache_cannot_make_discovery_name_a_path_outside_the_base() {
 }
 
 /// The read side. `fastf open` hands a discovered path to the system file
-/// manager, and until now took whatever the cache said.
+/// manager, so it checks the path rather than take whatever the cache said.
 #[test]
 fn opening_a_project_checks_the_path_before_spawning_anything() {
     sandbox(|install, base| {

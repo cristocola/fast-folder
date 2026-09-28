@@ -70,8 +70,8 @@ fn a_toggle_writes_its_key_with_no_dialog_at_all() {
     );
 }
 
-/// Motion goes off and comes back on. The row cycled from a value it never
-/// read back, so every press wrote `off` and the second one did nothing.
+/// Motion goes off and comes back on: the row cycles from the value the
+/// settings read back, or every press writes `off`.
 #[test]
 fn motion_turns_off_and_the_next_press_turns_it_back_on() {
     let mut app = fixture(6, 120, 40);

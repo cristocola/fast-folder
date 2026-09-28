@@ -42,8 +42,6 @@ fn the_templates_tab_lists_them_and_reads_the_selected_one() {
     assert_eq!(app.screen, Screen::Library);
 }
 
-/// The tab's own search box: a plain substring over the slugs and names,
-/// with the cursor kept on a row the query still keeps.
 /// `fastf template new` and `template edit <slug>` open the app on the
 /// templates tab, so Esc out of the builder leaves you among the templates
 /// rather than in a library nobody asked for.
@@ -63,6 +61,8 @@ fn template_new_from_the_command_line_opens_on_the_tab() {
     assert_eq!(app.screen, Screen::Templates, "and lands on the tab");
 }
 
+/// The tab's own search box: a plain substring over the slugs and names,
+/// with the cursor kept on a row the query still keeps.
 #[test]
 fn the_templates_tab_filters_its_own_list() {
     let mut app = fixture(6, 120, 40);
@@ -208,13 +208,11 @@ fn editing_reads_the_template_and_remembers_what_it_was_called() {
 
 /// A read that answers for a template the builder has moved off is dropped.
 ///
-/// `TemplateSourceLoaded` replaced whatever builder was on top with
-/// whatever landed, checking nothing. Enter on one template, Esc while it
-/// is still reading, Enter on another: on a slow disk or a network share
-/// the first read arrives and silently becomes the second's contents, and
-/// the second's own read then wipes anything typed meanwhile.
-/// `on_template_loaded` and `TemplateViewLoaded` both guard this; the
-/// builder's own read was the one that did not.
+/// Enter on one template, Esc while it is still reading, Enter on another:
+/// on a slow disk or a network share the first read arrives late, and taken
+/// unchecked it becomes the second's contents, and the second's own read
+/// then wipes anything typed meanwhile. `Builder::pending` names the slug it
+/// waits for, as `on_template_loaded` and `TemplateViewLoaded` check theirs.
 #[test]
 fn a_template_read_for_a_builder_that_moved_on_is_dropped() {
     let mut app = fixture(6, 120, 40);
@@ -269,11 +267,9 @@ fn a_template_read_for_a_builder_that_moved_on_is_dropped() {
 
 /// Quitting from the palette asks the same question Esc asks.
 ///
-/// `CommandId::Quit` ran `Effect::Quit` on the spot, and it is reachable
-/// from `c` → "quit" → Enter and from the too-small-window guard as well as
-/// from `q` — so a template worked on for ten minutes went with one
-/// keystroke while Esc on the same screen asked first. Every quit goes
-/// through `App::quit` now, and answering the question still quits.
+/// `CommandId::Quit` is reachable from `c` → "quit" → Enter and from the
+/// too-small-window guard as well as from `q`, so every quit goes through
+/// `App::quit`, and answering the question still quits.
 #[test]
 fn quitting_over_a_worked_on_template_asks_first() {
     let mut app = fixture(6, 120, 40);
@@ -325,7 +321,7 @@ fn the_variables_section_adds_edits_reorders_and_removes() {
         .collect();
     assert_eq!(slugs, vec!["artist".to_string(), "title".to_string()]);
 
-    // `K` moves the selected row up — what the sort prompt used to be.
+    // `K` moves the selected row up.
     press(&mut app, Key::ch('K'));
     let slugs: Vec<String> = builder(&app)
         .template
@@ -389,11 +385,9 @@ fn a_reserved_filename_is_refused_where_it_was_typed() {
     assert!(builder(&app).template.files.is_empty());
 }
 
-/// Save handed the write to a worker and popped the builder in the same
-/// breath, so a refusal from under the data lock — an occupied slug, a
-/// lock held by another terminal, a full disk — arrived with nothing left
-/// to land on. The template and every answer in it were gone, and all that
-/// remained was one red line on the status bar.
+/// A refusal from under the data lock — an occupied slug, a lock held by
+/// another terminal, a full disk — lands on the builder, which stays up with
+/// the template and every answer in it until the write's outcome arrives.
 #[test]
 fn a_refused_save_keeps_the_builder_and_everything_in_it() {
     let mut app = fixture(6, 120, 40);
@@ -433,8 +427,7 @@ fn a_refused_save_keeps_the_builder_and_everything_in_it() {
 /// land and its refusal needs the list to land on. **Ctrl-C is not**, and
 /// must not be: `DataLock::acquire` waits up to thirty seconds when
 /// another fastf holds it, so a save can sit there for half a minute, and
-/// routing the interrupt key into the same guard left no way out of it at
-/// all.
+/// the interrupt key is the one way out of it.
 #[test]
 fn a_save_in_flight_ignores_esc_but_never_traps_the_user() {
     let mut app = fixture(6, 120, 40);
@@ -481,8 +474,8 @@ fn a_save_that_lands_closes_the_builder() {
     assert!(app.modals.is_empty(), "the builder closed onto the tab");
 }
 
-/// Esc, `q` and Ctrl-C all popped the builder outright and said so
-/// afterwards on the status line, by which time every answer was gone.
+/// Esc, `q` and Ctrl-C each ask before a worked-on template goes: a status
+/// line saying so afterwards comes when every answer is already gone.
 #[test]
 fn leaving_a_worked_on_template_asks_first() {
     for key in [Key::plain(KeyCode::Esc), Key::ch('q'), Key::ctrl('c')] {
@@ -535,10 +528,10 @@ fn esc_inside_a_section_goes_back_to_the_list() {
     assert!(!app.modals.is_empty(), "and still in the builder");
 }
 
-/// `suggest_slug` rewrites any slug nobody has typed in, and a form built
-/// from an existing template has touched nothing — so correcting a typo in
-/// the *title* of `music-video` silently retyped the slug, and Save
-/// renamed the template's directory on disk to match.
+/// `suggest_slug` rewrites any slug nobody has typed in, so a form built
+/// from an existing template counts its slug as typed: otherwise correcting
+/// a typo in the *title* retypes the slug, and Save renames the template's
+/// directory on disk to match.
 #[test]
 fn editing_a_template_does_not_let_the_name_rewrite_the_slug() {
     let mut app = fixture(6, 120, 40);
@@ -570,9 +563,9 @@ fn editing_a_template_does_not_let_the_name_rewrite_the_slug() {
     );
 }
 
-/// A new template typed onto an occupied slug overwrote the template that
-/// was there. The refusal is asked of the cards already in memory, so it
-/// lands on the list rather than after a worker round trip.
+/// A new template typed onto an occupied slug is refused, or it overwrites
+/// the template that is there. The refusal is asked of the cards already in
+/// memory, so it lands on the list rather than after a worker round trip.
 #[test]
 fn a_new_template_may_not_take_a_slug_already_on_disk() {
     let mut app = fixture(6, 120, 40);
@@ -691,9 +684,9 @@ fn from_folder_previews_before_it_writes() {
 }
 
 /// **Below the smallest window, a question still reaches the person it asks.**
-/// The dialog cannot be drawn there, so `q` over a worked-on template used to
-/// push a confirmation nobody could see, and a second `q` — answering it
-/// unseen — threw the template away. The guard now says what is waiting.
+/// The dialog cannot be drawn there, so the guard says in words what is
+/// waiting, and a second `q` is an answer given with the question in view,
+/// never one given blind.
 #[test]
 fn the_too_small_guard_names_the_template_it_would_discard() {
     let mut app = fixture(6, 120, 40);

@@ -711,8 +711,7 @@ fn leaving_the_pane_or_the_row_drops_an_open_edit_untouched() {
     );
     press(&mut app, Key::plain(KeyCode::Enter));
     type_text(&mut app, "x");
-    // `←` is the registry's while a line is being edited? No — the field
-    // has the arrows as its caret, so it is Esc, then ←.
+    // The field has the arrows as its caret, so the way out is Esc, then ←.
     press(&mut app, Key::plain(KeyCode::Left));
     assert!(app.pane_edit.is_some(), "← moves the caret, not the focus");
     press(&mut app, Key::plain(KeyCode::Esc));
@@ -784,9 +783,8 @@ fn the_hint_bar_reads_the_pane_and_the_edit() {
     );
 }
 
-/// **The caret sits in the field being typed into.** The pane's editor drew
-/// its field but the terminal's cursor was only ever placed for the search
-/// bar, so an edit in the pane had no caret at all.
+/// **The caret sits in the field being typed into**, an edit open in the pane
+/// as much as the search bar, and nowhere once it closes.
 #[test]
 fn the_caret_sits_in_the_field_being_edited() {
     let mut app = editing_fixture();
@@ -814,9 +812,8 @@ fn the_caret_sits_in_the_field_being_edited() {
 }
 
 /// A note on the pane's last visible row opens its editor all the same,
-/// slid up over the rows above it. It used to draw nothing: the editor wanted
-/// two rows under its own and returned without a frame, while the edit stayed
-/// open and took the keys.
+/// slid up over the rows above it: an editor with no room below is still
+/// drawn, because the open edit takes the keys either way.
 #[test]
 fn a_note_opened_on_the_last_visible_row_slides_up() {
     let mut app = fixture(6, 120, 20);
@@ -873,8 +870,7 @@ fn a_note_opened_on_the_last_visible_row_slides_up() {
 }
 
 /// A paste lands in the field the pane has open — the first line in a line
-/// field, as every one-line field takes it. It used to fall through to
-/// "pasted text ignored".
+/// field, as every one-line field takes it.
 #[test]
 fn a_paste_lands_in_the_pane_field() {
     let mut app = editing_fixture();
@@ -909,7 +905,7 @@ fn row_of(app: &App, wanted: impl Fn(&PaneRow) -> bool) -> usize {
 /// **A resize loses nothing.** A note being written stays open with its text,
 /// on its own row, and the cursor stays on it — through a resize to the same
 /// size (one arrives after every `$EDITOR` note and every `fg`) and through a
-/// real one. Both used to close the editor and throw the text away.
+/// real one.
 #[test]
 fn a_resize_keeps_the_panes_cursor_and_an_open_note_with_its_text() {
     let mut app = editing_fixture();
@@ -983,8 +979,8 @@ fn a_resize_rewraps_and_the_cursor_stays_on_its_todo() {
 }
 
 /// A re-read landing while a tag is being edited leaves the editor on that
-/// tag. It used to look the tag up by the text being typed — which is no row
-/// until the write lands — and move the editor to "add a tag".
+/// tag: it is found again by the row it was opened on, never by the text
+/// being typed, which is no row until the write lands.
 #[test]
 fn a_detail_refresh_keeps_an_open_tag_edit_on_its_tag() {
     let mut app = editing_fixture();

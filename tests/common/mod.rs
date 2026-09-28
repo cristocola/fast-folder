@@ -4,7 +4,7 @@
 //! the library: `concurrency.rs` (which races processes, because a thread test
 //! passes against an in-process `Mutex` while production stays broken) and the
 //! `cli_*` suites (which assert what commands actually do to disk, because the
-//! argument-and-prompt layer is where a green suite kept missing bugs).
+//! argument-and-prompt layer is where a green in-process suite misses bugs).
 //!
 //! **Why a process and not a function call:** the defects these cover live in
 //! the plumbing between clap and the core — flags dropped into
@@ -365,10 +365,9 @@ impl Trace {
 
 /// Drive fastf through a real terminal.
 ///
-/// `dialoguer` refuses to prompt without a TTY, so every confirmation, picker
-/// and interactive preview is invisible to a pipe-based test — which is exactly
-/// where the rename prompt once spent a release offering one folder name and committing
-/// another. A pty is the only way to see what the user sees.
+/// fastf refuses to prompt without a TTY, so every confirmation, picker and
+/// interactive preview is invisible to a pipe-based test. A pty is the only way
+/// to see what the user sees.
 ///
 /// Unix only, which matches how it is used: the prompts themselves are
 /// cross-platform and covered by the non-interactive paths.
@@ -428,10 +427,9 @@ pub mod pty {
 
     /// A keystroke script on a fixed cadence.
     ///
-    /// Keys are spaced rather than burst because `dialoguer` redraws between
-    /// them: sending six arrow presses in one `write` loses most of them, and
-    /// the menu ends up somewhere unintended. The gaps are what make these
-    /// tests deterministic.
+    /// Keys are spaced rather than burst, so the program has drawn each step
+    /// before the next key arrives. The gaps are what make these tests
+    /// deterministic.
     pub struct Script {
         steps: Vec<Keystroke>,
         at_ms: u64,
@@ -471,16 +469,16 @@ pub mod pty {
             self.push(b"\r", 600)
         }
 
-        /// Type a line and submit it. For `Input` prompts, which read until Enter.
+        /// Type a line and submit it. For text prompts, which read until Enter.
         pub fn line(self, text: &str) -> Self {
             let mut bytes = text.as_bytes().to_vec();
             bytes.push(b'\r');
             self.push(&bytes, 600)
         }
 
-        /// Send raw keys with no Enter. Use this for `Confirm`, which answers on
-        /// the `y`/`n` keypress itself — a trailing `\r` would survive into the
-        /// *next* prompt and silently accept its default.
+        /// Send raw keys with no Enter. Use this for a yes/no prompt, which
+        /// answers on the `y`/`n` keypress itself — a trailing `\r` would
+        /// survive into the *next* prompt and silently accept its default.
         pub fn key(self, text: &str) -> Self {
             self.push(text.as_bytes(), 600)
         }
@@ -621,10 +619,9 @@ pub mod pty {
     /// stdin and stderr stay on the pty.
     ///
     /// This is the shape a user gets from `fastf new t > out.txt`: a terminal is
-    /// right there, and only the output is redirected. fastf decided prompt
-    /// availability by probing stdout, so it refused to prompt in exactly the
-    /// case where prompting is fine. The file is what the pty transcript cannot
-    /// show, so tests assert on both.
+    /// right there, and only the output is redirected, so fastf still prompts:
+    /// it asks stderr whether it may, never stdout. The file is what the pty
+    /// transcript cannot show, so tests assert on both.
     pub fn run_stdout_to(
         program: &str,
         args: &[&str],

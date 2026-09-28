@@ -109,9 +109,8 @@ fn a_sort_or_a_filter_pulses_the_selected_row_so_the_eye_finds_it() {
 
 /// **A page filling in is not a change, and lighting it up is a flash.**
 /// Every visible row's size lands at once — on the first screenful, and
-/// again on every scroll — so pulsing on arrival washed the whole list at
-/// a stroke, twenty rows together, several times in the first seconds of
-/// a run. It read as a fault, which is how it was reported.
+/// again on every scroll — so a pulse on arrival washes the whole list at a
+/// stroke, which reads as a fault.
 #[test]
 fn a_page_of_sizes_arriving_for_the_first_time_does_not_pulse() {
     let mut app = fixture(6, 100, 30);
@@ -285,8 +284,7 @@ fn with_motion_off_the_focus_lands_at_once() {
 
 /// **A message arrives.** The status line is where what just happened is
 /// said, and a line that changes its text in silence is not read; it
-/// wears the wash as it arrives, and lets go — then dims on its way out,
-/// as before.
+/// wears the wash as it arrives, and lets go — then dims on its way out.
 #[test]
 fn a_status_line_arrives_with_a_wash_and_settles() {
     let mut app = fixture(6, 100, 30);

@@ -70,9 +70,8 @@ fn dashboard_ascii_80x24() {
         unicode.cross,
     ]
     .into_iter()
-    // The activity indicator's frames are part of the alphabet too — they
-    // were a `const SPINNER` in a view module until v3.5.0, which is exactly
-    // how a glyph comes to have no ASCII spelling.
+    // The activity indicator's frames are part of the alphabet too: a glyph
+    // kept as a constant in a view module has no ASCII spelling.
     .chain(unicode.spinner.iter().copied())
     {
         assert!(
@@ -133,8 +132,8 @@ fn sort_picker_open() {
     snap("sort_picker_80x24", render_to_string(&app, 80, 24));
 }
 
-/// The regression the column order exists for: at 80 columns the folder name
-/// is still there in full, whatever else had to go.
+/// What the column order exists for: at 80 columns the folder name is still
+/// there in full, whatever else had to go.
 #[test]
 fn narrow_keeps_the_folder_name() {
     let app = fixture(6, 80, 24);
@@ -242,8 +241,8 @@ fn copying_move() -> fastf::core::assets::Progress {
     progress
 }
 
-/// The same move removing its old copy — the step that used to run under a
-/// full bar and the word "finalizing" for ten minutes on a cloud mount.
+/// The same move removing its old copy, counted entry by entry: on a cloud
+/// mount this step can take ten minutes.
 fn removing_move() -> fastf::core::assets::Progress {
     use fastf::core::assets::{FinishedStep, JobPhase};
 
@@ -337,12 +336,11 @@ fn batch_delete_confirm() {
 
 /// The same confirmation on a narrow window still names every folder.
 ///
-/// It measured its text against a hardcoded 64 columns and *then* let
-/// `centered_fixed` clamp the box to the screen, so at 60 columns — what was
-/// the app's minimum then — the text wrapped wider than had been reserved and
-/// the tail was cut. The row ceiling was a flat eight on top of that, which six
-/// long folder names go past on any width. A destructive confirmation that
-/// hides part of what it is about is the one that must not.
+/// Its text is measured at the width the box is drawn at, after
+/// `centered_fixed` clamps it to the screen, and its height follows the names
+/// rather than a fixed ceiling: six long folder names need more than eight
+/// rows on any width. A destructive confirmation that hides part of what it is
+/// about is the one that must not.
 #[test]
 fn batch_delete_confirm_on_a_narrow_window_still_names_them_all() {
     let mut app = fixture(12, 60, 20);
@@ -925,8 +923,6 @@ mod studio {
 
     /// The explanation panel, on a window wide enough for it: what the
     /// highlighted part is, and what this template would actually produce.
-    /// The whole teaching budget of this editor used to be the one footer line
-    /// below, cut with an ellipsis.
     #[test]
     fn builder_panel_explains_the_highlighted_part() {
         let mut app = fixture(12, 120, 40);
@@ -946,8 +942,8 @@ mod studio {
     }
 
     /// The same builder in a window too narrow for a panel: the list keeps the
-    /// whole body and the footer carries the one-line hint exactly as it always
-    /// did, so nothing is lost — only nothing is gained.
+    /// whole body and the footer carries the one-line hint, so a narrow window
+    /// loses nothing.
     #[test]
     fn builder_panel_falls_back_to_the_footer_when_narrow() {
         let mut app = fixture(12, 80, 24);
@@ -1148,10 +1144,8 @@ mod settings {
         let _ = update(app, Msg::SettingsLoaded(Box::new(sample())));
     }
 
-    /// **Walk to a row by name.** These counted `Down`s, so every setting
-    /// added anywhere above one of them silently pointed four snapshots at a
-    /// different row — which is the defect `tests/CLAUDE.md` records against
-    /// this very test, and which counting could only ever repeat.
+    /// **Walk to a row by name**, never by counted `Down`s: a setting added
+    /// anywhere above the row silently points a snapshot at a different one.
     fn go_to(app: &mut App, label: &str) {
         for _ in 0..60 {
             let here = match app.modals.top() {
@@ -1175,11 +1169,9 @@ mod settings {
 
     /// The base list, open as text — one folder per line.
     ///
-    /// Eleven rows down, not ten: ten is **Theme**, whose Enter cycles the
-    /// value where it stands and opens nothing. This snapshot was taken over
-    /// that screen for as long as it existed, so a name saying `bases_as_text`
-    /// pinned a frame with no editor in it — and the panic below could not have
-    /// been caught by the test written to look at the thing that panicked.
+    /// The editor is asserted on screen before the snapshot: a neighbouring
+    /// row such as **Theme** cycles its value on Enter and opens nothing, and a
+    /// snapshot of that frame guards nothing about this one.
     #[test]
     fn settings_bases_as_text() {
         let mut app = fixture(12, 100, 30);
@@ -1194,15 +1186,15 @@ mod settings {
         snap("settings_bases_as_text", frame);
     }
 
-    /// The same editor on a short window, where it used to take the app down.
+    /// The same editor on a short window, which must not take the app down.
     ///
-    /// It opens *over* the row it belongs to and grows downward, and its height
-    /// was `clamp(4, body.height - row)` — so once the cursor had scrolled to
-    /// the bottom of the body there was less room below it than the minimum,
-    /// and `Ord::clamp` panics on `min > max` rather than picking one. Any
-    /// window between 16 and 23 rows tall did it; 80×24 survived by exactly one
-    /// row, which is why the manual pass at that size never found it. The box
-    /// slides up now (`layout::box_at_row`).
+    /// It opens *over* the row it belongs to and grows downward. With the
+    /// cursor at the bottom of the body there is less room below it than the
+    /// box's minimum height, so the box slides up (`layout::box_at_row`): a
+    /// height clamped between the two would panic, since `Ord::clamp` panics on
+    /// `min > max`. Any window between 16 and 23 rows tall reaches that case;
+    /// 80×24 has exactly one row to spare, so a check at that size alone misses
+    /// it.
     #[test]
     fn settings_bases_as_text_on_a_short_window() {
         let mut app = fixture(12, 80, 18);
@@ -1602,10 +1594,9 @@ fn press_key(app: &mut App, key: Key) {
 
 /// **Every state draws at every size.** Each screen the suites can build is
 /// built once, then moved through a grid of window sizes the way a person
-/// dragging a corner moves it, and drawn at each. Nothing may panic — the kind
-/// of crash the Bases editor had between 16 and 23 rows — and what is being
-/// worked on stays on screen: the pane's cursor inside the pane, an edit's
-/// caret inside the field.
+/// dragging a corner moves it, and drawn at each. Nothing may panic, and what
+/// is being worked on stays on screen: the pane's cursor inside the pane, an
+/// edit's caret inside the field.
 #[test]
 fn every_state_draws_at_every_size() {
     use fastf::tui::app::Focus;

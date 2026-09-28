@@ -32,10 +32,10 @@ fn refuses_without_a_terminal(sb: &Sandbox, args: &[&str], escape: &str) {
     );
 }
 
-/// `fastf notes` sliced the timestamp to 10 *bytes*, so a hand-edited
-/// PROJECT_INFO.md with any multi-byte text where the timestamp goes panicked
-/// mid-character. `hostile_fs.rs` promises corrupt metadata degrades, never
-/// panics — it just never covered the journal body.
+/// `fastf notes` survives a hand-edited PROJECT_INFO.md with multi-byte text
+/// where the timestamp goes: a timestamp sliced to 10 *bytes* panics
+/// mid-character. This is `hostile_fs.rs`'s promise — corrupt metadata
+/// degrades, never panics — kept for the journal body.
 #[test]
 fn notes_survives_a_hand_edited_journal_timestamp() {
     let sb = Sandbox::new();
@@ -56,11 +56,8 @@ fn notes_survives_a_hand_edited_journal_timestamp() {
 
 /// **A note is read as far as it can be, whatever shape it was typed in.**
 ///
-/// The reader used to keep only a `- <ts> — <text>` line, so a note with a
-/// second line lost it, a date typed without the separator was not a note,
-/// and `fastf notes` said nothing about either. Every line under the heading
-/// belongs to the note above it now, and a line starting with a date starts
-/// one.
+/// Every line under the heading belongs to the note above it, and a line
+/// starting with a date starts one, with or without the ` — ` separator.
 #[test]
 fn notes_reads_a_hand_written_note_and_every_line_under_it() {
     let sb = Sandbox::new();
@@ -98,8 +95,8 @@ fn notes_reads_a_hand_written_note_and_every_line_under_it() {
 }
 
 /// **A multi-line note round-trips through `note add` and `notes`.** Lines
-/// 2+ used to land in the file with no prefix and were dropped on the way
-/// back, so a note read from stdin or an editor kept only its first line.
+/// 2+ are written indented under the first and read back with it, so a note
+/// read from stdin or an editor keeps every line.
 #[test]
 fn a_multi_line_note_round_trips() {
     let sb = Sandbox::new();
@@ -133,9 +130,9 @@ fn a_multi_line_note_round_trips() {
     assert!(out.contains("1 note\n"), "{out}");
 }
 
-/// `note add` with no message passed the raw `editor` config field, so the
-/// documented `$EDITOR` fallback never happened: an unconfigured install failed
-/// with `launching editor ''`.
+/// `note add` with no message resolves the editor through the documented
+/// `$EDITOR` fallback; the raw `editor` config field is empty on an
+/// unconfigured install.
 #[test]
 fn note_add_falls_back_to_the_editor_env_var() {
     let sb = Sandbox::new();
@@ -157,13 +154,11 @@ fn note_add_falls_back_to_the_editor_env_var() {
     );
 }
 
+/// `note add` holds no write handle on the scratch file while the editor runs.
 /// Windows Notepad saves by reopening the file for writing with
-/// `FILE_SHARE_READ` alone, and `note add` kept its own write handle on the
-/// scratch file open for as long as the editor ran — a sharing violation on
-/// every save. Notepad reported it as "cannot create the file" and fell back
-/// to a Save As dialog opened in fastf's working directory, which from the
-/// Start Menu shortcut is the install folder under `Program Files`, where the
-/// second attempt was refused too. The note never reached the journal.
+/// `FILE_SHARE_READ` alone, so a handle fastf keeps open is a sharing
+/// violation on every save: Notepad falls back to a Save As dialog, and the
+/// note never reaches the journal.
 #[cfg(windows)]
 #[test]
 fn note_add_survives_an_editor_that_saves_like_notepad() {
@@ -216,8 +211,9 @@ fn note_add_survives_an_editor_that_saves_like_notepad() {
     );
 }
 
-/// `tag reauto` on a folder registered without a template failed with
-/// "template '(registered)' not found", which reads like a broken install.
+/// `tag reauto` on a folder registered without a template says there is no
+/// template to re-derive from; "template not found" reads like a broken
+/// install.
 #[test]
 fn tag_reauto_on_a_registered_project_explains_itself() {
     let sb = Sandbox::new();
@@ -236,10 +232,9 @@ fn tag_reauto_on_a_registered_project_explains_itself() {
     );
 }
 
-/// `template from-folder --force` merged into the previous generation's
-/// `files/`, so a template regenerated from a different folder still carried
-/// the old files — and `files/` is what create copies, so they landed
-/// in every new project.
+/// `template from-folder --force` replaces the previous generation's `files/`
+/// rather than merging into it: `files/` is what create copies, so a file
+/// left from the old folder lands in every new project.
 #[test]
 fn from_folder_force_replaces_the_bundled_files() {
     let sb = Sandbox::new();
@@ -272,14 +267,13 @@ fn from_folder_force_replaces_the_bundled_files() {
     );
 }
 
-/// A `config.toml` that exists but does not parse used to be swallowed by
-/// twenty `Config::load().unwrap_or_default()` calls, which silently changed
-/// which directory is the library: `recent --plain` printed "No projects yet"
-/// and exited 0 while the real projects sat in the configured base.
+/// A `config.toml` that exists but does not parse stops every command, which
+/// names the file and says how to get out of it.
 ///
 /// Falling back to defaults is not resilience when the fallback answers a
-/// different question. Every command stops, names the file, and says how to
-/// get out of it.
+/// different question: the config decides which directory is the library, so
+/// `recent --plain` would print "No projects yet" and exit 0 while the real
+/// projects sit in the configured base.
 #[test]
 fn a_corrupt_config_stops_every_command() {
     let sb = Sandbox::new();
@@ -317,10 +311,9 @@ fn a_corrupt_config_stops_every_command() {
     }
 }
 
-/// The cursor restore is guarded by `is_terminal` on each stream, because
-/// `Term::show_cursor` emits its escape whatever it is writing to — an
-/// unguarded call put a literal `\x1b[?25h` into the output a script reads.
-/// Moving the restore into the interrupt path must not lose that guard.
+/// The cursor restore (`interrupt::restore_terminal`) writes its escape only
+/// to a stream that is a terminal; unguarded, a literal `\x1b[?25h` lands in
+/// the output a script reads.
 #[test]
 fn a_piped_failure_leaks_no_terminal_escapes() {
     let sb = Sandbox::new();
@@ -336,10 +329,9 @@ fn a_piped_failure_leaks_no_terminal_escapes() {
     );
 }
 
-/// `fastf new` printed the same header for a preview and for the real thing:
-/// "Preview · dry run — nothing will be created", immediately followed by the
-/// project it had just created. A header that contradicts the command is worse
-/// than no header.
+/// Only a dry run's preview says "nothing will be created": a real `fastf new`
+/// shows the same plan before it creates, and a header that contradicts the
+/// command is worse than no header.
 #[test]
 fn a_real_create_is_not_labelled_a_dry_run() {
     let sb = Sandbox::new();
@@ -371,8 +363,8 @@ fn a_real_create_is_not_labelled_a_dry_run() {
     );
 }
 
-/// Same defect on the other printer: `apply` announced a dry run and then
-/// applied the template.
+/// The same rule on the other printer: an `apply` that applies is not
+/// announced as a dry run.
 #[test]
 fn a_real_apply_is_not_labelled_a_dry_run() {
     let sb = Sandbox::new();
@@ -433,9 +425,8 @@ fn the_menu_refuses_before_it_draws_anything() {
     );
 }
 
-/// `fastf move` skipped its confirmation when stdout was not a terminal and
-/// moved the project anyway — the one prompt whose absence changes what happens
-/// on disk.
+/// `fastf move` with no terminal to confirm on refuses rather than moving: it
+/// is the one prompt whose absence changes what happens on disk.
 #[test]
 fn a_move_without_a_terminal_refuses_instead_of_moving() {
     let sb = Sandbox::new();
@@ -466,9 +457,9 @@ fn a_move_without_a_terminal_refuses_instead_of_moving() {
     );
 }
 
-/// `template from-folder --bundle-assets` confirms the total size with no way
-/// to answer from a script: no `--yes` existed, so the command was unusable
-/// noninteractively. `--dry-run` reports the same scan without writing.
+/// `template from-folder --bundle-assets` confirms the total size, so without
+/// a terminal it refuses and names `--yes`, the answer a script gives.
+/// `--dry-run` reports the same scan without writing.
 #[test]
 fn from_folder_can_be_driven_without_a_terminal() {
     let sb = Sandbox::new();
@@ -568,7 +559,7 @@ fn a_from_folder_dry_run_is_the_scan_the_run_makes() {
 }
 
 /// A terminal is on stderr and stdin; stdout is the output. `fastf new t >
-/// out.txt` refused to prompt because the guard probed the wrong stream.
+/// out.txt` still prompts, because the guard asks stderr, not stdout.
 #[cfg(unix)]
 #[test]
 fn a_redirected_stdout_still_has_a_terminal_to_prompt_on() {
@@ -611,9 +602,9 @@ fn a_redirected_stdout_still_has_a_terminal_to_prompt_on() {
 /// A template file whose name is not valid UTF-8 reaches the new project spelled
 /// exactly as it was.
 ///
-/// Unix only: a Windows filename is UTF-16 and cannot hold these bytes. The walk
-/// used to describe every entry with `to_string_lossy`, so this file was opened
-/// at a `?`-substituted path that does not exist — the copy failed naming a path
+/// Unix only: a Windows filename is UTF-16 and cannot hold these bytes. A walk
+/// that describes an entry with `to_string_lossy` opens this file at a
+/// `?`-substituted path that does not exist, and the copy fails naming a path
 /// the user never wrote.
 #[cfg(unix)]
 #[test]
@@ -651,21 +642,20 @@ fn a_template_file_with_a_non_utf8_name_is_reproduced_byte_for_byte() {
 }
 
 // ---------------------------------------------------------------------------
-// The commands that had no process-level test at all
+// `paths`, `reindex`, `reconcile`, `tag` and `template`, as processes
 //
-// `paths`, `reindex`, `reconcile`, `tag` and `template` were exercised only
-// through the library functions underneath them. What a *command* prints and
-// what exit code it gives is a separate contract — the one a script and a user
-// both depend on.
+// The library functions underneath them are tested on their own. What a
+// *command* prints and what exit code it gives is a separate contract — the
+// one a script and a user both depend on.
 // ---------------------------------------------------------------------------
 
 /// fastf's own bookkeeping stays off every surface a user reads.
 ///
 /// `--relaunched` is what the relaunch puts on the rerun's command line, and
-/// `main` takes it off again before clap sees it. Declaring it as a clap
-/// argument instead looked equivalent: `hide` kept it out of `--help` and the
-/// man pages, but **not** out of the generated completions, so `fastf --<TAB>`
-/// offered the user a flag that is none of their business.
+/// `main` takes it off again before clap sees it. A hidden clap argument is
+/// not equivalent: `hide` keeps it out of `--help` and the man pages, but
+/// **not** out of the generated completions, so `fastf --<TAB>` would offer
+/// the user a flag that is none of their business.
 #[test]
 fn the_relaunch_flag_is_on_no_surface_a_user_reads() {
     let sb = Sandbox::new();
@@ -746,7 +736,7 @@ fn reindex_rescans_and_reports_a_count() {
 /// This is the only repair path for the defect `Metadata::id_number` exists to
 /// prevent — a lossy id rendering parsed back into a number that is far too
 /// large, taken as the counter floor, and, because the counter never descends,
-/// renumbering the whole library on the next create. It had no test at all.
+/// renumbering the whole library on the next create.
 #[test]
 fn reindex_writes_down_the_number_behind_an_id_it_can_resolve() {
     let sb = Sandbox::new();
@@ -817,8 +807,8 @@ fn reindex_names_a_project_it_cannot_read() {
 /// A hand-edited `PROJECT_INFO.md` missing a field that is not the project's
 /// identity keeps the project in the library.
 ///
-/// `docs/projects.md` says "After creation the file is yours", and deleting one
-/// `created:` line used to take the folder out of `recent`, `search` and the
+/// `docs/projects.md` says "After creation the file is yours", so deleting one
+/// `created:` line must not take the folder out of `recent`, `search` and the
 /// app with nothing said anywhere.
 #[test]
 fn a_hand_edit_that_drops_created_does_not_drop_the_project() {
@@ -849,12 +839,9 @@ fn a_hand_edit_that_drops_created_does_not_drop_the_project() {
 /// The key `config set` takes is the key `config.toml` holds is the key
 /// `config show` prints.
 ///
-/// They were three different words for one setting: the Rust field is
-/// `recent_default_limit` and carried no `serde(rename)`, so `config set
-/// recent-limit 50` printed `Set recent_limit = 50` and wrote
-/// `recent_default_limit = 50`. Somebody following the docs and hand-writing
-/// `recent_limit = 50` into the file got it silently ignored — `Config` has no
-/// `deny_unknown_fields` — and fell back to the default.
+/// The Rust field is `recent_default_limit`, so it carries `serde(rename)`
+/// plus an alias for the old spelling: `Config` has no `deny_unknown_fields`,
+/// and a key hand-written under any other name is silently ignored.
 #[test]
 fn the_recent_limit_key_is_one_word_everywhere() {
     let sb = Sandbox::new();
@@ -875,7 +862,7 @@ fn the_recent_limit_key_is_one_word_everywhere() {
         "a hand-written value must be the one in force:\n{shown}"
     );
 
-    // Every config.toml written before this still parses.
+    // A config.toml an older fastf wrote, under the old key, still parses.
     let old_spelling = fs::read_to_string(sb.install.join("config.toml"))
         .unwrap()
         .replace("recent_limit = 7", "recent_default_limit = 9");
@@ -904,11 +891,8 @@ fn the_retired_mouse_key_is_accepted_and_ignored() {
     assert!(!shown.contains("mouse:"), "{shown}");
 }
 
-/// A recursive register that registered nothing is not a success.
-///
-/// Each failure was an `eprintln!` on stderr and the tail printed
-/// `✓ Registered 0 folders.` and returned `Ok(())` regardless, so a script saw
-/// a clean exit for a run that onboarded nothing.
+/// A recursive register that registered nothing is not a success: a script
+/// reads the exit code, and the summary counts what was skipped.
 ///
 /// Unix-only because a read-only directory is what makes the *write* fail while
 /// the folder is still a target: the code path is platform-independent.
@@ -947,12 +931,9 @@ fn a_recursive_register_that_onboards_nothing_fails() {
 
 /// An editor that failed did not open the project, whatever it exited for.
 ///
-/// Both `spawn_editor` arms dropped the child's `ExitStatus` and propagated
-/// only the *spawn* error, so `✓ opened in <editor>` was printed
-/// unconditionally — and on Windows `cmd /c start` succeeds for an editor that
-/// does not exist, so a typo in the `editor` key reported success over nothing
-/// at all. `git_init` and a template's `commands`, in the same function, have
-/// always checked.
+/// The editor's exit status is the answer, not the spawn: on Windows
+/// `cmd /c start` spawns for an editor that does not exist, so a typo in the
+/// `editor` key would report success over nothing at all.
 ///
 /// Unix-only for the fixture: `false` is coreutils' one-line "exit 1", always
 /// present, and `common::recorder` hard-codes `exit 0` so it cannot say this.
@@ -984,12 +965,12 @@ fn an_editor_that_failed_is_not_reported_as_having_opened_anything() {
 /// The first-run banner is on stderr, so `$(fastf path …)` is a path.
 ///
 /// `ensure_bootstrapped` runs for every command but `completions` and
-/// `mangen`, and printed two lines with `println!`. On a machine whose data
-/// directory does not exist yet but whose base already holds projects — a
-/// second computer, a portable base, a scripted `FASTF_INSTALL_DIR` —
-/// `cd "$(fastf path lullaby)"` got `fastf: initialized in …` prepended to the
-/// path. `docs/cli.md` states the contract: "prints the path followed by a
-/// newline — no colour, no decoration, nothing else on stdout".
+/// `mangen`. On a machine whose data directory does not exist yet but whose
+/// base already holds projects — a second computer, a portable base, a
+/// scripted `FASTF_INSTALL_DIR` — a banner on stdout lands in front of the
+/// path `cd "$(fastf path lullaby)"` reads. `docs/cli.md` states the contract:
+/// "prints the path followed by a newline — no colour, no decoration, nothing
+/// else on stdout".
 #[test]
 fn the_first_run_banner_never_lands_in_a_command_substitution() {
     let sb = Sandbox::new();
@@ -1021,9 +1002,7 @@ fn the_first_run_banner_never_lands_in_a_command_substitution() {
 ///
 /// It is the safety valve for a template whose `tag_from` changed, and it
 /// **removes** tags before re-deriving them — so a bug here loses tags a user
-/// typed. The only test it had asserted a *refusal* (a project registered
-/// without a template has nothing to re-derive), so the path that actually
-/// touches the file had none at all.
+/// typed.
 #[test]
 fn tag_reauto_re_derives_the_automatic_tags_and_keeps_the_free_form_ones() {
     let sb = Sandbox::new();
@@ -1074,12 +1053,10 @@ fn tag_reauto_re_derives_the_automatic_tags_and_keeps_the_free_form_ones() {
 
 /// `tag reauto` removes **only** the tags it derived.
 ///
-/// It used to remove every tag under a `tag_from` slug's namespace, which is a
-/// wider set than the one it wrote: a literal `tags: ["tier/legacy"]` the
-/// template declares matches that shape, and so does a `tier/manual` somebody
-/// typed. Both were deleted by a command whose whole job is to *refresh* the
-/// derived ones. The test above could not see it — its free-form tag was
-/// `urgent`, which is in nobody's namespace.
+/// Every tag under a `tag_from` slug's namespace is a wider set than the one it
+/// wrote: a literal `tags: ["tier/legacy"]` the template declares matches that
+/// shape, and so does a `tier/manual` somebody typed. The test above cannot
+/// see that — its free-form tag is `urgent`, which is in nobody's namespace.
 #[test]
 fn tag_reauto_keeps_every_tag_it_did_not_derive() {
     let sb = Sandbox::new();
@@ -1388,8 +1365,8 @@ fn path_and_copy_refuse_a_stale_project() {
         err.contains("ID0001")
             && err.contains("cannot be used")
             // The layers say one thing each: which project, which folder,
-            // and which file is missing. The outer one used to claim the
-            // *folder* had gone, which is the one thing that was still there.
+            // and which file is missing — never that the *folder* has gone,
+            // which is the one thing still there.
             && err.contains("not a project folder")
             && err.contains("project metadata is missing"),
         "path must refuse a project whose metadata has gone, and say so:\n{err}"
@@ -1456,10 +1433,9 @@ fn open_and_term_refuse_without_a_display() {
 
 /// **Every template the list names can be shown and created from.**
 ///
-/// A manifest whose `slug:` disagreed with its directory was listed under the
-/// manifest's name, which every lookup then rejected — `fastf template show`
-/// answering "not found — run `fastf template list`" about a name that list
-/// had just printed. Only a real process sees both halves.
+/// A template is its folder name: a manifest whose `slug:` disagrees with its
+/// directory is listed under the folder, because every lookup rejects the
+/// manifest's name. Only a real process sees both halves.
 #[test]
 fn every_template_the_list_names_can_be_shown_and_created() {
     let sb = Sandbox::new();
@@ -1495,18 +1471,16 @@ fn every_template_the_list_names_can_be_shown_and_created() {
         sb.ok(&["template", "show", &slug]);
     }
 
-    // And it can be created from — `new` used to print a whole preview and
-    // *then* fail, because the picker's template and the one `operations`
-    // re-resolves under the lock were looked up two different ways.
+    // And it can be created from: the picker's template and the one
+    // `operations` re-resolves under the lock are looked up the same way, or
+    // `new` prints a whole preview and *then* fails.
     let out = sb.ok(&["new", "my-kit", "--name=Probe", "--dry-run", "--yes"]);
     assert!(out.contains("K001"), "{out}");
 }
 
 /// **`template show` promises "copied byte-for-byte" — so it must only list
-/// files that are.** A root `PROJECT_INFO.md` is stripped from the text buffer
-/// (fastf owns that name) and dropped by every copy path, so it was absent from
-/// the buffer, present on disk, and named here as a bundled asset. An excluded
-/// file was listed for the same reason.
+/// files that are.** A root `PROJECT_INFO.md` (fastf owns that name) and an
+/// excluded file are both on disk and both dropped by every copy path.
 #[test]
 fn template_show_lists_only_assets_that_are_really_copied() {
     let sb = Sandbox::new();
@@ -1812,8 +1786,8 @@ fn apply_renders_the_id_of_the_folder_it_is_applied_to() {
 /// **Every command's own help text sits at the margin.** The prose after the
 /// options is a string in `main.rs`, and one written without `\` line
 /// continuations prints every line after the first with the source file's
-/// indent in front of it — `show` and `copy-to` both did. Examples are indented
-/// two columns; only a hanging line of an indented item goes further.
+/// indent in front of it. Examples are indented two columns; only a hanging
+/// line of an indented item goes further.
 #[test]
 fn every_help_text_sits_at_the_margin() {
     let sb = Sandbox::new();
@@ -1849,8 +1823,8 @@ fn every_help_text_sits_at_the_margin() {
             .skip_while(|line| !line.is_empty())
             .collect();
         // A line may sit further in only to continue an item that is itself
-        // indented — a numbered step, a table row. What the missing `\`
-        // produced was the source's indent under a line at the margin.
+        // indented — a numbered step, a table row. A missing `\` puts the
+        // source's indent under a line at the margin.
         let indent = |line: &str| line.len() - line.trim_start().len();
         for pair in prose.windows(2) {
             let (above, line) = (pair[0], pair[1]);

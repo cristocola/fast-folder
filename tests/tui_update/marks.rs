@@ -120,8 +120,8 @@ fn removing_a_row_drops_its_mark() {
 }
 
 /// Space on the list moves on the way any other move does: the next row's
-/// size and detail are asked for. It used to step without them, and the pane
-/// sat on `reading…` for a row nobody had asked about.
+/// size and detail are asked for, or the pane sits on `reading…` for a row
+/// nobody asked about.
 #[test]
 fn space_on_the_list_steps_and_reads_the_next_row() {
     let mut app = fixture(12, 120, 40);

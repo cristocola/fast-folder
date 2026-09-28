@@ -1,33 +1,32 @@
 //! What every pty suite needs: the sandbox launcher, the keys, and the fixtures.
 //! Shared by the three suites in this binary.
 //!
-//! One binary, three files: `cargo test` runs test *binaries* sequentially, so
-//! splitting the pty suite into three targets added nineteen seconds of wall
-//! time — their fixed keystroke schedules stopped overlapping. Modules keep the
+//! One binary, three files: `cargo test` runs test *binaries* sequentially, and
+//! as three targets the pty suite costs nineteen more seconds of wall time,
+//! because their fixed keystroke schedules no longer overlap. Modules keep the
 //! files navigable and the schedules interleaved.
 //!
 //! **The rules every suite in this binary follows**, stated once here rather
 //! than at the top of each of them:
 //!
 //! - They are driven through a real terminal because the app cannot draw
-//!   without one, and the defects they cover were only ever visible from a
+//!   without one, and the defects they cover are visible only from a
 //!   terminal. Unix only by construction.
-//! - Keystrokes are **spaced**, never burst — the app redraws between them, and
-//!   the dialoguer flows it bridges to lose most of a burst (`pty::Script`
-//!   handles the cadence).
+//! - Keystrokes are **spaced**, never burst — the app redraws between them
+//!   (`pty::Script` handles the cadence).
 //! - Assertions match **stable text only**, never cursor-positioning escapes.
 //!   ratatui redraws only the cells that changed, so the raw transcript is
 //!   fragments, not screens: a word can arrive one letter at a time. What the
 //!   app showed is read back through `app_screen`, which replays the
-//!   transcript into a virtual terminal; `pty::plain` is for what a bridged
-//!   flow printed on the main screen, and for a status line that changed
-//!   wholesale.
-//! - `Confirm` in a bridged flow takes a bare `y`/`n` with no Enter: a trailing
+//!   transcript into a virtual terminal; `pty::plain` is for what was printed
+//!   on the main screen, and for a status line that changed wholesale.
+//! - A command-line `confirm` takes a bare `y`/`n` with no Enter: a trailing
 //!   `\r` survives into the next prompt and silently accepts its default.
 //! - The app's keys are single characters: `q` quits, `n` creates, `e`
 //!   registers, `T` opens templates, `,` opens settings, `Enter` opens the
-//!   selected project's action menu. A bridged flow that prints a result
-//!   (create, register) ends with `press Enter to return to fastf…`.
+//!   selected project's action menu. Output the app prints on the main screen
+//!   (a new project's post-create actions) ends with
+//!   `press Enter to return to fastf…`.
 
 use crate::common::{self, Sandbox, pty};
 use std::fs;
@@ -121,8 +120,9 @@ pub(crate) fn launch_detached(
 
 /// The last frame the app showed before it left the alternate screen — the
 /// transcript up to the final `LeaveAlternateScreen`, replayed into a
-/// terminal of the pty's size. A bridged flow leaves and re-enters the
-/// alternate screen too, so this is the app's frame after the last of those.
+/// terminal of the pty's size. Whatever hands the terminal back — post-create
+/// actions, the note editor, Ctrl-Z — leaves and re-enters the alternate
+/// screen too, so this is the app's frame after the last of those.
 pub(crate) fn app_screen(transcript: &str) -> String {
     const LEAVE: &str = "\x1b[?1049l";
     let end = transcript.rfind(LEAVE).unwrap_or(transcript.len());

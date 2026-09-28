@@ -55,7 +55,7 @@ fn the_cursor_walks_selectable_rows_and_stops_at_the_ends() {
 #[test]
 fn the_pane_scrolls_to_keep_its_cursor_in_view_and_a_new_row_resets_it() {
     let mut app = fixture(6, 120, 24);
-    // Five notes of six lines each: thirty rows, over a pane of twenty.
+    // Five notes of six lines each: thirty rows, over a pane of seventeen.
     let detail = ProjectDetail {
         notes: (0..5)
             .map(|n| fastf::core::body::Note {
@@ -118,9 +118,9 @@ fn the_cursor_is_drawn_only_while_the_pane_has_the_focus() {
     );
 }
 
-/// **A page in the pane is the pane's height, in drawn rows.** It used to be
-/// the table's height counted in *selectable* rows, so one PageDown walked
-/// past every wrapped line of every note and landed several screens down.
+/// **A page in the pane is the pane's height, in drawn rows**: a page counted
+/// in *selectable* rows walks past every wrapped line of every note and lands
+/// several screens down.
 #[test]
 fn page_down_in_the_pane_moves_by_the_panes_height() {
     let mut app = fixture(6, 120, 24);

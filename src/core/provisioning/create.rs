@@ -134,7 +134,9 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
     // interpolated files had landed before a crash. Report it for inspection
     // rather than declaring a potentially partial project complete.
     if journal.jobs.is_empty() {
-        report.incomplete.push(root.display().to_string());
+        report
+            .incomplete
+            .push(crate::util::paths::display_path(root));
         return;
     }
 

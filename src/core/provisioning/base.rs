@@ -94,14 +94,18 @@ pub(super) fn reconcile_base(
             }
             let legacy = legacy_create_marker_path(&path);
             if entry_exists_quiet(&legacy) {
-                report.obsolete.push(legacy.display().to_string());
+                report
+                    .obsolete
+                    .push(crate::util::paths::display_path(&legacy));
             }
             let create_v2 = create_journal_path(&path);
             if entry_exists_quiet(&create_v2) {
                 ticker.item(&name);
                 reconcile_create(&path, report);
             } else if crate::core::project_info::is_provisioning(&path) {
-                report.incomplete.push(path.display().to_string());
+                report
+                    .incomplete
+                    .push(crate::util::paths::display_path(&path));
             }
         } else if let Some(operation) = transactions::pointer_operation(&name) {
             pointers.push((path, operation.to_string()));
@@ -112,7 +116,9 @@ pub(super) fn reconcile_base(
             ticker.item("a deleted project's folder");
             reconcile_deleted_in_place(base, &path, operation, report, pass);
         } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
-            report.obsolete.push(path.display().to_string());
+            report
+                .obsolete
+                .push(crate::util::paths::display_path(&path));
         }
     }
     if let Some(root) = transaction_root {

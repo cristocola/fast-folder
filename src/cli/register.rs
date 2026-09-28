@@ -259,8 +259,8 @@ pub fn plan_rename(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // MUST be the same expression `register_core` commits with.
-    let counters = Counters::load().unwrap_or_default();
+    // The commit's own read: a counter that cannot be read stops both.
+    let counters = Counters::load()?;
     let recovered_value = parse_id_token(&current_name, &tmpl.id.prefix);
     let id_value = match recovered_value {
         Some(recovered) => recovered,
@@ -707,6 +707,30 @@ mod tests {
         assert_eq!(slugify_folder_name("  trim  me  "), "trim_me");
         assert_eq!(slugify_folder_name("already_clean"), "already_clean");
         assert_eq!(slugify_folder_name("bad:char"), "bad_char");
+    }
+
+    #[test]
+    fn a_preview_refuses_the_counter_the_commit_would_refuse() {
+        let (_guard, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let counters = crate::util::paths::counters_path();
+        fs::write(&counters, "value = [").unwrap();
+        let folder = sandbox.path().join("Old Project");
+        fs::create_dir(&folder).unwrap();
+
+        let refused = plan_rename(
+            &folder,
+            &registered_stub_template(),
+            false,
+            &HashMap::new(),
+            &Config::default(),
+        )
+        .map(|plan| plan.id)
+        .expect_err("a counter that cannot be read is not a counter at zero");
+        let said = format!("{refused:#}");
+        assert!(
+            said.contains("parsing") && said.contains("counters.toml"),
+            "{said}"
+        );
     }
 
     #[test]

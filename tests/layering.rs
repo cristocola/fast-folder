@@ -299,12 +299,13 @@ fn only_the_runtime_touches_the_terminal() {
     let mut offenders = Vec::new();
     for layer in ["tui", "cli"] {
         for path in sources(layer) {
-            // The two files themselves, by their place: a `runtime.rs` or an
+            // The two modules themselves, by their place: the files of
+            // `tui/runtime/` and `tui/inline.rs`. A `runtime` folder or an
             // `inline.rs` anywhere else is not one of them.
-            if ["runtime.rs", "inline.rs"]
-                .iter()
-                .any(|name| path.ends_with(Path::new("tui").join(name)))
-            {
+            let in_runtime = path
+                .parent()
+                .is_some_and(|folder| folder.ends_with(Path::new("tui").join("runtime")));
+            if in_runtime || path.ends_with(Path::new("tui").join("inline.rs")) {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();

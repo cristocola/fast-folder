@@ -1052,6 +1052,31 @@ mod tests {
         assert!(!out.contains("{name}"));
     }
 
+    /// The limit itself: a file of exactly [`TEXT_MAX_BYTES`] is interpolated,
+    /// and one byte more is copied as it is.
+    #[test]
+    fn a_file_at_the_size_limit_is_interpolated_and_one_byte_over_is_not() {
+        let entry = |rel: &str, size: u64| AssetEntry {
+            rel: rel.to_string(),
+            os_rel: PathBuf::from(rel),
+            kind: EntryKind::File,
+            size,
+        };
+        let entries = [
+            entry("at.md", TEXT_MAX_BYTES),
+            entry("over.md", TEXT_MAX_BYTES + 1),
+        ];
+        let planned = plan_entries(
+            &entries,
+            &[],
+            &[],
+            &HashMap::new(),
+            &crate::core::naming::RenderContext::now("%Y-%m-%d"),
+        );
+        let actions: Vec<FileAction> = planned.iter().map(|planned| planned.action).collect();
+        assert_eq!(actions, [FileAction::Interpolated, FileAction::Verbatim]);
+    }
+
     /// `walk` must distinguish the kinds, not just "exists".
     #[test]
     fn walk_classifies_each_entry_kind() {

@@ -267,10 +267,13 @@ impl App {
             PaletteTarget::Project(path) => {
                 self.set_focus(Focus::Projects);
                 if !self.library.select_path(&path) {
-                    // Hidden by the query or the filter: show everything.
+                    // Hidden by the query, a filter or the narrowing the app
+                    // was opened with: show everything.
                     self.search.input.clear();
                     self.search.sync();
                     self.library.template_filter = None;
+                    self.library.base_filter = None;
+                    self.library.preset = None;
                     self.recompute();
                     self.library.select_path(&path);
                 }

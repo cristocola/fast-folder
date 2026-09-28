@@ -397,6 +397,38 @@ fn the_palette_jumps_to_a_project() {
     assert_eq!(app.focus, Focus::Projects);
 }
 
+/// A project chosen in the palette is shown, whatever was hiding its row: the
+/// query, a filter, the narrowing the app was opened with.
+#[test]
+fn the_palette_jumps_to_a_project_a_filter_hides() {
+    let hidden = sample_projects(6)
+        .into_iter()
+        .find(|project| project.template != "general")
+        .expect("a project of another template");
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Preset {
+                template: Some("general".to_string()),
+                ..Default::default()
+            },
+            initial: sample_projects(6),
+        },
+        Theme::mono(),
+        (120, 40),
+    );
+    assert!(
+        names(&app).iter().all(|name| *name != hidden.name),
+        "the narrowing hides it"
+    );
+
+    press(&mut app, Key::ch('c'));
+    type_text(&mut app, &format!("#{}", hidden.id));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(selected_name(&app), hidden.name);
+    assert!(app.library.preset.is_none(), "what hid it is off");
+    assert_eq!(app.library.len(), 6);
+}
+
 #[test]
 fn enter_opens_the_native_action_menu() {
     let mut app = fixture(12, 80, 24);

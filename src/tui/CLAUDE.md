@@ -423,10 +423,15 @@ given with the question in view, never one given blind.
 `close_top` owns the question, `quit` who must ask it, and
 `ConfirmThen::DiscardTemplate` carries `then_quit` so the answer finishes the quit.
 
-**A dialog carries its target and never re-reads the selection at submit.**
-`TextThen::Rename`/`Delete` and `ConfirmThen::Unregister` hold the path, because a
-discovery underneath can move the cursor; `App::project_at` resolves it in the
-current snapshot, and a target that is gone is a refusal, never a neighbour.
+**A dialog carries its targets and never re-reads the selection at submit.**
+Every dialog a project verb opens holds the paths it was opened about
+(`actions::Targets`, taken by `App::targets_now`: the marks in view or the
+selection, and whether that was a batch) — rename, delete, unregister, move,
+copy, both tag pickers, the quick note, the todo and phase prompts, and
+`App.editor_note_for` while `$EDITOR` has the terminal — because a discovery
+underneath can take a marked row out of the list or move the cursor.
+`App::still_here` resolves them in the current snapshot: the verb runs over
+what is left of them, and with none left it is a refusal, never a neighbour.
 
 **A worker's answer names its question.** `Builder::pending` carries the slug a
 template read was for, as `on_template_loaded` and `TemplateViewLoaded` check

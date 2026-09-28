@@ -1771,7 +1771,7 @@ fn without_the_list_on_screen_a_phase_is_two_prompts() {
     assert!(
         matches!(
             app.modals.top(),
-            Some(Modal::TextPrompt(prompt)) if prompt.then == TextThen::AddPhase
+            Some(Modal::TextPrompt(prompt)) if matches!(prompt.then, TextThen::AddPhase(_))
         ),
         "no detail read: the name is asked for"
     );

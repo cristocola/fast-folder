@@ -37,6 +37,174 @@ fn a_success_message_wears_the_theme_glyph_not_a_hardcoded_one() {
     );
 }
 
+/// **A delete acts on the folders its question named, and on no other.** The
+/// list can change under an open prompt: a discovery lands, and the marked
+/// rows are gone from it. The word typed then confirms nothing about the row
+/// the cursor happens to be on.
+#[test]
+fn a_delete_never_reaches_a_project_its_question_did_not_name() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch(' ')); // mark row 0
+    press(&mut app, Key::ch(' ')); // mark row 1; the cursor is on row 2
+    let named = [
+        app.library.row(0).unwrap().clone(),
+        app.library.row(1).unwrap().clone(),
+    ];
+    let under_the_cursor = app.library.selected().unwrap().clone();
+    assert!(
+        named
+            .iter()
+            .all(|project| project.path != under_the_cursor.path)
+    );
+
+    press(&mut app, Key::plain(KeyCode::F(5)));
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    press(&mut app, Key::ch('D'));
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("delete asks in a text prompt");
+    };
+    assert!(
+        prompt.title.contains("these 2 projects"),
+        "{}",
+        prompt.title
+    );
+
+    // The discovery lands without the two the question named.
+    let left: Vec<_> = sample_projects(12)
+        .into_iter()
+        .filter(|project| named.iter().all(|gone| gone.path != project.path))
+        .collect();
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects: left,
+        },
+    );
+
+    type_text(&mut app, "delete");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        job_started(&effects).is_none(),
+        "nothing the question named is left, so nothing is deleted: {effects:?}"
+    );
+    assert!(app.modals.is_empty() || !matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
+}
+
+/// Two marks with the cursor on a third row, `open` pressed, and then a
+/// discovery that holds neither marked project: what the answer starts.
+fn answered_once_its_projects_left(
+    open: Key,
+    answer: impl Fn(&mut App) -> Vec<Effect>,
+) -> (App, Vec<Effect>) {
+    let mut app = fixture(12, 80, 24);
+    app.summary = Some(sample_summary_moveable(12));
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    let named = [
+        app.library.row(0).unwrap().path.clone(),
+        app.library.row(1).unwrap().path.clone(),
+    ];
+
+    press(&mut app, Key::plain(KeyCode::F(5)));
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    press(&mut app, open);
+    assert!(!app.modals.is_empty(), "{open:?} asks first");
+    let left: Vec<_> = sample_projects(12)
+        .into_iter()
+        .filter(|project| !named.contains(&project.path))
+        .collect();
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects: left,
+        },
+    );
+    assert!(app.library.selected().is_some(), "the cursor is on a row");
+    let effects = answer(&mut app);
+    (app, effects)
+}
+
+/// **Every verb that asks first acts on what its question was about**: the
+/// same rule as the delete's, for the verbs that lose nothing. The row under
+/// the cursor was never asked about, so it is not moved, copied, unregistered,
+/// tagged or noted.
+#[test]
+fn no_verb_reaches_a_project_its_question_was_not_about() {
+    type Answer = fn(&mut App) -> Vec<Effect>;
+    let verbs: [(&str, Key, Answer); 6] = [
+        ("unregister", Key::ch('u'), |app| press(app, Key::ch('y'))),
+        ("move", Key::ch('m'), |app| {
+            press(app, Key::plain(KeyCode::Enter))
+        }),
+        ("copy", Key::ch('C'), |app| {
+            type_text(app, "/mnt/backups");
+            press(app, Key::plain(KeyCode::Enter))
+        }),
+        ("add a tag", Key::ch('A'), |app| {
+            press(app, Key::plain(KeyCode::Enter))
+        }),
+        ("remove tags", Key::ctrl('t'), |app| {
+            press(app, Key::ch(' '));
+            press(app, Key::plain(KeyCode::Enter))
+        }),
+        ("note", Key::ctrl('n'), |app| {
+            type_text(app, "graded");
+            press(app, Key::plain(KeyCode::Enter))
+        }),
+    ];
+    for (verb, open, answer) in verbs {
+        let (app, effects) = answered_once_its_projects_left(open, answer);
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Run(..) | Effect::StartJob { .. })),
+            "{verb}: nothing it asked about is left, so nothing runs: {effects:?}"
+        );
+        assert!(app.job.is_none(), "{verb}: and no batch is begun");
+        assert!(
+            app.status.text.contains("no longer in the library"),
+            "{verb}: and it says why: {:?}",
+            app.status.text
+        );
+    }
+}
+
+/// And when only some of them are left, those are what is deleted.
+#[test]
+fn a_delete_takes_what_is_left_of_what_its_question_named() {
+    use fastf::core::jobs::JobKind;
+
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch(' '));
+    press(&mut app, Key::ch(' '));
+    let first = app.library.row(0).unwrap().clone();
+    let second = app.library.row(1).unwrap().clone();
+
+    press(&mut app, Key::plain(KeyCode::F(5)));
+    let generation = app.library.inflight.expect("a discovery is in flight");
+    press(&mut app, Key::ch('D'));
+    let left: Vec<_> = sample_projects(12)
+        .into_iter()
+        .filter(|project| project.path != first.path)
+        .collect();
+    update(
+        &mut app,
+        Msg::Discovered {
+            generation,
+            projects: left,
+        },
+    );
+
+    type_text(&mut app, "delete");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let (kind, items) = job_started(&effects).expect("one job");
+    assert_eq!(kind, JobKind::Delete);
+    let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+    assert_eq!(ids, [second.id.as_str()]);
+}
+
 /// Delete over marks asks for the word once, naming the count, and starts
 /// one job over every marked project — a job of its own, which goes on if
 /// the app is closed. The marks go as its items land.

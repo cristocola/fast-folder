@@ -240,11 +240,12 @@ impl App {
                 let Some(project) = self.library.targets().into_iter().next() else {
                     return Vec::new();
                 };
+                self.editor_note_for = Some(self.targets_now());
                 vec![Effect::Suspend(Suspended::Note(Box::new(project)))]
             }
             CommandId::NoteInline => {
-                let count = self.library.targets().len();
-                self.modals.push(Modal::Note(NoteState::new(count)));
+                let targets = self.targets_now();
+                self.modals.push(Modal::Note(NoteState::new(targets)));
                 Vec::new()
             }
             // Where the pane can show the list, a todo is typed into it,
@@ -260,7 +261,10 @@ impl App {
             CommandId::Rename => self.open_rename_prompt(),
             CommandId::Move => self.open_move_picker(),
             CommandId::CopyTo => {
-                let mut prompt = TextPrompt::new(validators::COPY_TO_PROMPT, TextThen::CopyTo);
+                let mut prompt = TextPrompt::new(
+                    validators::COPY_TO_PROMPT,
+                    TextThen::CopyTo(self.targets_now()),
+                );
                 prompt.input = crate::tui::widgets::input::LineEdit::default();
                 self.modals.push(Modal::TextPrompt(prompt));
                 Vec::new()
@@ -671,7 +675,7 @@ impl App {
         self.modals.push(Modal::MultiPick(MultiPick::new(
             title,
             tags,
-            MultiThen::RemoveTags,
+            MultiThen::RemoveTags(self.targets_now()),
         )));
         Vec::new()
     }
@@ -696,14 +700,9 @@ impl App {
         if names.is_empty() {
             return Vec::new();
         }
-        let then = match self.library.selected() {
-            _ if self.batching() => ConfirmThen::UnregisterBatch,
-            Some(project) => ConfirmThen::Unregister(project.path.clone()),
-            None => return Vec::new(),
-        };
         self.modals.push(Modal::Confirm(Confirm {
             prompt: validators::unregister_prompt(&names),
-            then,
+            then: ConfirmThen::Unregister(self.targets_now()),
         }));
         Vec::new()
     }
@@ -715,15 +714,9 @@ impl App {
         if names.is_empty() {
             return Vec::new();
         }
-        let then = match self.library.selected() {
-            Some(project) => TextThen::Delete(project.path.clone()),
-            // A batch still needs a variant; the marks are the target
-            // and the path is ignored.
-            None => TextThen::Delete(std::path::PathBuf::new()),
-        };
         self.modals.push(Modal::TextPrompt(TextPrompt::new(
             validators::delete_prompt(&names),
-            then,
+            TextThen::Delete(self.targets_now()),
         )));
         Vec::new()
     }

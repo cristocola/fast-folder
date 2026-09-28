@@ -36,10 +36,11 @@ pub enum MessageLevel {
 pub enum Then {
     SortPick,
     TemplateFilter,
-    /// The picked value is a tag to add, or `NEW_TAG` to type one.
-    AddTag,
-    /// The picked value is a base path to move into.
-    MoveToBase,
+    /// The picked value is a tag to add to these projects, or `NEW_TAG` to
+    /// type one.
+    AddTag(crate::tui::app::actions::Targets),
+    /// The picked value is a base path to move these projects into.
+    MoveToBase(crate::tui::app::actions::Targets),
     /// The picked value is a base path to restrict the list to.
     BaseFilter,
     /// The picked value is a tag; it goes into the search bar as `tag:x`,
@@ -508,28 +509,23 @@ impl App {
                 let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
                 self.set_base_filter(base)
             }
-            Then::AddTag => {
+            Then::AddTag(targets) => {
                 if item.value == crate::tui::app::actions::NEW_TAG {
                     self.modals.push(Modal::TextPrompt(TextPrompt::new(
                         validators::ADD_TAG_PROMPT,
-                        TextThen::AddTag,
+                        TextThen::AddTag(targets.clone()),
                     )));
                     return Vec::new();
                 }
-                self.add_tag(item.value.clone())
+                self.add_tag(item.value.clone(), &targets)
             }
-            Then::MoveToBase => {
+            Then::MoveToBase(targets) => {
                 let target = PathBuf::from(item.value.clone());
-                // `batching()`, not `!marks.is_empty()`: marks are kept
-                // by path and survive a filter change, so a marked row
-                // can be off screen while the verb is aimed at it. Every
-                // other verb asks this question the same way.
-                if self.batching() {
-                    let targets = self.library.targets();
-                    self.start_background(crate::core::jobs::JobKind::Move, targets, Some(target))
-                } else {
-                    self.run_move(target)
+                let projects = self.still_here(&targets);
+                if projects.is_empty() {
+                    return self.gone_from_the_library();
                 }
+                self.start_background(crate::core::jobs::JobKind::Move, projects, Some(target))
             }
             Then::Attention => self.on_attention_pick(item.value.clone()),
             Then::AttentionAction(path) => {

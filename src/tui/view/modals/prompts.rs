@@ -14,12 +14,12 @@ pub(super) fn render_text_prompt(
     let theme = &app.theme;
     let verb = match prompt.then {
         TextThen::Rename(_) => "rename",
-        TextThen::AddTag => "add a tag",
-        TextThen::AddTodo(_) => "add a todo",
-        TextThen::AddPhase => "add a phase",
+        TextThen::AddTag(_) => "add a tag",
+        TextThen::AddTodo { .. } => "add a todo",
+        TextThen::AddPhase(_) => "add a phase",
         TextThen::Delete(_) => "delete",
         TextThen::RaiseCounter => "ID counter",
-        TextThen::CopyTo => "copy to",
+        TextThen::CopyTo(_) => "copy to",
         TextThen::DiscardAttention(_) => "discard",
     };
     // The box grows with its question: a confirmation over six marked
@@ -107,8 +107,8 @@ pub(super) fn render_note(
     let rows = (note.area.lines().len() as u16).clamp(3, 8);
     let area = centered_fixed(area, 62, rows + 5);
     super::clear(frame, area, &app.theme);
-    let title = if note.count > 1 {
-        format!(" note {} {} projects ", g.sep, note.count)
+    let title = if note.count() > 1 {
+        format!(" note {} {} projects ", g.sep, note.count())
     } else {
         " note ".to_string()
     };
@@ -119,7 +119,7 @@ pub(super) fn render_note(
     let prompt_area = Rect::new(inner.x, inner.y, inner.width, 1);
     frame.render_widget(
         Paragraph::new(Span::styled(
-            format!(" {}", crate::tui::validators::note_prompt(note.count)),
+            format!(" {}", crate::tui::validators::note_prompt(note.count())),
             theme.dim(),
         )),
         prompt_area,

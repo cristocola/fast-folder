@@ -90,6 +90,9 @@ impl App {
     /// The one-line prompt for a todo — what adding is where the pane cannot
     /// show the list it goes into.
     pub(super) fn prompt_for_a_todo(&mut self, place: TodoPlace) -> Vec<Effect> {
+        let Some(project) = self.library.selected().map(|p| p.path.clone()) else {
+            return Vec::new();
+        };
         let title = match &place {
             TodoPlace::Phase(name) => validators::add_todo_in_prompt(name),
             TodoPlace::End | TodoPlace::Loose => validators::ADD_TODO_PROMPT.to_string(),
@@ -97,7 +100,7 @@ impl App {
         self.modals
             .push(Modal::TextPrompt(super::actions::TextPrompt::new(
                 title,
-                super::actions::TextThen::AddTodo(place),
+                super::actions::TextThen::AddTodo { place, project },
             )));
         Vec::new()
     }
@@ -111,10 +114,13 @@ impl App {
             .selected()
             .is_some_and(|p| self.details.contains_key(&p.path));
         if !read || !self.pane_live() || self.screen != super::Screen::Library {
+            let Some(project) = self.library.selected().map(|p| p.path.clone()) else {
+                return Vec::new();
+            };
             self.modals
                 .push(Modal::TextPrompt(super::actions::TextPrompt::new(
                     validators::ADD_PHASE_PROMPT,
-                    super::actions::TextThen::AddPhase,
+                    super::actions::TextThen::AddPhase(project),
                 )));
             return Vec::new();
         }

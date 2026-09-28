@@ -226,9 +226,16 @@ impl Job {
 }
 
 impl App {
-    /// Run the verb over every marked project, one item at a time.
+    /// Run the verb over every marked project, one item at a time — for a
+    /// verb that asks nothing first. One that asked carries what it asked
+    /// about to `start_job_over`.
     pub(super) fn start_job(&mut self, kind: JobKind) -> Vec<Effect> {
         let targets = self.library.targets();
+        self.start_job_over(kind, targets)
+    }
+
+    /// Run the verb over `targets`, one item at a time.
+    pub(super) fn start_job_over(&mut self, kind: JobKind, targets: Vec<Project>) -> Vec<Effect> {
         if targets.is_empty() {
             return Vec::new();
         }

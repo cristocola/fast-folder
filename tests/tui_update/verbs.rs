@@ -139,7 +139,7 @@ fn a_verb_aimed_at_marks_a_filter_hides_says_so() {
 fn a_quick_note_takes_several_lines_and_goes_to_every_mark() {
     let mut app = fixture(12, 120, 40);
     press(&mut app, Key::ctrl('n'));
-    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count == 1));
+    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count() == 1));
     type_text(&mut app, "first cut");
     let mut alt_enter = Key::plain(KeyCode::Enter);
     alt_enter.alt = true;
@@ -157,7 +157,7 @@ fn a_quick_note_takes_several_lines_and_goes_to_every_mark() {
     press(&mut app, Key::ch(' '));
     press(&mut app, Key::ch(' '));
     press(&mut app, Key::ctrl('n'));
-    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count == 2));
+    assert!(matches!(app.modals.top(), Some(Modal::Note(note)) if note.count() == 2));
     let _ = update(&mut app, Msg::Paste("line one\nline two\n".to_string()));
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(

@@ -40,35 +40,58 @@ impl ActionsState {
     }
 }
 
+/// The projects a dialog was opened about: the marks in view, or the
+/// selection, by path.
+///
+/// **A dialog carries its targets rather than re-reading the selection**: a
+/// discovery arriving under an open dialog takes a marked row out of the list,
+/// or moves the cursor when the named row is no longer in the snapshot, and a
+/// verb built from the selection at Enter would land on a project other than
+/// the ones on screen. `App::targets_now` takes them as the dialog opens and
+/// `App::still_here` resolves them at its answer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Targets {
+    pub paths: Vec<PathBuf>,
+    /// Asked over marks, so the verb runs as a batch over what is left of
+    /// them — one project included.
+    pub batch: bool,
+}
+
+impl Targets {
+    pub fn one(path: PathBuf) -> Self {
+        Self {
+            paths: vec![path],
+            batch: false,
+        }
+    }
+}
+
 /// What a text prompt's answer does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextThen {
-    /// Rename the project the prompt named, carried by path.
-    ///
-    /// **The dialog carries its target rather than re-reading the selection**:
-    /// a discovery arriving under an open dialog moves the cursor when the
-    /// named row is no longer in the snapshot, and a verb built from the
-    /// selection at Enter would land on a project other than the one on screen.
+    /// Rename the project the prompt named, carried by path ([`Targets`]
+    /// says why).
     Rename(std::path::PathBuf),
-    AddTag,
-    /// A todo for the selected project, where the pane cannot show its list:
-    /// written at `TodoPlace`, under a phase when one was named first.
-    AddTodo(crate::core::body::TodoPlace),
-    /// A new phase's name, where the pane cannot show the list; its first
-    /// todo is asked for next, and the two are written together.
-    AddPhase,
+    AddTag(Targets),
+    /// A todo for the project at `project`, where the pane cannot show its
+    /// list: written at `place`, under a phase when one was named first.
+    AddTodo {
+        place: crate::core::body::TodoPlace,
+        project: PathBuf,
+    },
+    /// A new phase's name for the project at this path, where the pane cannot
+    /// show the list; its first todo is asked for next, and the two are
+    /// written together.
+    AddPhase(PathBuf),
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
-    ///
-    /// Carries the single project's path for the same reason `Rename` does;
-    /// a batch delete goes by the marks, which are kept by path already.
-    Delete(std::path::PathBuf),
+    Delete(Targets),
     /// Raise the global ID counter to the number typed.
     RaiseCounter,
     /// The folder to copy into. Refused by the engine rather than here, so the
     /// command line and the app say the same words about the same rule.
-    CopyTo,
+    CopyTo(Targets),
     /// Type the word `discard` to settle an unfinished item by removing it
     /// (`core::attention::Action::Discard`); carries the item's path.
     DiscardAttention(std::path::PathBuf),
@@ -80,16 +103,21 @@ pub enum TextThen {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NoteState {
     pub area: crate::tui::widgets::text_area::TextArea,
-    /// How many projects the note goes to: the marks, or the one selected.
-    pub count: usize,
+    /// The projects the note goes to: the marks, or the one selected.
+    pub targets: Targets,
 }
 
 impl NoteState {
-    pub fn new(count: usize) -> Self {
+    pub fn new(targets: Targets) -> Self {
         Self {
             area: crate::tui::widgets::text_area::TextArea::new(),
-            count,
+            targets,
         }
+    }
+
+    /// How many projects the note goes to.
+    pub fn count(&self) -> usize {
+        self.targets.paths.len()
     }
 }
 
@@ -118,9 +146,8 @@ impl TextPrompt {
 /// What a yes/no confirm answers. A bare `y`/`n` answers without Enter.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConfirmThen {
-    /// Unregister the project the question named, carried by path — see
-    /// [`TextThen::Rename`].
-    Unregister(std::path::PathBuf),
+    /// Unregister the projects the question named.
+    Unregister(Targets),
     /// Delete the named template and everything bundled with it.
     DeleteTemplate(String),
     /// Leave the builder, throwing away a template that has been worked on.
@@ -131,10 +158,6 @@ pub enum ConfirmThen {
     DiscardTemplate {
         then_quit: Option<crate::tui::effect::Exit>,
     },
-    /// Delete every marked project (the marks are the batch).
-    DeleteBatch,
-    /// Unregister every marked project (the marks are the batch).
-    UnregisterBatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,9 +167,9 @@ pub struct Confirm {
 }
 
 /// What a multi-pick answers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MultiThen {
-    RemoveTags,
+    RemoveTags(Targets),
 }
 
 /// A list where Space toggles and Enter confirms the picked set.
@@ -275,7 +298,7 @@ impl App {
                     },
                 )
             }
-            TextThen::AddPhase => {
+            TextThen::AddPhase(path) => {
                 if text.trim().is_empty() {
                     self.modals.pop();
                     return Vec::new();
@@ -287,16 +310,18 @@ impl App {
                     return Vec::new();
                 };
                 self.modals.pop();
+                if !self.is_selected(&path) {
+                    return self.gone_from_the_library();
+                }
                 self.start_adding(crate::core::body::TodoPlace::Phase(name))
             }
-            TextThen::AddTodo(place) => {
-                let place = place.clone();
+            TextThen::AddTodo { place, project } => {
                 self.modals.pop();
                 if text.trim().is_empty() {
                     return Vec::new();
                 }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
+                let Some(project) = self.project_at(&project) else {
+                    return self.gone_from_the_library();
                 };
                 let next = self
                     .details
@@ -316,7 +341,7 @@ impl App {
                 }
                 effects
             }
-            TextThen::AddTag => {
+            TextThen::AddTag(targets) => {
                 if text.trim().is_empty() {
                     self.modals.pop();
                     return Vec::new();
@@ -334,9 +359,9 @@ impl App {
                     }
                 };
                 self.modals.pop();
-                self.add_tag(tag)
+                self.add_tag(tag, &targets)
             }
-            TextThen::CopyTo => {
+            TextThen::CopyTo(targets) => {
                 let typed = text.trim().to_string();
                 if typed.is_empty() {
                     return Vec::new();
@@ -352,15 +377,15 @@ impl App {
                         return Vec::new();
                     }
                 };
-                let targets = if self.batching() {
-                    self.library.targets()
-                } else {
-                    match self.library.selected().cloned() {
-                        Some(project) => vec![project],
-                        None => return Vec::new(),
-                    }
-                };
-                self.start_background(crate::core::jobs::JobKind::Copy, targets, Some(destination))
+                let projects = self.still_here(&targets);
+                if projects.is_empty() {
+                    return self.gone_from_the_library();
+                }
+                self.start_background(
+                    crate::core::jobs::JobKind::Copy,
+                    projects,
+                    Some(destination),
+                )
             }
             TextThen::RaiseCounter => {
                 self.modals.pop();
@@ -388,7 +413,7 @@ impl App {
                 self.modals.pop();
                 self.resolve_attention(path, crate::core::attention::Action::Discard)
             }
-            TextThen::Delete(path) => {
+            TextThen::Delete(targets) => {
                 if !text.trim().eq_ignore_ascii_case(validators::DELETE_WORD) {
                     // The text stays: one Backspace fixes a typo.
                     if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
@@ -397,30 +422,27 @@ impl App {
                     return Vec::new();
                 }
                 self.modals.pop();
-                if self.batching() {
-                    let targets = self.library.targets();
-                    return self.start_background(
-                        crate::core::jobs::JobKind::Delete,
-                        targets,
-                        None,
-                    );
-                }
-                let Some(project) = self.project_at(&path) else {
+                // What is left of what the question named, and nothing else:
+                // the word was typed about those folders.
+                let projects = self.still_here(&targets);
+                if projects.is_empty() {
                     return self.gone_from_the_library();
-                };
-                self.start_background(crate::core::jobs::JobKind::Delete, vec![project], None)
+                }
+                self.start_background(crate::core::jobs::JobKind::Delete, projects, None)
             }
         }
     }
 
-    /// One tag, on the selection or on every mark.
-    pub(super) fn add_tag(&mut self, tag: String) -> Vec<Effect> {
-        if self.batching() {
-            return self.start_job(jobs::JobKind::AddTag(tag));
+    /// One tag, on the projects its question was about.
+    pub(super) fn add_tag(&mut self, tag: String, targets: &Targets) -> Vec<Effect> {
+        let mut projects = self.still_here(targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
         }
-        let Some(project) = self.library.selected().cloned() else {
-            return Vec::new();
-        };
+        if targets.batch {
+            return self.start_job_over(jobs::JobKind::AddTag(tag), projects);
+        }
+        let project = projects.remove(0);
         self.run_action(
             "tagging…",
             Action::AddTag {
@@ -430,14 +452,16 @@ impl App {
         )
     }
 
-    /// One note, on the selection or on every mark.
-    fn add_note(&mut self, text: String) -> Vec<Effect> {
-        if self.batching() {
-            return self.start_job(jobs::JobKind::Note(text));
+    /// One note, on the projects its question was about.
+    pub(super) fn add_note(&mut self, text: String, targets: &Targets) -> Vec<Effect> {
+        let mut projects = self.still_here(targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
         }
-        let Some(project) = self.library.selected().cloned() else {
-            return Vec::new();
-        };
+        if targets.batch {
+            return self.start_job_over(jobs::JobKind::Note(text), projects);
+        }
+        let project = projects.remove(0);
         // From the pane, the cursor follows the note to where it lands: the
         // end of the list. From the list, the pane's cursor is not in play.
         let next = self
@@ -482,7 +506,7 @@ impl App {
             self.info("no note written");
             return Vec::new();
         }
-        self.add_note(text)
+        self.add_note(text, &note.targets)
     }
 
     pub(super) fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
@@ -511,10 +535,15 @@ impl App {
             return Vec::new();
         }
         match then {
-            ConfirmThen::Unregister(path) => {
-                let Some(project) = self.project_at(&path) else {
+            ConfirmThen::Unregister(targets) => {
+                let mut projects = self.still_here(&targets);
+                if projects.is_empty() {
                     return self.gone_from_the_library();
-                };
+                }
+                if targets.batch {
+                    return self.start_job_over(jobs::JobKind::Unregister, projects);
+                }
+                let project = projects.remove(0);
                 self.run_action("unregistering…", Action::Unregister(Box::new(project)))
             }
             ConfirmThen::DeleteTemplate(slug) => {
@@ -529,11 +558,6 @@ impl App {
                     None => Vec::new(),
                 }
             }
-            ConfirmThen::DeleteBatch => {
-                let targets = self.library.targets();
-                self.start_background(crate::core::jobs::JobKind::Delete, targets, None)
-            }
-            ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister),
         }
     }
 
@@ -556,21 +580,23 @@ impl App {
 
     pub(super) fn submit_multi_pick(&mut self) -> Vec<Effect> {
         let (chosen, then) = match self.modals.top() {
-            Some(Modal::MultiPick(pick)) => (pick.chosen(), pick.then),
+            Some(Modal::MultiPick(pick)) => (pick.chosen(), pick.then.clone()),
             _ => return Vec::new(),
         };
         self.modals.pop();
         match then {
-            MultiThen::RemoveTags => {
+            MultiThen::RemoveTags(targets) => {
                 if chosen.is_empty() {
                     return Vec::new();
                 }
-                if self.batching() {
-                    return self.start_job(jobs::JobKind::RemoveTags(chosen));
+                let mut projects = self.still_here(&targets);
+                if projects.is_empty() {
+                    return self.gone_from_the_library();
                 }
-                let Some(project) = self.library.selected().cloned() else {
-                    return Vec::new();
-                };
+                if targets.batch {
+                    return self.start_job_over(jobs::JobKind::RemoveTags(chosen), projects);
+                }
+                let project = projects.remove(0);
                 self.run_action(
                     "removing tags…",
                     Action::RemoveTags {
@@ -590,6 +616,7 @@ impl App {
         if targets.is_empty() {
             return Vec::new();
         }
+        let asked = self.targets_now();
         let available: Vec<String> = self
             .library
             .known_tags
@@ -605,7 +632,7 @@ impl App {
         if available.is_empty() {
             self.modals.push(Modal::TextPrompt(TextPrompt::new(
                 validators::ADD_TAG_PROMPT,
-                TextThen::AddTag,
+                TextThen::AddTag(asked),
             )));
             return Vec::new();
         }
@@ -623,8 +650,11 @@ impl App {
             detail: String::new(),
             value: crate::tui::app::actions::NEW_TAG.to_string(),
         });
-        self.modals
-            .push(Modal::Pick(PickState::new(title, items, Then::AddTag)));
+        self.modals.push(Modal::Pick(PickState::new(
+            title,
+            items,
+            Then::AddTag(asked),
+        )));
         Vec::new()
     }
 
@@ -642,24 +672,13 @@ impl App {
                 value: path.display().to_string(),
             })
             .collect();
+        let asked = self.targets_now();
         self.modals.push(Modal::Pick(PickState::new(
             "Move to which base?",
             items,
-            Then::MoveToBase,
+            Then::MoveToBase(asked),
         )));
         Vec::new()
-    }
-
-    /// A move as a one-item job, with the progress modal up while it runs.
-    pub(super) fn run_move(&mut self, target: PathBuf) -> Vec<Effect> {
-        let Some(project) = self.library.selected().cloned() else {
-            return Vec::new();
-        };
-        self.start_background(
-            crate::core::jobs::JobKind::Move,
-            vec![project],
-            Some(target),
-        )
     }
 
     /// `M`/`J`: read the full metadata or journal on a worker, then show it.

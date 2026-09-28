@@ -308,15 +308,13 @@ impl App {
 
     fn on_note_from_editor(&mut self, project: Box<Project>, text: Option<String>) -> Vec<Effect> {
         self.session = crate::tui::frame::recent_actions();
+        // The editor ran once; the note goes to what it was opened about.
+        let targets = self
+            .editor_note_for
+            .take()
+            .unwrap_or_else(|| crate::tui::app::actions::Targets::one(project.path.clone()));
         match text {
-            Some(text) if !text.trim().is_empty() => {
-                if self.batching() {
-                    // The editor ran once; the note goes to every mark.
-                    self.start_job(jobs::JobKind::Note(text))
-                } else {
-                    self.run_action("adding a note…", Action::AppendNote { project, text })
-                }
-            }
+            Some(text) if !text.trim().is_empty() => self.add_note(text, &targets),
             _ => {
                 self.info("no note written");
                 Vec::new()

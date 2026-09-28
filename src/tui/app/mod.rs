@@ -241,6 +241,9 @@ pub struct App {
     /// note or a todo added — so the answer lands on the row it was about:
     /// the cursor settles there and it pulses, as an edit's does.
     pane_pending: Option<pane::PaneTarget>,
+    /// What the `$EDITOR` note was opened about, kept while the editor has
+    /// the terminal: the text it comes back with goes to these.
+    editor_note_for: Option<actions::Targets>,
     /// What the pane's cursor is on, so a rebuild of the rows under it — a
     /// re-read, a re-wrap at a new width — finds the same thing again rather
     /// than the same index (`refind_pane`).
@@ -371,6 +374,7 @@ impl App {
             pane_pulses: motion::Pulses::default(),
             pane_return: None,
             pane_pending: None,
+            editor_note_for: None,
             pane_anchor: None,
             pane_for: None,
             pane_seek: None,

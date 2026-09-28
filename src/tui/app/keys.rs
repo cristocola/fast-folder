@@ -119,6 +119,37 @@ impl App {
             .cloned()
     }
 
+    /// What a verb asked now would act on — the marks in view, or the
+    /// selection — for the dialog that asks to carry.
+    pub(super) fn targets_now(&self) -> crate::tui::app::actions::Targets {
+        crate::tui::app::actions::Targets {
+            paths: self
+                .library
+                .targets()
+                .into_iter()
+                .map(|project| project.path)
+                .collect(),
+            batch: self.batching(),
+        }
+    }
+
+    /// The projects a dialog named that the library still holds, in the
+    /// dialog's order.
+    pub(super) fn still_here(&self, targets: &crate::tui::app::actions::Targets) -> Vec<Project> {
+        targets
+            .paths
+            .iter()
+            .filter_map(|path| self.project_at(path))
+            .collect()
+    }
+
+    /// Whether the project at `path` is the one the cursor is on.
+    pub(super) fn is_selected(&self, path: &Path) -> bool {
+        self.library
+            .selected()
+            .is_some_and(|project| project.path == path)
+    }
+
     /// The named project is not in the library any more, so the verb does not
     /// run — on a neighbour least of all.
     pub(super) fn gone_from_the_library(&mut self) -> Vec<Effect> {

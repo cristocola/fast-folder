@@ -227,8 +227,12 @@ fn only_the_runtime_touches_the_terminal() {
     let mut offenders = Vec::new();
     for layer in ["tui", "cli"] {
         for path in sources(layer) {
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            if name == "runtime.rs" || name == "inline.rs" {
+            // The two files themselves, by their place: a `runtime.rs` or an
+            // `inline.rs` anywhere else is not one of them.
+            if ["runtime.rs", "inline.rs"]
+                .iter()
+                .any(|name| path.ends_with(Path::new("tui").join(name)))
+            {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();

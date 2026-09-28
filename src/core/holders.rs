@@ -380,12 +380,12 @@ mod imp {
         fn CloseHandle(handle: *mut c_void) -> i32;
     }
 
+    use crate::util::win::{
+        ERROR_SHARING_VIOLATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_ALL, OPEN_EXISTING,
+    };
+
     const DELETE: u32 = 0x0001_0000;
-    const SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
-    const OPEN_EXISTING: u32 = 3;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    const ERROR_SHARING_VIOLATION: i32 = 32;
 
     /// Whether a program has `folder` open without letting it be deleted —
     /// a console working there does. Only "in use" counts: a folder fastf
@@ -397,7 +397,7 @@ mod imp {
             let handle = CreateFileW(
                 wide.as_ptr(),
                 DELETE,
-                SHARE_ALL,
+                FILE_SHARE_ALL,
                 std::ptr::null_mut(),
                 OPEN_EXISTING,
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,

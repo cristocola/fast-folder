@@ -206,12 +206,10 @@ fn try_lock(path: &Path) -> Result<Option<File>> {
 /// same path fails with `ERROR_SHARING_VIOLATION` while we hold it.
 #[cfg(windows)]
 fn try_lock_with(path: &Path, create: bool) -> Result<Option<File>> {
+    // Held: the file is open in another process and shares nothing, or
+    // another handle on it has an incompatible sharing mode.
+    use crate::util::win::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
     use std::os::windows::fs::OpenOptionsExt;
-
-    /// The file is open in another process and shares nothing.
-    const ERROR_SHARING_VIOLATION: i32 = 32;
-    /// Another handle exists with an incompatible sharing mode.
-    const ERROR_ACCESS_DENIED: i32 = 5;
 
     match OpenOptions::new()
         .create(create)

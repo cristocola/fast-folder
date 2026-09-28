@@ -483,28 +483,16 @@ fn wait_for_mount_sleeping(
     }
 }
 
-/// Windows error codes worth retrying.
-#[cfg(windows)]
-mod codes {
-    /// The file is in use by another process.
-    pub const ERROR_ACCESS_DENIED: i32 = 5;
-    /// Another process has the file open and won't share it.
-    pub const ERROR_SHARING_VIOLATION: i32 = 32;
-    /// A byte-range lock is held on the file.
-    pub const ERROR_LOCK_VIOLATION: i32 = 33;
-    /// A directory still had entries — transient while a scanner releases them.
-    pub const ERROR_DIR_NOT_EMPTY: i32 = 145;
-}
-
 /// True when `err` is the kind of transient contention worth waiting out.
 #[cfg(windows)]
 fn is_transient(err: &io::Error) -> bool {
+    use crate::util::win;
     matches!(
         err.raw_os_error(),
-        Some(codes::ERROR_ACCESS_DENIED)
-            | Some(codes::ERROR_SHARING_VIOLATION)
-            | Some(codes::ERROR_LOCK_VIOLATION)
-            | Some(codes::ERROR_DIR_NOT_EMPTY)
+        Some(win::ERROR_ACCESS_DENIED)
+            | Some(win::ERROR_SHARING_VIOLATION)
+            | Some(win::ERROR_LOCK_VIOLATION)
+            | Some(win::ERROR_DIR_NOT_EMPTY)
     )
 }
 

@@ -72,8 +72,8 @@ fn copy_file(
     }
     #[cfg(windows)]
     {
+        use crate::util::win::FILE_FLAG_OPEN_REPARSE_POINT;
         use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         reading.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
     let mut reader = match reading.open(&source_path) {
@@ -342,9 +342,8 @@ fn set_folder_attributes(folder: &Path, original: &fs::Metadata) {
     use std::os::windows::fs::OpenOptionsExt;
     // A folder opens only for backup semantics; the handle asks for nothing
     // but its attributes, and never follows a link.
+    use crate::util::win::{FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT};
     const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
-    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let Ok(handle) = OpenOptions::new()
         .access_mode(FILE_WRITE_ATTRIBUTES)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)

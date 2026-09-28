@@ -29,5 +29,7 @@ pub mod trace;
 pub(crate) mod tree_size;
 pub mod tty;
 #[cfg(windows)]
+pub(crate) mod win;
+#[cfg(windows)]
 pub(crate) mod win_reparse;
 pub mod yaml;

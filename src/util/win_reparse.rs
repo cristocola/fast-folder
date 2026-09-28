@@ -14,18 +14,18 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
+use crate::util::win::{
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_ALL, OPEN_EXISTING,
+};
+
 pub const IO_REPARSE_TAG_MOUNT_POINT: u32 = 0xA000_0003;
 pub const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
 
 type Handle = *mut c_void;
 
 const INVALID_HANDLE_VALUE: Handle = -1_isize as Handle;
-const OPEN_EXISTING: u32 = 3;
-const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_READ_ATTRIBUTES: u32 = 0x80;
 const GENERIC_WRITE: u32 = 0x4000_0000;
-const FILE_SHARE_ALL: u32 = 0x1 | 0x2 | 0x4;
 /// `FILE_INFO_BY_HANDLE_CLASS::FileAttributeTagInfo`.
 const FILE_ATTRIBUTE_TAG_INFO: i32 = 9;
 const FSCTL_SET_REPARSE_POINT: u32 = 0x0009_00A4;

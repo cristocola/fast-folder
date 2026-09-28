@@ -338,10 +338,11 @@ pub fn plan(
 }
 
 /// Create the project on disk: folders, files, and increment the counter.
-/// Writes the project's `PROJECT_INFO.md` (its identity), updates the base
-/// cache, and runs post-create actions (if enabled globally or per-template).
-/// The cache update and post-create are best-effort — they never fail the
-/// create operation itself. Copies the whole `files/` subtree inline.
+/// Writes the project's `PROJECT_INFO.md` (its identity) and updates the base
+/// cache, which is best-effort and never fails the create. Copies the whole
+/// `files/` subtree inline. With `run_post` it runs the post-create actions
+/// too; no surface asks for that, since a caller holds the data lock here and
+/// the actions want a terminal: both run [`run_post_create`] afterwards.
 /// Returns the plan **as actually realized** — the folder name and path may
 /// carry a `_2` suffix that the caller's plan did not, because the atomic claim
 /// is what arbitrates collisions. Callers must report from the returned plan,

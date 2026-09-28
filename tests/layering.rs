@@ -39,6 +39,20 @@ fn sources(layer: &str) -> Vec<PathBuf> {
     found
 }
 
+/// A file that holds only unit tests: one named `tests.rs`, or anything in a
+/// `tests/` folder beside the module it tests. Judged on the path below `src/`,
+/// so a checkout that happens to sit under a folder named `tests` exempts
+/// nothing.
+fn is_test_file(path: &Path) -> bool {
+    let below = path
+        .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+        .unwrap_or(path);
+    below.file_name().is_some_and(|name| name == "tests.rs")
+        || below
+            .parent()
+            .is_some_and(|dir| dir.components().any(|part| part.as_os_str() == "tests"))
+}
+
 /// Nothing under `core/` may ask a question. The same functions serve scripted,
 /// non-interactive runs, where there is no terminal to prompt on and no user
 /// watching one — so a prompt there is a hang no caller can avoid.
@@ -128,14 +142,14 @@ fn core_and_util_do_not_render() {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if ALLOWED.contains(&file_name.as_str()) {
+            // A unit test may print: it is describing a failure to a human
+            // who is already looking at a terminal.
+            if ALLOWED.contains(&file_name.as_str()) || is_test_file(&path) {
                 continue;
             }
             let text = fs::read_to_string(&path).unwrap();
             let mut in_tests = false;
             for (number, line) in text.lines().enumerate() {
-                // A unit test may print: it is describing a failure to a human
-                // who is already looking at a terminal.
                 if line.trim_start().starts_with("mod tests") {
                     in_tests = true;
                 }
@@ -365,8 +379,7 @@ fn every_canonicalization_goes_through_the_helper() {
     let mut offenders = Vec::new();
     for layer in ["cli", "core", "tui", "util"] {
         for path in sources(layer) {
-            let name = path.file_name().unwrap();
-            if name == "tests.rs" {
+            if is_test_file(&path) {
                 continue;
             }
             // The helper's own call is the one allowed.

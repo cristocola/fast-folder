@@ -583,7 +583,7 @@ impl App {
             }
             CommandId::ReautoTags => {
                 if self.batching() {
-                    return self.start_job(jobs::JobKind::ReautoTags, None);
+                    return self.start_job(jobs::JobKind::ReautoTags);
                 }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();

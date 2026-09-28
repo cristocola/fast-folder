@@ -416,7 +416,7 @@ impl App {
     /// One tag, on the selection or on every mark.
     pub(super) fn add_tag(&mut self, tag: String) -> Vec<Effect> {
         if self.batching() {
-            return self.start_job(jobs::JobKind::AddTag(tag), None);
+            return self.start_job(jobs::JobKind::AddTag(tag));
         }
         let Some(project) = self.library.selected().cloned() else {
             return Vec::new();
@@ -433,7 +433,7 @@ impl App {
     /// One note, on the selection or on every mark.
     fn add_note(&mut self, text: String) -> Vec<Effect> {
         if self.batching() {
-            return self.start_job(jobs::JobKind::Note(text), None);
+            return self.start_job(jobs::JobKind::Note(text));
         }
         let Some(project) = self.library.selected().cloned() else {
             return Vec::new();
@@ -533,7 +533,7 @@ impl App {
                 let targets = self.library.targets();
                 self.start_background(crate::core::jobs::JobKind::Delete, targets, None)
             }
-            ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister, None),
+            ConfirmThen::UnregisterBatch => self.start_job(jobs::JobKind::Unregister),
         }
     }
 
@@ -566,7 +566,7 @@ impl App {
                     return Vec::new();
                 }
                 if self.batching() {
-                    return self.start_job(jobs::JobKind::RemoveTags(chosen), None);
+                    return self.start_job(jobs::JobKind::RemoveTags(chosen));
                 }
                 let Some(project) = self.library.selected().cloned() else {
                     return Vec::new();

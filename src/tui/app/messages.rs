@@ -277,7 +277,7 @@ impl App {
                     Some(text) if !text.trim().is_empty() => {
                         if self.batching() {
                             // The editor ran once; the note goes to every mark.
-                            self.start_job(jobs::JobKind::Note(text), None)
+                            self.start_job(jobs::JobKind::Note(text))
                         } else {
                             self.run_action("adding a note…", Action::AppendNote { project, text })
                         }

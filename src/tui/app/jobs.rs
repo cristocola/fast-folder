@@ -13,8 +13,6 @@
 //! unregister, the tags and the notes. Rename stays single: every row would
 //! need its own name.
 
-use std::path::PathBuf;
-
 use super::App;
 use crate::core::assets::Progress;
 use crate::core::library::Project;
@@ -97,8 +95,6 @@ impl JobKind {
 #[derive(Debug)]
 pub struct Job {
     pub kind: JobKind,
-    /// The folder every item goes to; no kind this runner carries has one.
-    pub target: Option<PathBuf>,
     /// Items that have not run yet.
     pub pending: Vec<Project>,
     /// The item a worker is running right now.
@@ -114,10 +110,9 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(kind: JobKind, targets: Vec<Project>, target: Option<PathBuf>) -> Self {
+    pub fn new(kind: JobKind, targets: Vec<Project>) -> Self {
         Self {
             kind,
-            target,
             pending: targets,
             inflight: None,
             done: 0,
@@ -236,12 +231,12 @@ impl Job {
 
 impl App {
     /// Run the verb over every marked project, one item at a time.
-    pub(super) fn start_job(&mut self, kind: JobKind, target: Option<PathBuf>) -> Vec<Effect> {
+    pub(super) fn start_job(&mut self, kind: JobKind) -> Vec<Effect> {
         let targets = self.library.targets();
         if targets.is_empty() {
             return Vec::new();
         }
-        self.job = Some(Job::new(kind, targets, target));
+        self.job = Some(Job::new(kind, targets));
         self.job_advance()
     }
 
@@ -389,7 +384,7 @@ mod tests {
         // The app hands `targets()` over in display order — newest first, as
         // the list shows them — and the job must keep that order.
         let projects = sample_projects(3);
-        let mut job = Job::new(JobKind::Unregister, projects.clone(), None);
+        let mut job = Job::new(JobKind::Unregister, projects.clone());
         let mut order: Vec<String> = Vec::new();
         while let Some(item) = job.begin_next() {
             order.push(item.id.clone());
@@ -403,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_cancelled_job_stops_beginning_items() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3));
         assert!(job.begin_next().is_some());
         job.take_inflight();
         job.cancelled = true;
@@ -416,18 +411,18 @@ mod tests {
         let projects = sample_projects(1);
         let item = projects[0].clone();
         assert!(matches!(
-            Job::new(JobKind::Unregister, projects.clone(), None).action_for(&item),
+            Job::new(JobKind::Unregister, projects.clone()).action_for(&item),
             Action::Unregister(_)
         ));
         // The tag and the note were asked once and ride with the kind.
-        match Job::new(JobKind::AddTag("draft".into()), projects.clone(), None).action_for(&item) {
+        match Job::new(JobKind::AddTag("draft".into()), projects.clone()).action_for(&item) {
             Action::AddTag { project, tag } => {
                 assert_eq!(*project, item);
                 assert_eq!(tag, "draft");
             }
             other => panic!("expected a tag, got {other:?}"),
         }
-        match Job::new(JobKind::Note("first cut".into()), projects, None).action_for(&item) {
+        match Job::new(JobKind::Note("first cut".into()), projects).action_for(&item) {
             Action::AppendNote { project, text } => {
                 assert_eq!(*project, item);
                 assert_eq!(text, "first cut");
@@ -440,7 +435,7 @@ mod tests {
 
     #[test]
     fn the_report_names_failures_and_leftover_marks() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(3), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(3));
         // One clean, one failed, one never run (cancelled).
         job.begin_next();
         job.take_inflight();
@@ -468,7 +463,7 @@ mod tests {
 
     #[test]
     fn a_clean_job_needs_no_report() {
-        let mut job = Job::new(JobKind::Unregister, sample_projects(2), None);
+        let mut job = Job::new(JobKind::Unregister, sample_projects(2));
         while job.begin_next().is_some() {
             job.take_inflight();
             job.done += 1;

@@ -331,6 +331,51 @@ fn a_recursive_register_that_onboards_nothing_fails() {
     );
 }
 
+/// **A register that wrote nothing does not say it registered.** Without a
+/// terminal and without `--yes`, a folder that already is a project is left
+/// as it is; the command says that, and names what it did not do.
+#[test]
+fn a_register_that_left_the_folder_alone_says_so() {
+    let sb = Sandbox::new();
+    let project = sb.plant_project(&sb.base, "2026-01-01_Alpha_ID0001", "ID0001");
+    let file = project.join("PROJECT_INFO.md");
+    let before = fs::read(&file).unwrap();
+
+    let out = sb.run(&[
+        "register",
+        &project.display().to_string(),
+        "--template",
+        "general",
+        "--name=Alpha",
+        "--apply",
+    ]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    let warned = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(fs::read(&file).unwrap(), before, "nothing was written");
+    assert!(project.is_dir(), "and nothing was renamed");
+    assert!(
+        warned.contains("pass --yes"),
+        "the way through is named:\n{warned}"
+    );
+    assert!(
+        !said.contains("Project registered"),
+        "nothing was registered, so it is not said:\n{said}"
+    );
+    assert!(
+        said.contains("nothing was written") && said.contains("ID0001"),
+        "what happened instead is said:\n{said}"
+    );
+    assert!(
+        said.contains("--apply"),
+        "and so is what was asked for and not done:\n{said}"
+    );
+    assert!(
+        fs::read_dir(&project).unwrap().count() == 1,
+        "the template's folders were not made"
+    );
+}
+
 /// `fastf reconcile` on a library with nothing outstanding says so and exits 0.
 /// Reporting "nothing to do" is the common case and the one that must be quiet.
 #[test]

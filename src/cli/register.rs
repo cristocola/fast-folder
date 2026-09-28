@@ -328,8 +328,6 @@ pub fn stub_template() -> Template {
 // ---------------------------------------------------------------------------
 
 pub fn run(args: RegisterArgs) -> Result<()> {
-    // Resolve template + interactive var prompts up front (the engine itself
-    // never prompts). Without a template, use the registered stub.
     crate::util::paths::require_answer(&args.path)?;
     let canonical = crate::util::paths::canonical(&args.path).with_context(|| {
         format!(
@@ -340,6 +338,8 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 
     let cfg = Config::load()?;
 
+    // The template and its variables are asked for here, before the engine
+    // runs: it never prompts. Without a template, the registered stub.
     let (tmpl, collected_vars) = match &args.template_slug {
         Some(slug) => {
             let t = template::find_by_slug(slug)?;
@@ -355,12 +355,13 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 
     let rename = decide_rename(&args, &canonical, &tmpl, &collected_vars, &cfg)?;
 
-    let on_pinfo_conflict = pinfo_conflict_policy(&args, &canonical);
+    let on_pinfo_conflict = pinfo_conflict_policy(&args, &canonical)?;
 
     if args.apply_structure {
         println!();
     }
 
+    let asked = (args.rename, args.apply_structure);
     let outcome = register_core(RegisterOptions {
         path: args.path,
         template_slug: args.template_slug,
@@ -372,7 +373,11 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         on_pinfo_conflict,
     })?;
 
-    print_registered(&outcome.project);
+    if outcome.pinfo_written {
+        print_registered(&outcome.project);
+    } else {
+        print_left_alone(&outcome.project, asked);
+    }
 
     Ok(())
 }
@@ -426,9 +431,9 @@ fn decide_rename(
 }
 
 /// Decide PROJECT_INFO.md conflict policy.
-fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> PinfoConflict {
+fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> Result<PinfoConflict> {
     let pinfo_path = project_info::pinfo_path(canonical);
-    if pinfo_path.exists() {
+    Ok(if pinfo_path.exists() {
         if args.yes {
             PinfoConflict::Overwrite
         } else if tty::prompt_available() {
@@ -439,9 +444,7 @@ fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> PinfoConflict
                     crate::util::paths::display_path(&pinfo_path)
                 ),
                 false,
-            )
-            .ok()
-            .flatten()
+            )?
             .unwrap_or(false);
             if overwrite {
                 PinfoConflict::Overwrite
@@ -458,6 +461,34 @@ fn pinfo_conflict_policy(args: &RegisterArgs, canonical: &Path) -> PinfoConflict
         }
     } else {
         PinfoConflict::Overwrite
+    })
+}
+
+/// The folder already is a project and was not to be overwritten: what it is,
+/// and what was asked for and not done.
+fn print_left_alone(project: &Project, (rename, apply): (bool, bool)) {
+    println!(
+        "\n{}  {}",
+        "–".dimmed(),
+        "Already a project — nothing was written".bold()
+    );
+    println!("  {} {}", "ID:".dimmed(), project.id);
+    println!(
+        "  {} {}",
+        "→".cyan().bold(),
+        crate::util::paths::display_path(&project.path)
+    );
+    let not_done: Vec<&str> = [(rename, "--rename"), (apply, "--apply")]
+        .into_iter()
+        .filter_map(|(asked, flag)| asked.then_some(flag))
+        .collect();
+    if !not_done.is_empty() {
+        println!(
+            "  {} {} {} not carried out",
+            "note:".dimmed(),
+            not_done.join(" and "),
+            crate::util::plural::of(not_done.len(), "was", "were")
+        );
     }
 }
 

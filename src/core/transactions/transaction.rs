@@ -2,19 +2,6 @@
 
 use super::*;
 
-/// `EIO`: what a FUSE mount answers when it cannot do what was asked yet.
-fn is_io_error(error: &std::io::Error) -> bool {
-    #[cfg(unix)]
-    {
-        error.raw_os_error() == Some(libc::EIO)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = error;
-        false
-    }
-}
-
 /// Whether a move's copy has become the project.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Publication {
@@ -554,23 +541,21 @@ impl MoveTransaction {
     }
 }
 
-/// Ask `op` again, a second apart, for as long as it answers with the I/O
-/// error of a mount still uploading, up to [`RECORD_REMOVAL_WAIT_MS`] of
-/// pauses; pausing through `sleep`.
+/// Ask `op` again for as long as a mount is still uploading
+/// (`fs_retry::still_uploading`), on `schedule::RECORD_UPLOAD`; pausing
+/// through `sleep`.
 pub(super) fn through_uploads<T>(
-    mut sleep: impl FnMut(std::time::Duration),
-    mut op: impl FnMut() -> std::io::Result<T>,
+    sleep: impl FnMut(std::time::Duration),
+    op: impl FnMut() -> std::io::Result<T>,
 ) -> std::io::Result<T> {
-    let mut waited = 0;
-    loop {
-        match op() {
-            Err(error) if is_io_error(&error) && waited < RECORD_REMOVAL_WAIT_MS => {
-                sleep(std::time::Duration::from_millis(1000));
-                waited += 1000;
-            }
-            answer => return answer,
-        }
-    }
+    use crate::util::fs_retry::{Retry, schedule, still_uploading};
+    Retry::on(schedule::RECORD_UPLOAD).run_sleeping(
+        sleep,
+        still_uploading,
+        |_, _| {},
+        |_| Ok(()),
+        op,
+    )
 }
 
 /// Whether two files hold the same bytes, read whole; `false` when either

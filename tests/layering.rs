@@ -406,6 +406,65 @@ fn every_canonicalization_goes_through_the_helper() {
     );
 }
 
+/// **One mechanism asks a filesystem again**: `util::fs_retry`, whose schedules
+/// are the only pauses `core` takes for it. A `sleep` anywhere else under
+/// `src/core` is a retry loop written by hand, on a schedule nobody else knows.
+/// The pauses that are not retries are named here, with what each waits for.
+#[test]
+fn core_asks_again_only_through_fs_retry() {
+    const ALLOWED: [(&str, usize, &str); 2] = [
+        ("jobs.rs", 2, "a worker process saying it has started"),
+        (
+            "removal.rs",
+            1,
+            "a listing catching up, between two listings of one folder",
+        ),
+    ];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut found = Vec::new();
+        let mut gated = false;
+        for (number, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            // The unit tests below a module may wait for a process they
+            // started: a module behind `cfg(test)` ends the scan.
+            if gated && trimmed.starts_with("mod ") {
+                break;
+            }
+            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
+            if !trimmed.starts_with("//") && trimmed.contains("sleep(") {
+                found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+            }
+        }
+        let allowed = ALLOWED
+            .iter()
+            .find(|(file, ..)| *file == name)
+            .map_or(0, |(_, count, _)| *count);
+        if found.len() != allowed {
+            offenders.push(format!(
+                "{name}: {} pause(s) where {allowed} are accounted for\n    {}",
+                found.len(),
+                found.join("\n    ")
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "ask again through `util::fs_retry` (a `Retry` on one of its schedules), or name \
+         what the pause waits for in this test:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same

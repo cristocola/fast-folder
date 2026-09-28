@@ -181,58 +181,49 @@ fn copy_file_again(
 
 /// [`copy_file_again`], pausing through `sleep`.
 pub(super) fn copy_file_again_sleeping(
-    mut sleep: impl FnMut(std::time::Duration),
+    sleep: impl FnMut(std::time::Duration),
     entry: &ManifestEntry,
     source: &Path,
     staging: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<Option<ManifestEntry>> {
-    use crate::util::fs_retry::ErrorClass;
-    const PAUSES_MS: [u64; 6] = [200, 400, 800, 1600, 3200, 5000];
+    use crate::util::fs_retry::{Next, Retry, by_class, schedule};
     let destination = staging.join(&entry.path);
-    let deadline = std::time::Instant::now() + crate::util::fs_retry::mount_wait();
-    // Read at the first "not connected", as `fs_retry::with_retry` does: not
-    // once for every file copied.
-    let mut mounts = None;
-    let mut pauses = 0;
-    loop {
-        let error = match copy_file(entry, source, staging, progress, cancel) {
-            Ok(copied) => return Ok(copied),
-            Err(error) => error,
-        };
-        if cancel.load(Ordering::Relaxed) {
-            return Err(error);
-        }
-        match crate::util::fs_retry::class_of(&error) {
-            Some(ErrorClass::Transient | ErrorClass::Locked) if pauses < PAUSES_MS.len() => {
-                sleep(std::time::Duration::from_millis(PAUSES_MS[pauses]));
-                pauses += 1;
-            }
-            Some(ErrorClass::NotConnected) if std::time::Instant::now() < deadline => {
-                let (at_source, at_staging) = mounts.get_or_insert_with(|| {
-                    (
-                        crate::util::fs_kind::mount_identity(source),
-                        crate::util::fs_kind::mount_identity(staging),
-                    )
-                });
-                crate::util::fs_retry::wait_for_mount(source, at_source.as_deref(), deadline);
-                crate::util::fs_retry::wait_for_mount(staging, at_staging.as_deref(), deadline);
-            }
-            _ => return Err(error),
-        }
-        crate::util::log::info(format!(
-            "copying {} again after: {error:#}",
-            entry.path.display()
-        ));
-        match fs::symlink_metadata(&destination) {
-            Ok(metadata) if metadata.file_type().is_file() => {
-                crate::util::fs_retry::remove_file(&destination)
-                    .with_context(|| format!("removing a part-copied {}", destination.display()))?;
-            }
-            _ => {}
-        }
+    Retry {
+        pauses: schedule::BY_CLASS,
+        mounts: &[source, staging],
+        mount_wait: crate::util::fs_retry::mount_wait(),
     }
+    .run_sleeping(
+        sleep,
+        |error: &anyhow::Error| {
+            if cancel.load(Ordering::Relaxed) {
+                return Next::Stop;
+            }
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .map_or(Next::Stop, by_class)
+        },
+        |_, _| {},
+        |error| {
+            crate::util::log::info(format!(
+                "copying {} again after: {error:#}",
+                entry.path.display()
+            ));
+            match fs::symlink_metadata(&destination) {
+                Ok(metadata) if metadata.file_type().is_file() => {
+                    crate::util::fs_retry::remove_file(&destination).with_context(|| {
+                        format!("removing a part-copied {}", destination.display())
+                    })?;
+                }
+                _ => {}
+            }
+            Ok(())
+        },
+        || copy_file(entry, source, staging, progress, cancel),
+    )
 }
 
 /// An open of a source file that says it is not a file there any more:

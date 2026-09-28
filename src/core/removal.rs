@@ -571,9 +571,13 @@ impl Removing<'_> {
     /// that appeared in it since. Listed again: what is there goes through the
     /// judge like everything else, and a folder that lists empty is asked
     /// again after a moment, a few times.
+    ///
+    /// Not `fs_retry`'s loop: between two asks the folder is listed and what
+    /// it holds judged, and the last pause comes before giving up, not after.
+    /// The pauses are its `schedule::LISTING_LAG`.
     fn empty_again(&self, folder: &Path) -> std::io::Result<()> {
         let mut last = std::io::Error::from(std::io::ErrorKind::DirectoryNotEmpty);
-        for round in 1..=4u64 {
+        for pause in crate::util::fs_retry::schedule::LISTING_LAG {
             let entries = crate::util::fs_retry::list_dir(folder, || Ok(()))?;
             for path in entries {
                 let Ok(metadata) = fs::symlink_metadata(&path) else {
@@ -608,7 +612,7 @@ impl Removing<'_> {
                         == crate::util::fs_retry::ErrorClass::NotEmpty =>
                 {
                     last = error;
-                    std::thread::sleep(std::time::Duration::from_millis(300 * round));
+                    std::thread::sleep(std::time::Duration::from_millis(*pause));
                 }
                 Err(error) => return Err(error),
             }

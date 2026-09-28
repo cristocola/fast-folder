@@ -88,9 +88,6 @@ const COPY_BUFFER_BYTES: usize = 1024 * 1024;
 pub(crate) const LISTED: usize = 10;
 
 static OPERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
-/// How long a record's removal waits for a cloud mount to finish uploading
-/// the record's own files.
-const RECORD_REMOVAL_WAIT_MS: u64 = 20_000;
 
 #[cfg(test)]
 mod tests;

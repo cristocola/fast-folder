@@ -718,19 +718,23 @@ fn staged_in_parts(
         // The file was written a moment ago; a mount that fails one lstat may
         // answer the next. Without the entry, the checks before the old
         // copy's removal measure it against the original's time instead.
-        for attempt in 0..3 {
-            if let Ok(Some(entry)) =
+        use crate::util::fs_retry::{Next, Retry, schedule};
+        let read_back = Retry::on(schedule::READ_BACK).run(
+            |_: &()| Next::Again,
+            |_, _| {},
+            |_| Ok(()),
+            || {
                 transactions::examine(&staging.join(metadata_path), metadata_path)
-            {
-                staged.entries.push(entry);
-                staged
-                    .entries
-                    .sort_by(|left, right| left.path.cmp(&right.path));
-                break;
-            }
-            if attempt < 2 {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
+                    .ok()
+                    .flatten()
+                    .ok_or(())
+            },
+        );
+        if let Ok(entry) = read_back {
+            staged.entries.push(entry);
+            staged
+                .entries
+                .sort_by(|left, right| left.path.cmp(&right.path));
         }
         let published_record = transaction.write_published(&staged)?;
         Ok((manifest, published_record))

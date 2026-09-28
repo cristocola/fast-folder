@@ -268,9 +268,10 @@ and a phase is a marker file `phase.<Name>` created and never touched again
 phase, and the Drive mount kept `Copying` on the remote about a move that had
 retired its original; the only write a cloud mount cannot misplace is one that
 creates a file. The one rename left is the version-2 → 3 rewrite of a 3.11
-record. `MoveTransaction::remove` waits up to twenty seconds through `EIO`,
-which is a cloud mount still uploading the record's last files, and refuses
-while a published record's old staging folder still holds files.
+record. `MoveTransaction::remove` asks again through `EIO`, which is a cloud
+mount still uploading the record's last files (twenty more times, a second
+apart), and refuses while a published record's old staging folder still holds
+files.
 
 The record lives at `.fastf-transactions/<timestamp-pid-counter>/` in the target
 base. `move.json` (version 3; version 2 is read) holds version, operation id,
@@ -480,7 +481,18 @@ above it and answers "nothing there" for everything under it
 (`fs_kind::mount_identity`); Denied, Full, ReadOnly and NameRefused are
 answered at once. The walk, each file's copy (`copy_file_again`: the partial
 file goes, the file is copied again whole), every unlink and rmdir, the
-record's removal and the probe go through it. A removal whose mount is not the
+record's removal and the probe go through it.
+
+**One loop asks again, and every schedule is beside it** (`fs_retry::Retry`,
+`fs_retry::schedule`; the table is the module's doc). A caller names a
+schedule and a judge (`by_class`, contention, `still_uploading`) and never
+writes a loop or a pause of its own: `tests/layering.rs` counts the `sleep`s
+under `src/core` and names what each of the three left waits for, none of
+them a retry. **Waits nest, and multiply**: `with_retry` around
+`fs_retry::remove_file` waits contention out inside every by-class try, and a
+record's removal asks both again inside each of its twenty-one, so on a mount
+that answers `EIO` for good it gives up after about four minutes, not twenty
+seconds. A removal whose mount is not the
 one it started on is never `Removed`, and reconcile waits on a record whose
 source base is not on the mount the index recorded (`records::source_mount`,
 `records::source_unmounted`). `fs_retry::explain` is the one sentence a person
@@ -823,8 +835,9 @@ anything but a real directory directly under the templates dir, because
 two bundled templates without the lock, before a lock file exists, into a
 templates directory it has just found empty.
 
-`util::fs_retry` wraps the destructive calls (Windows sharing violations from
-Defender or the indexer; read-only attribute clearing).
+`util::fs_retry` wraps the destructive calls: on Windows it waits out the
+sharing violations of Defender or the indexer and clears the read-only
+attribute; everywhere, `with_retry` asks again by what the error means.
 
 ## Tags
 

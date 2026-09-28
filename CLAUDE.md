@@ -102,8 +102,9 @@ tell you.
   notes, todos), `validated.rs` (typed slugs, relative paths, tags, project
   folder names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`; says what it waits for
-  after a second), `atomic` (THE atomic write), `fs_retry` (Windows sharing
-  violations, and the read-only attribute a publish must set aside), `interrupt`
+  after a second), `atomic` (THE atomic write), `fs_retry` (the one loop that
+  asks a filesystem again, every schedule it asks on, and the read-only
+  attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
   `pool` (a few threads asking a filesystem several things at once; its width

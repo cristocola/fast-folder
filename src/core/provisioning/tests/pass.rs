@@ -129,6 +129,37 @@ fn a_project_named_like_a_hidden_folder_is_restored_not_removed() {
     assert!(base.join("fastf-deleted-Scenes/payload.part").is_file());
 }
 
+/// **Finishing a case-only rename waits for a folder held for a moment**, as
+/// the rename itself does: Windows renames no folder while a file in it is
+/// open, and 0.8 s is past the file rename's schedule and inside the folder
+/// one.
+#[cfg(windows)]
+#[test]
+fn a_stranded_rename_waits_for_a_folder_held_for_a_moment() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let temp = tempfile::tempdir().unwrap();
+    let base = temp.path().join("base");
+    let stranded = write_project(&base, ".ALBUM.fastf-case", "ID0042");
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(stranded.join("payload.part"))
+        .unwrap();
+    let letting_go = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        drop(held);
+    });
+
+    let report = reconcile_unlocked(&config_for(&base));
+    letting_go.join().unwrap();
+
+    assert_eq!(report.restored, 1, "{report:?}");
+    assert!(report.unrecoverable.is_empty(), "{report:?}");
+    assert!(base.join("ALBUM/payload.part").is_file());
+    assert!(!stranded.exists());
+}
+
 /// A deleted project's hidden folder is finished by the next pass.
 #[test]
 fn a_deleted_projects_hidden_folder_is_cleared() {

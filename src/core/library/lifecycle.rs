@@ -414,15 +414,13 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
             attempt += 1;
             staging = base.join(case_staging_name(&sanitized, attempt));
         }
-        crate::util::fs_retry::rename(&project.path, &staging)
+        crate::util::fs_retry::rename_dir(&project.path, &staging)
             .map_err(|error| held_or(error, &project.path))?;
-        if let Err(err) = crate::util::fs_retry::rename(&staging, &new_path) {
+        if let Err(err) = crate::util::fs_retry::rename_dir(&staging, &new_path) {
             let context = format!("renaming '{}' to '{}'", project.name, sanitized);
             // Put it back rather than leaving the project under a dot-prefixed
-            // name, which discovery skips — that would make it vanish. Retried
-            // like every other destructive rename: a Windows sharing violation is
-            // exactly the kind of thing that failed the commit a moment ago.
-            if let Err(rollback) = crate::util::fs_retry::rename(&staging, &project.path) {
+            // name, which discovery skips — that would make it vanish.
+            if let Err(rollback) = crate::util::fs_retry::rename_dir(&staging, &project.path) {
                 return Err(anyhow::anyhow!(err).context(stranded_rename_message(
                     &context,
                     &staging,
@@ -435,7 +433,7 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         if assets::entry_exists(&new_path)? {
             anyhow::bail!("rename target already exists: {}", new_path.display());
         }
-        crate::util::fs_retry::rename(&project.path, &new_path)
+        crate::util::fs_retry::rename_dir(&project.path, &new_path)
             .map_err(|error| held_or(error, &project.path))?;
     }
 

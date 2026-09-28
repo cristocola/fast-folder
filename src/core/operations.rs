@@ -994,13 +994,13 @@ pub fn save_template(template: &Template, original_slug: Option<&str>) -> Result
             let from = crate::util::paths::template_dir(original.as_str());
             if from.exists() {
                 // The destination has no manifest or we would have bailed
-                // above, but `fs::rename` still needs the path itself free.
+                // above, but the rename still needs the path itself free.
                 if dir.exists() {
                     bail!(
                         "template '{slug}' already exists — rename '{original}' to something else"
                     );
                 }
-                fs::rename(&from, &dir)
+                crate::util::fs_retry::rename_dir(&from, &dir)
                     .with_context(|| format!("renaming template '{original}' to '{slug}'"))?;
             }
         }
@@ -1049,6 +1049,47 @@ pub fn template_from_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Renaming a template waits for a folder held for a moment.** Its folder
+    /// is the template, so a new slug is a folder rename, and Windows renames
+    /// no folder while a file in it is open; 0.8 s is past the file rename's
+    /// schedule and inside the folder one.
+    #[cfg(windows)]
+    #[test]
+    fn a_templates_rename_waits_for_a_folder_held_for_a_moment() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        let (_guard, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let mut template = Template {
+            name: "Album".to_string(),
+            slug: "album".to_string(),
+            naming_pattern: "{id}".to_string(),
+            ..Template::default()
+        };
+        save_template(&template, None).unwrap();
+        let bundled = crate::util::paths::template_dir("album").join("files");
+        fs::create_dir_all(&bundled).unwrap();
+        fs::write(bundled.join("cover.psd"), vec![5_u8; 4096]).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(bundled.join("cover.psd"))
+            .unwrap();
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            drop(held);
+        });
+
+        template.slug = "record".to_string();
+        let saved = save_template(&template, Some("album"));
+        letting_go.join().unwrap();
+
+        saved.expect("the folder was let go inside the folder schedule");
+        let renamed = crate::util::paths::template_dir("record");
+        assert!(renamed.join("files").join("cover.psd").is_file());
+        assert!(renamed.join("template.yaml").is_file());
+        assert!(!crate::util::paths::template_dir("album").exists());
+    }
 
     #[test]
     fn resolve_created_rejects_invalid_dates() {

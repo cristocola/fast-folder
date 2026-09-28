@@ -284,7 +284,7 @@ fn reconcile_case_rename(base: &Path, name: &str, path: &Path, report: &mut Reco
         ));
         return;
     }
-    match crate::util::fs_retry::rename(path, &destination) {
+    match crate::util::fs_retry::rename_dir(path, &destination) {
         Ok(()) => {
             // The base's cache has to learn, exactly as the create arm's resume
             // does. Leaving it to the staleness gate is not enough: a rename

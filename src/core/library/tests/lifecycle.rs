@@ -45,6 +45,53 @@ fn rename_allows_case_only_change() {
     assert_eq!(scan_base(base).len(), 1, "still exactly one project");
 }
 
+/// **A rename waits for a folder that is held for a moment.** Windows renames
+/// no folder while a file in it is open, and a scanner or an indexer reading
+/// what was just written holds it for a second or so: the folder schedule
+/// (`fs_retry::schedule::FOLDER_RENAME`) outlasts that, the file one does not.
+#[cfg(windows)]
+#[test]
+fn a_rename_waits_for_a_folder_held_for_a_moment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let project = scan_base(base).remove(0);
+
+    let held = held_for_a_moment(&base.join("proj_a"));
+    let renamed = rename_project_unlocked(&project, "proj_b");
+    held.join().unwrap();
+
+    let renamed = renamed.expect("the folder was let go inside the folder schedule");
+    assert_eq!(renamed.name, "proj_b");
+    assert!(base.join("proj_b").join("held.mov").is_file());
+    assert!(!base.join("proj_a").exists());
+}
+
+/// The same for a rename that changes only the capitalisation, which is two
+/// renames through a hidden name.
+#[cfg(windows)]
+#[test]
+fn a_case_only_rename_waits_for_a_folder_held_for_a_moment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let project = scan_base(base).remove(0);
+
+    let held = held_for_a_moment(&base.join("proj_a"));
+    let renamed = rename_project_unlocked(&project, "Proj_A");
+    held.join().unwrap();
+
+    let renamed = renamed.expect("the folder was let go inside the folder schedule");
+    assert_eq!(renamed.name, "Proj_A");
+    let names: Vec<String> = fs::read_dir(base)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with(".fastf-"))
+        .collect();
+    assert_eq!(names, ["Proj_A"], "one folder, under its new name");
+}
+
 #[test]
 fn stale_project_identity_cannot_authorize_deletion() {
     let tmp = tempfile::tempdir().unwrap();

@@ -465,6 +465,74 @@ fn core_asks_again_only_through_fs_retry() {
     );
 }
 
+/// **A folder is renamed through `fs_retry::rename_dir`**, whose schedule
+/// outlasts a program holding a file in it for a moment; the file rename's is a
+/// third of a second, and a bare `fs::rename` does not ask again at all.
+/// Nothing in a call says which of the two it renames, so every other rename
+/// under `src/core` is named here with what it renames.
+#[test]
+fn core_renames_a_folder_through_rename_dir() {
+    const NOT_A_FOLDER: [(&str, &str, &str); 4] = [
+        (
+            "assets.rs",
+            "fs_retry::rename(",
+            "a copied file, from its temporary name",
+        ),
+        (
+            "transaction.rs",
+            "fs_retry::rename(",
+            "a file an old staging folder held",
+        ),
+        (
+            "move_engine.rs",
+            "fs::rename(",
+            "the rename whose refusal is the signal to stage",
+        ),
+        (
+            "move_preflight.rs",
+            "fs::rename(",
+            "the probe's own folder, asked again by class",
+        ),
+    ];
+
+    let mut offenders = Vec::new();
+    for path in sources("core") {
+        if is_test_file(&path) {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let text = fs::read_to_string(&path).unwrap();
+        let mut gated = false;
+        for (number, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if gated && trimmed.starts_with("mod ") {
+                break;
+            }
+            gated = trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            for call in ["fs_retry::rename(", "fs::rename("] {
+                let named = NOT_A_FOLDER
+                    .iter()
+                    .any(|(file, allowed, _)| *file == name && *allowed == call);
+                if trimmed.contains(call) && !named {
+                    offenders.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "rename a folder through `fs_retry::rename_dir`, or name what this renames in \
+         this test:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same

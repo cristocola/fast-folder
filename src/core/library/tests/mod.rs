@@ -48,6 +48,26 @@ fn cfg_for(base: &Path, extra: &[&Path]) -> Config {
     }
 }
 
+/// A file in `folder` held open the way an editor or a scanner holds one —
+/// readable by others, never deletable — and let go after 0.8 s: past the file
+/// rename's whole schedule (0.31 s), well inside the folder one (2.47 s).
+#[cfg(windows)]
+fn held_for_a_moment(folder: &Path) -> std::thread::JoinHandle<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    let path = folder.join("held.mov");
+    fs::write(&path, vec![5_u8; 4096]).unwrap();
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&path)
+        .unwrap();
+    std::thread::spawn(move || {
+        sleep(Duration::from_millis(800));
+        drop(held);
+    })
+}
+
 /// fastf's hidden per-project folders in `base`: a retired original, a
 /// deleted project on its way out.
 fn retired_folders(base: &Path) -> Vec<String> {

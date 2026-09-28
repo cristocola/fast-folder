@@ -603,9 +603,11 @@ read-only attribute cleared before `RemoveDirectoryW` (`clear_read_only_folder`,
 real folders only — on a link it would reach the target).
 
 **A folder rename uses `fs_retry::rename_dir`**, whose ≈ 2.5 s schedule outlasts an
-indexer holding a freshly written tree; the short one discarded a verified staging
-copy at publish. On Windows a refused folder rename means a program has something
-in it open (`describe_rename_error`).
+indexer holding a freshly written tree; the file rename's is a third of a second,
+and a bare `fs::rename` asks once. Nothing in a call says which it renames, so
+`tests/layering.rs` names every other rename under `src/core` with what it
+renames. On Windows a refused folder rename means a program has something in it
+open (`describe_rename_error`).
 
 ## Jobs, and the lock split
 

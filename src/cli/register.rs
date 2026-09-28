@@ -118,7 +118,8 @@ impl RegisterFlags {
                 if set {
                     bail!(
                         "{flag} cannot be used with --recursive: bulk registration never prompts, \
-                         never renames, and takes each folder's own date"
+                         never renames, and dates each folder by its own date (or by today, \
+                         with --use-today)"
                     );
                 }
             }

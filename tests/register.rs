@@ -520,6 +520,30 @@ fn register_rejects_a_duplicate_recovered_id() {
     });
 }
 
+/// What the options rule out is refused whatever the folder holds: a folder
+/// that would be skipped does not answer `Ok` for options that make no sense.
+#[test]
+fn register_refuses_options_that_exclude_each_other_before_it_skips() {
+    sandboxed(|install| {
+        let target = install.join("already-registered");
+        fs::create_dir_all(&target).unwrap();
+        register_run(register_args(&target)).unwrap();
+
+        let err = fastf::core::operations::register(fastf::core::operations::RegisterOptions {
+            path: target.clone(),
+            template_slug: None,
+            vars: HashMap::new(),
+            apply_structure: true,
+            rename: false,
+            use_today: false,
+            created_override: None,
+            on_pinfo_conflict: fastf::core::operations::PinfoConflict::Skip,
+        })
+        .expect_err("--apply without a template is refused");
+        assert!(err.to_string().contains("--apply requires --template"));
+    });
+}
+
 #[test]
 fn register_skip_is_an_immediate_no_op() {
     sandboxed(|install| {

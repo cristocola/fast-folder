@@ -157,6 +157,14 @@ pub struct RegisterOutcome {
 
 pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
     let canonical = registration_target(&options.path)?;
+    // What the options themselves rule out, before the lock and before a
+    // folder that is skipped could answer for them.
+    if options.apply_structure && options.template_slug.is_none() {
+        bail!("--apply requires --template");
+    }
+    if options.use_today && options.created_override.is_some() {
+        bail!("--use-today and --created are mutually exclusive");
+    }
 
     let (registered, template, desired_rename) = {
         let _mutation_lock = DataLock::acquire()?;
@@ -167,12 +175,6 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             return Ok(skipped);
         }
 
-        if options.apply_structure && options.template_slug.is_none() {
-            bail!("--apply requires --template");
-        }
-        if options.use_today && options.created_override.is_some() {
-            bail!("--use-today and --created are mutually exclusive");
-        }
         let counters = Counters::load()?;
         let (template, raw_values) = registration_template(&options)?;
 

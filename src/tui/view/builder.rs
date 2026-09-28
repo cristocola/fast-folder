@@ -869,7 +869,7 @@ fn render_setting_editor(
         return None;
     }
     match editing {
-        // Drawn on the footer by `render_settings`, not over a row: it is not
+        // Drawn on the footer by `render_settings_filter`, not over a row: it is not
         // a value, so it belongs to no row.
         Editing::Filter => None,
         Editing::Value { label, input, .. } => {

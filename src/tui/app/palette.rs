@@ -85,6 +85,7 @@ pub fn build(
     library: &LibraryState,
     cards: &[TemplateCard],
     fuzzy: &mut Fuzzy,
+    g: &crate::tui::theme::Glyphs,
 ) -> Vec<PaletteEntry> {
     let (projects_only, query) = match query.trim_start().strip_prefix(['#', '@']) {
         Some(rest) => (true, rest.trim()),
@@ -95,7 +96,7 @@ pub fn build(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     if !projects_only {
-        candidates.extend(command_candidates(query, &commands, fuzzy));
+        candidates.extend(command_candidates(query, &commands, fuzzy, g));
     }
     candidates.extend(project_candidates(
         query,
@@ -118,6 +119,7 @@ fn command_candidates(
     query: &str,
     commands: &[(&'static Command, Availability)],
     fuzzy: &mut Fuzzy,
+    g: &crate::tui::theme::Glyphs,
 ) -> Vec<Candidate> {
     let mut candidates: Vec<Candidate> = Vec::new();
     let words = Fuzzy::words(query);
@@ -140,7 +142,12 @@ fn command_candidates(
                 target: PaletteTarget::Command(command.id),
                 title: command.title.to_string(),
                 detail: command.description.to_string(),
-                key: command.keys.first().map(|k| k.label()).unwrap_or_default(),
+                // In the terminal's alphabet, as every other key label is.
+                key: command
+                    .keys
+                    .first()
+                    .map(|k| k.label_in(g))
+                    .unwrap_or_default(),
                 enabled: *availability == Availability::Enabled,
                 reason: match availability {
                     Availability::Disabled(reason) => Some(reason),
@@ -334,6 +341,7 @@ impl App {
             &self.library,
             &self.templates.cards,
             &mut self.fuzzy,
+            &self.theme.glyphs,
         );
         if let Some(Modal::Palette(palette)) = self.modals.top_mut() {
             palette.set_entries(entries);

@@ -478,8 +478,8 @@ impl PaneRow {
 /// read added — a warning if a read failed, the todos, the notes, and only
 /// then the reference material, the template's variables and the folder's top
 /// level. A short pane — under the list, or a small window — shows the living
-/// sections without a scroll. Tags, notes and todos are one row each so a
-/// cursor can rest on one, with the row that adds one under them; their rules
+/// sections without a scroll. A tag, a note and a todo each have one row a
+/// cursor can rest on, with the row that adds one under them; their rules
 /// are drawn whenever there is something to add to, which is always.
 ///
 /// **Nothing in the header is cut.** The name wraps after the joints of a

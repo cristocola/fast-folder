@@ -1015,8 +1015,12 @@ fn variable_field_body(key: &str) -> Option<(&'static str, &'static [Block])> {
 mod tests {
     use super::*;
 
-    /// Every block in the module, wherever it is declared.
+    /// Every block in the module, wherever it is declared: the guide's pages,
+    /// each section's panel, and the panel of every field the builder's forms
+    /// have.
     fn all_blocks() -> Vec<&'static Block> {
+        use crate::tui::app::studio::{id_form, metadata_form, variable_form};
+
         let mut out: Vec<&'static Block> = Vec::new();
         for page in PAGES {
             out.extend(page.body.iter());
@@ -1024,6 +1028,21 @@ mod tests {
         for section in Section::ALL {
             out.extend(static_body(section).iter());
         }
+        let template = Template::default();
+        let mut fields = 0;
+        for (section, form) in [
+            (Section::Metadata, metadata_form(&template)),
+            (Section::Id, id_form(&template)),
+            (Section::Variables, variable_form(None)),
+        ] {
+            for field in &form.fields {
+                if let Some((_, body)) = field_body(section, &field.key) {
+                    out.extend(body.iter());
+                    fields += 1;
+                }
+            }
+        }
+        assert!(fields >= 13, "the forms' fields are walked: {fields}");
         out
     }
 

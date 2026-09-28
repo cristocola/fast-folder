@@ -113,8 +113,8 @@ pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>
 }
 
 /// What is unfinished, over the bases [`summary_bases`] found answering.
-pub fn summary_attention(cfg: &Config, probed: Vec<(PathBuf, paths::Probe)>) -> SummaryPart {
-    SummaryPart::Attention(crate::core::attention::attention_probed(cfg, probed))
+pub fn summary_attention(probed: Vec<(PathBuf, paths::Probe)>) -> SummaryPart {
+    SummaryPart::Attention(crate::core::attention::attention_probed(probed))
 }
 
 /// Everything the settings screen shows. Read on a worker: the counter floor

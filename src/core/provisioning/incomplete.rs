@@ -45,16 +45,27 @@ pub struct Incomplete {
     pub record: Option<String>,
 }
 
+impl Incomplete {
+    /// An item at `path`, with nothing pending and no record of its own.
+    fn at(path: &Path, kind: IncompleteKind) -> Self {
+        Self {
+            path: path.display().to_string(),
+            kind,
+            pending: 0,
+            record: None,
+        }
+    }
+}
+
 /// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
 /// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
-    list_incomplete_in(cfg, &cfg.effective_bases())
+    list_incomplete_in(&cfg.effective_bases())
 }
 
 /// [`list_incomplete`] over `bases` alone: the ones that answered a probe
 /// (`core::attention`), so a base that does not answer never freezes it.
-pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
-    let _ = cfg;
+pub fn list_incomplete_in(bases: &[PathBuf]) -> Vec<Incomplete> {
     // A job running now is not something that needs attention: its records
     // are its own until it ends.
     let live = crate::core::jobs::live_workers();
@@ -83,23 +94,13 @@ pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
                 if file_type.is_dir() && !file_type.is_symlink() {
                     list_move_transactions(&base, &path, &mut out, &mut operations, &live);
                 } else {
-                    out.push(Incomplete {
-                        path: path.display().to_string(),
-                        kind: IncompleteKind::MoveV2Invalid,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(&path, IncompleteKind::MoveV2Invalid));
                 }
                 continue;
             }
             if file_type.is_dir() && !file_type.is_symlink() {
                 if is_stranded_case_rename(&name, &path) {
-                    out.push(Incomplete {
-                        path: path.display().to_string(),
-                        kind: IncompleteKind::RenameStaging,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(&path, IncompleteKind::RenameStaging));
                     continue;
                 }
                 if let Some(operation) = transactions::retired_operation(&name) {
@@ -112,44 +113,28 @@ pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
                     continue;
                 }
                 if hidden.is_some() {
-                    out.push(Incomplete {
-                        path: path.display().to_string(),
-                        kind: IncompleteKind::Leftover,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(&path, IncompleteKind::Leftover));
                     continue;
                 }
                 if entry_exists_quiet(&legacy_create_marker_path(&path)) {
-                    out.push(Incomplete {
-                        path: legacy_create_marker_path(&path).display().to_string(),
-                        kind: IncompleteKind::ObsoleteCreateV1,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(
+                        &legacy_create_marker_path(&path),
+                        IncompleteKind::ObsoleteCreateV1,
+                    ));
                 }
                 if entry_exists_quiet(&create_journal_path(&path)) {
                     match read_create_journal(&path) {
                         Ok(journal) => out.push(Incomplete {
-                            path: path.display().to_string(),
-                            kind: IncompleteKind::Create,
                             pending: journal.jobs.len(),
-                            record: None,
+                            ..Incomplete::at(&path, IncompleteKind::Create)
                         }),
-                        Err(_) => out.push(Incomplete {
-                            path: create_journal_path(&path).display().to_string(),
-                            kind: IncompleteKind::CreateV2Invalid,
-                            pending: 0,
-                            record: None,
-                        }),
+                        Err(_) => out.push(Incomplete::at(
+                            &create_journal_path(&path),
+                            IncompleteKind::CreateV2Invalid,
+                        )),
                     }
                 } else if crate::core::project_info::is_provisioning(&path) {
-                    out.push(Incomplete {
-                        path: path.display().to_string(),
-                        kind: IncompleteKind::Create,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(&path, IncompleteKind::Create));
                 }
             } else if let Some(operation) = move_cleanup::deleted_record_operation(&name) {
                 // A delete emptying its folder in place, unless it is done
@@ -157,46 +142,26 @@ pub fn list_incomplete_in(cfg: &Config, bases: &[PathBuf]) -> Vec<Incomplete> {
                 let settling = crate::core::records::get(operation)
                     .is_some_and(|entry| entry.gone_at.is_some());
                 if !mine(operation) && !settling {
-                    out.push(Incomplete {
-                        path: path.display().to_string(),
-                        kind: IncompleteKind::Leftover,
-                        pending: 0,
-                        record: None,
-                    });
+                    out.push(Incomplete::at(&path, IncompleteKind::Leftover));
                 }
             } else if let Some(operation) = transactions::pointer_operation(&name) {
                 pointers.push((path, operation.to_string()));
             } else if name.starts_with(MARKER_MOVE_PREFIX) && name.ends_with(".json") {
-                out.push(Incomplete {
-                    path: path.display().to_string(),
-                    kind: IncompleteKind::ObsoleteMoveV1,
-                    pending: 0,
-                    record: None,
-                });
+                out.push(Incomplete::at(&path, IncompleteKind::ObsoleteMoveV1));
             }
         }
     }
     // A pointer whose record is gone: its old copy has no record either.
     for (path, operation) in pointers {
         if !operations.contains(&operation) && !mine(&operation) {
-            out.push(Incomplete {
-                path: path.display().to_string(),
-                kind: IncompleteKind::Leftover,
-                pending: 0,
-                record: None,
-            });
+            out.push(Incomplete::at(&path, IncompleteKind::Leftover));
         }
     }
     // A retired folder with a transaction is that transaction's; one without
     // is a leftover of its own.
     for (path, operation) in retired {
         if !operations.contains(&operation) && !mine(&operation) {
-            out.push(Incomplete {
-                path: path.display().to_string(),
-                kind: IncompleteKind::Leftover,
-                pending: 0,
-                record: None,
-            });
+            out.push(Incomplete::at(&path, IncompleteKind::Leftover));
         }
     }
     out
@@ -210,12 +175,7 @@ fn list_move_transactions(
     live: &crate::core::jobs::Live,
 ) {
     if crate::util::paths::require_real_directory(root, "transaction root").is_err() {
-        out.push(Incomplete {
-            path: root.display().to_string(),
-            kind: IncompleteKind::MoveV2Invalid,
-            pending: 0,
-            record: None,
-        });
+        out.push(Incomplete::at(root, IncompleteKind::MoveV2Invalid));
         return;
     }
     let Ok(entries) = fs::read_dir(root) else {
@@ -243,20 +203,16 @@ fn list_move_transactions(
                     pending: 0,
                     record: Some(operation_dir.display().to_string()),
                 }),
-                Err(_) => out.push(Incomplete {
-                    path: operation_dir.display().to_string(),
-                    kind: IncompleteKind::MoveV2Invalid,
-                    pending: 0,
-                    record: None,
-                }),
+                Err(_) => out.push(Incomplete::at(
+                    &operation_dir,
+                    IncompleteKind::MoveV2Invalid,
+                )),
             }
         } else {
-            out.push(Incomplete {
-                path: operation_dir.display().to_string(),
-                kind: IncompleteKind::MoveV2Invalid,
-                pending: 0,
-                record: None,
-            });
+            out.push(Incomplete::at(
+                &operation_dir,
+                IncompleteKind::MoveV2Invalid,
+            ));
         }
     }
 }

@@ -247,15 +247,12 @@ pub fn write_verdicts(verdicts: &[Verdict]) {
 pub fn attention(cfg: &Config) -> Attention {
     let bases = cfg.effective_bases();
     let probed = crate::util::paths::probe_dirs(&bases, crate::util::paths::PROBE_TIMEOUT);
-    attention_probed(cfg, probed)
+    attention_probed(probed)
 }
 
 /// [`attention`], over bases already probed — the app's summary probes them
 /// once for both.
-pub fn attention_probed(
-    cfg: &Config,
-    probed: Vec<(PathBuf, crate::util::paths::Probe)>,
-) -> Attention {
+pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> Attention {
     let mut items = Vec::new();
     let mut answering = Vec::new();
     for (base, probe) in probed {
@@ -278,7 +275,7 @@ pub fn attention_probed(
     }
     let verdicts = read_verdicts();
     let verdict_for = |path: &Path| verdicts.iter().find(|verdict| verdict.path == path);
-    let incomplete = provisioning::list_incomplete_in(cfg, &answering);
+    let incomplete = provisioning::list_incomplete_in(&answering);
     items.extend(settling(&incomplete, &answering));
     for incomplete in incomplete {
         let path = PathBuf::from(&incomplete.path);

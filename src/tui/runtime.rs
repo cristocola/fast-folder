@@ -851,7 +851,7 @@ fn read_summary(generation: u64, tx: &Sender<Msg>) {
     send(loaders::summary_local(&cfg));
     let (bases, probed) = loaders::summary_bases(&cfg);
     send(bases);
-    send(loaders::summary_attention(&cfg, probed));
+    send(loaders::summary_attention(probed));
 }
 
 /// **A discovery, a base at a time.** Each configured base is read on a

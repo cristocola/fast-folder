@@ -173,58 +173,47 @@ pub(super) fn reconcile_paused(
     }
 }
 
-/// Where an in-place record's paths are, and what the pass found at them.
-pub(super) struct InPlace<'a> {
-    pub(super) source_base: &'a Path,
-    pub(super) target_base: &'a Path,
-    pub(super) operation_dir: &'a Path,
-    pub(super) source: &'a Path,
-    pub(super) final_path: &'a Path,
-    pub(super) source_exists: bool,
-    /// The folder at the original's path holds another project.
-    pub(super) foreign: bool,
-}
-
 /// A published move whose original leaves in place (`RetireStrategy::
 /// InPlace`): its `PROJECT_INFO.md` first, then the rest through the merge.
 /// The original's own path is the old copy, so whatever holds our identity
 /// there is still the original, and whatever is there without it is the old
 /// copy's remainder.
 pub(super) fn reconcile_in_place(
-    at: InPlace,
-    journal: &MoveJournal,
+    found: &Found,
+    // The folder at the original's path holds another project.
+    foreign: bool,
     transaction: transactions::MoveTransaction,
-    subject: &str,
     report: &mut ReconcileReport,
     pass: &mut Pass,
 ) {
+    let (journal, subject) = (found.journal, found.subject);
     let mut notes = Vec::new();
-    if at.foreign || !at.source_exists {
-        if !at.foreign && move_cleanup::settling(&journal.operation_id, at.source) {
+    if foreign || !found.source_exists {
+        if !foreign && move_cleanup::settling(&journal.operation_id, &found.source) {
             return;
         }
         // Nothing of the original is left for this move to remove —
         // whatever is at its path now is somebody else's.
         bookkeep(
-            at.source_base,
+            &found.source_base,
             journal,
-            at.target_base,
-            at.final_path,
+            found.target_base,
+            &found.final_path,
             &mut notes,
         );
         report.unrecoverable.append(&mut notes);
-        if at.foreign {
+        if foreign {
             report.unrecoverable.push(format!(
                 "{subject}: moved to {}; the folder now at {} is a different project, so \
                  fastf left it alone.",
-                crate::util::paths::display_path(at.final_path),
-                crate::util::paths::display_path(at.source)
+                crate::util::paths::display_path(&found.final_path),
+                crate::util::paths::display_path(&found.source)
             ));
         }
-        finish_record(transaction, at.operation_dir, subject, report);
+        finish_record(transaction, found.operation_dir, subject, report);
         return;
     }
-    let Some(manifest) = read_manifest_or_report(at.operation_dir, subject, report) else {
+    let Some(manifest) = read_manifest_or_report(found.operation_dir, subject, report) else {
         return;
     };
     let published = match transaction.read_published() {
@@ -243,23 +232,23 @@ pub(super) fn reconcile_in_place(
     let cleanup = Cleanup {
         manifest: &manifest,
         published: published.as_ref(),
-        source: at.source,
-        final_path: at.final_path,
+        source: &found.source,
+        final_path: &found.final_path,
         project_id: &journal.project_id,
         residue_allowed: journal.source_may_be_partial(),
         split: false,
         reappeared,
         ticker: pass.ticker,
     };
-    let still_the_original = crate::core::project_info::pinfo_path(at.source).is_file();
+    let still_the_original = crate::core::project_info::pinfo_path(&found.source).is_file();
     let fate = if still_the_original {
         // Its `PROJECT_INFO.md` is there: out of the library it goes first.
         move_cleanup::set_aside(transaction, &cleanup, || {
             bookkeep(
-                at.source_base,
+                &found.source_base,
                 journal,
-                at.target_base,
-                at.final_path,
+                found.target_base,
+                &found.final_path,
                 &mut notes,
             )
         })
@@ -275,10 +264,10 @@ pub(super) fn reconcile_in_place(
             return;
         }
         bookkeep(
-            at.source_base,
+            &found.source_base,
             journal,
-            at.target_base,
-            at.final_path,
+            found.target_base,
+            &found.final_path,
             &mut notes,
         );
         SetAside::Retired(Box::new(transaction))

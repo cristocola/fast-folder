@@ -243,16 +243,25 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     };
     let mut report = reconcile_pass(&config, &mut pass);
     // Each removal deferred past the lock is this job's own from here: a
-    // second reconcile started while it runs leaves it alone.
-    for deferred in pass.deferred.iter().flatten() {
-        crate::core::jobs::claim(&deferred.housekeeping.operation());
+    // second reconcile started while it runs leaves it alone. One whose
+    // claim could not be written is run under the lock instead, where no
+    // second reconcile can be.
+    let mut past_the_lock = Vec::new();
+    for deferred in pass.deferred.take().unwrap_or_default() {
+        match crate::core::jobs::claim(&deferred.housekeeping.operation()) {
+            Ok(()) => past_the_lock.push(deferred),
+            Err(error) => {
+                crate::util::log::info(format!("{error:#}; removing it under the lock"));
+                finish_deferred(deferred, ticker, &mut report);
+            }
+        }
     }
     ticker.update(|state| state.holds_lock = false);
     drop(_data_lock);
     // The removals decided above, now that nothing else waits for them:
     // each re-checks everything it removes, and a record a job started since
     // is not one of these.
-    for deferred in pass.deferred.take().unwrap_or_default() {
+    for deferred in past_the_lock {
         if ticker.cancelled() {
             report.cancelled = true;
             break;

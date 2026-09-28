@@ -723,19 +723,25 @@ pub fn set_current(id: &str) {
 /// Make `operation` this process's job's own until the job ends — nothing, in
 /// a process that is not a job's worker. Written before it is needed, while
 /// the caller still holds the data lock, so no reconcile can see the
-/// operation unowned.
-pub fn claim(operation: &str) {
+/// operation unowned. **An error is a claim that was not made**: the caller
+/// keeps the lock for that operation, since past it another reconcile would
+/// take it for nobody's.
+pub fn claim(operation: &str) -> Result<()> {
     let Some(id) = CURRENT.lock().ok().and_then(|current| current.clone()) else {
-        return;
+        return Ok(());
     };
+    claim_for(&id, operation)
+}
+
+/// [`claim`], for job `id`.
+fn claim_for(id: &str, operation: &str) -> Result<()> {
     if !crate::core::transactions::is_operation_id(operation) {
-        return;
+        return Ok(());
     }
-    if let Ok(dir) = dir(&id) {
-        let owns = dir.join("owns");
-        let _ = std::fs::create_dir_all(&owns);
-        let _ = std::fs::write(owns.join(operation), b"");
-    }
+    let owns = dir(id)?.join("owns");
+    std::fs::create_dir_all(&owns)
+        .and_then(|()| std::fs::write(owns.join(operation), b""))
+        .with_context(|| format!("claiming {operation} for job {id}"))
 }
 
 /// A sentence naming the live job that holds the data lock, if one does:
@@ -817,6 +823,24 @@ fn job_bytes(id: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A claim is a file in the job's folder, and one that cannot be written
+    /// is an error, never a claim.
+    #[test]
+    fn a_claim_that_cannot_be_written_is_not_made() {
+        let (_guard, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let (job, operation) = ("18d8983cdf094ce9-7395d-1", "18d8983cdf094ce9-1-2");
+        claim_for(job, operation).unwrap();
+        let owns = sandbox.path().join("jobs").join(job).join("owns");
+        assert!(owns.join(operation).is_file());
+
+        // A file where the folder of claims belongs.
+        let other = "18d8983cdf094ce9-7395d-2";
+        std::fs::create_dir_all(sandbox.path().join("jobs").join(other)).unwrap();
+        std::fs::write(sandbox.path().join("jobs").join(other).join("owns"), b"").unwrap();
+        let refused = claim_for(other, operation).unwrap_err();
+        assert!(format!("{refused:#}").contains("claiming"), "{refused:#}");
+    }
 
     #[test]
     fn an_operation_is_owned_by_the_process_that_made_it() {

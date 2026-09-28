@@ -16,9 +16,6 @@ pub const SLUG_MAX: usize = 24;
 
 /// The list of templates, with the selected one's details beside it.
 pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
-    let theme = &app.theme;
-    let g = theme.glyphs;
-    let studio = &app.studio;
     // Two panes, one focus: the list has it unless `→` or Tab put it in the
     // pane, and neither has it under a dialog.
     let focused = app.modals.is_empty() && app.focus == Focus::Projects;
@@ -37,103 +34,126 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
 
     // --- the list ---------------------------------------------------------
     if draw_list {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(Span::styled(
-                " templates ",
-                crate::tui::view::projects::title_style(app, focused),
-            ))
-            .border_style(crate::tui::view::projects::border_style(app, focused));
-        let inner = block.inner(panes[0]);
-        frame.render_widget(block, panes[0]);
-
-        let rows = studio.rows(app.search.input.text());
-        if rows.is_empty() {
-            // The registry's sentence, plus the two other ways in that only this
-            // tab offers — one of which is the only one that explains anything.
-            let lines: Vec<String> = if studio.cards.is_empty() {
-                vec![
-                    format!(
-                        "{}, or {} reads one out of a folder",
-                        crate::tui::command::NO_TEMPLATES,
-                        crate::tui::command::key_of(
-                            crate::tui::command::CommandId::StudioFromFolder
-                        )
-                    ),
-                    format!(
-                        "{} explains what a template is and walks through building one",
-                        crate::tui::command::key_of(crate::tui::command::CommandId::Guide)
-                    ),
-                ]
-            } else {
-                vec!["nothing matches".to_string()]
-            };
-            frame.render_widget(
-                Paragraph::new(
-                    lines
-                        .iter()
-                        .map(|line| {
-                            Line::from(Span::styled(
-                                fit(line, inner.width as usize, g.ellipsis),
-                                theme.dim(),
-                            ))
-                        })
-                        .collect::<Vec<_>>(),
-                ),
-                inner,
-            );
-        } else {
-            // Measured, not fixed: a slug can never run into its count.
-            let slug_w = rows
-                .iter()
-                .filter_map(|&i| studio.cards.get(i))
-                .map(|card| TemplatesState::display_name(card).width())
-                .max()
-                .unwrap_or(8)
-                .min(SLUG_MAX)
-                // A list narrower than its names cuts them with the ellipsis,
-                // and the count keeps its column.
-                .min((inner.width as usize).saturating_sub(2 + 5));
-            let items: Vec<ListItem> = rows
-                .iter()
-                .filter_map(|&i| studio.cards.get(i))
-                .map(|card| {
-                    let count = app.templates.count(&card.slug);
-                    let filtered =
-                        app.library.template_filter.as_deref() == Some(card.slug.as_str());
-                    // A slug no template on disk answers to recedes: it is a
-                    // project's memory of a template, not a template.
-                    let style = if !card.on_disk {
-                        theme.dim()
-                    } else {
-                        theme.text()
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(if filtered { g.cursor } else { " " }, theme.accent_alt()),
-                        Span::raw(" "),
-                        Span::styled(
-                            pad(
-                                &fit(TemplatesState::display_name(card), slug_w, g.ellipsis),
-                                slug_w,
-                            ),
-                            style,
-                        ),
-                        Span::styled(format!("{count:>5}"), theme.dim()),
-                    ]))
-                })
-                .collect();
-            let list = List::new(items).highlight_style(theme.selection);
-            let mut state = ListState::default()
-                .with_offset(studio.offset)
-                .with_selected(studio.row_of(studio.selected, &rows));
-            frame.render_stateful_widget(list, inner, &mut state);
-        }
+        template_list(app, frame, panes[0], focused);
     }
     if !draw_pane {
         return;
     }
 
     // --- the detail -------------------------------------------------------
+    template_detail(app, frame, panes[1], pane_focused);
+}
+
+fn template_list(app: &App, frame: &mut Frame, area: Rect, focused: bool) {
+    let studio = &app.studio;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " templates ",
+            crate::tui::view::projects::title_style(app, focused),
+        ))
+        .border_style(crate::tui::view::projects::border_style(app, focused));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let rows = studio.rows(app.search.input.text());
+    if rows.is_empty() {
+        empty_list(app, frame, inner);
+    } else {
+        list_rows(app, frame, inner, rows);
+    }
+}
+
+/// The registry's sentence, plus the two other ways in that only this
+/// tab offers — one of which is the only one that explains anything.
+fn empty_list(app: &App, frame: &mut Frame, inner: Rect) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let studio = &app.studio;
+    let lines: Vec<String> = if studio.cards.is_empty() {
+        vec![
+            format!(
+                "{}, or {} reads one out of a folder",
+                crate::tui::command::NO_TEMPLATES,
+                crate::tui::command::key_of(crate::tui::command::CommandId::StudioFromFolder)
+            ),
+            format!(
+                "{} explains what a template is and walks through building one",
+                crate::tui::command::key_of(crate::tui::command::CommandId::Guide)
+            ),
+        ]
+    } else {
+        vec!["nothing matches".to_string()]
+    };
+    frame.render_widget(
+        Paragraph::new(
+            lines
+                .iter()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        fit(line, inner.width as usize, g.ellipsis),
+                        theme.dim(),
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        ),
+        inner,
+    );
+}
+
+fn list_rows(app: &App, frame: &mut Frame, inner: Rect, rows: Vec<usize>) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let studio = &app.studio;
+    // Measured, not fixed: a slug can never run into its count.
+    let slug_w = rows
+        .iter()
+        .filter_map(|&i| studio.cards.get(i))
+        .map(|card| TemplatesState::display_name(card).width())
+        .max()
+        .unwrap_or(8)
+        .min(SLUG_MAX)
+        // A list narrower than its names cuts them with the ellipsis,
+        // and the count keeps its column.
+        .min((inner.width as usize).saturating_sub(2 + 5));
+    let items: Vec<ListItem> = rows
+        .iter()
+        .filter_map(|&i| studio.cards.get(i))
+        .map(|card| {
+            let count = app.templates.count(&card.slug);
+            let filtered = app.library.template_filter.as_deref() == Some(card.slug.as_str());
+            // A slug no template on disk answers to recedes: it is a
+            // project's memory of a template, not a template.
+            let style = if !card.on_disk {
+                theme.dim()
+            } else {
+                theme.text()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(if filtered { g.cursor } else { " " }, theme.accent_alt()),
+                Span::raw(" "),
+                Span::styled(
+                    pad(
+                        &fit(TemplatesState::display_name(card), slug_w, g.ellipsis),
+                        slug_w,
+                    ),
+                    style,
+                ),
+                Span::styled(format!("{count:>5}"), theme.dim()),
+            ]))
+        })
+        .collect();
+    let list = List::new(items).highlight_style(theme.selection);
+    let mut state = ListState::default()
+        .with_offset(studio.offset)
+        .with_selected(studio.row_of(studio.selected, &rows));
+    frame.render_stateful_widget(list, inner, &mut state);
+}
+
+fn template_detail(app: &App, frame: &mut Frame, area: Rect, pane_focused: bool) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let studio = &app.studio;
     let title = match studio.selected_card() {
         Some(card) => format!(" {} ", TemplatesState::display_name(card)),
         None => " template ".to_string(),
@@ -145,8 +165,8 @@ pub fn screen(app: &App, frame: &mut Frame, area: Rect) {
             crate::tui::view::projects::title_style(app, pane_focused),
         ))
         .border_style(crate::tui::view::projects::border_style(app, pane_focused));
-    let inner = block.inner(panes[1]);
-    frame.render_widget(block, panes[1]);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
     let lines: Vec<Line> = match studio.selected_card() {
         Some(card) if !card.on_disk => {

@@ -202,7 +202,25 @@ pub fn render_builder(
     };
 
     let width = keys.width as usize;
-    let (caret, hint, key_pairs) = match &builder.open {
+    let (caret, hint, key_pairs) = render_face(app, builder, frame, body, width, explaining);
+
+    render_builder_footer(app, builder, frame, footer, hint);
+    frame.render_widget(
+        Paragraph::new(key_line(theme, &key_pairs, keys.width as usize)),
+        keys,
+    );
+    caret
+}
+
+fn render_face(
+    app: &App,
+    builder: &Builder,
+    frame: &mut Frame,
+    body: Rect,
+    width: usize,
+    explaining: bool,
+) -> Face {
+    match &builder.open {
         None => (
             render_sections(app, builder, frame, body),
             // A refusal, then a warning, then what the highlighted row is
@@ -247,8 +265,17 @@ pub fn render_builder(
             )
         }
         Some(Open::Files(list)) => render_files(app, builder, list, frame, body, width, explaining),
-    };
+    }
+}
 
+fn render_builder_footer(
+    app: &App,
+    builder: &Builder,
+    frame: &mut Frame,
+    footer: Rect,
+    hint: Option<String>,
+) {
+    let theme = &app.theme;
     let warned = builder.error.is_some() || (builder.open.is_none() && row_note(builder).is_some());
     let style = if warned { theme.warn() } else { theme.dim() };
     let text = hint.unwrap_or_default();
@@ -268,11 +295,6 @@ pub fn render_builder(
         ),
         style,
     );
-    frame.render_widget(
-        Paragraph::new(key_line(theme, &key_pairs, keys.width as usize)),
-        keys,
-    );
-    caret
 }
 
 /// The panel: what the highlighted row or field is, and — on the section list,
@@ -686,6 +708,33 @@ pub fn render_settings(
         .unwrap_or(26)
         .min(width.saturating_sub(12));
 
+    render_setting_rows(app, state, frame, body, width, label_width);
+
+    // The editor draws over the row it belongs to, so the value being changed
+    // stays where the eye already is.
+    let caret = state.editing.as_ref().and_then(|editing| {
+        let row = state.selected.checked_sub(state.offset)? as u16;
+        render_setting_editor(app, editing, frame, body, row, label_width)
+    });
+
+    if matches!(state.editing, Some(Editing::Filter)) {
+        return render_settings_filter(app, state, frame, footer, keys);
+    }
+
+    render_settings_footer(app, state, frame, footer, keys);
+    caret
+}
+
+fn render_setting_rows(
+    app: &App,
+    state: &SettingsState,
+    frame: &mut Frame,
+    body: Rect,
+    width: usize,
+    label_width: usize,
+) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let items: Vec<ListItem> = state
         .rows
         .iter()
@@ -727,36 +776,47 @@ pub fn render_settings(
         body,
         &mut list_state,
     );
+}
 
-    // The editor draws over the row it belongs to, so the value being changed
-    // stays where the eye already is.
-    let caret = state.editing.as_ref().and_then(|editing| {
-        let row = state.selected.checked_sub(state.offset)? as u16;
-        render_setting_editor(app, editing, frame, body, row, label_width)
-    });
+/// While the filter is open it takes the footer: a caret belongs where the
+/// text is, the footer is a fixed row that nothing can push off the end,
+/// and the list stays whole underneath so you can watch it narrow.
+fn render_settings_filter(
+    app: &App,
+    state: &SettingsState,
+    frame: &mut Frame,
+    footer: Rect,
+    keys: Rect,
+) -> Option<Position> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    super::clear(frame, footer, &app.theme);
+    let caret = state.filter.render_line(
+        footer,
+        frame.buffer_mut(),
+        Span::styled(format!(" {} ", g.search), theme.accent()),
+        theme.text(),
+    );
+    frame.render_widget(
+        Paragraph::new(key_line(
+            theme,
+            &pairs(&[("Esc", "clear and close"), ("Enter", "keep it")]),
+            keys.width as usize,
+        )),
+        keys,
+    );
+    caret
+}
 
-    // While the filter is open it takes the footer: a caret belongs where the
-    // text is, the footer is a fixed row that nothing can push off the end,
-    // and the list stays whole underneath so you can watch it narrow.
-    if matches!(state.editing, Some(Editing::Filter)) {
-        super::clear(frame, footer, &app.theme);
-        let caret = state.filter.render_line(
-            footer,
-            frame.buffer_mut(),
-            Span::styled(format!(" {} ", g.search), theme.accent()),
-            theme.text(),
-        );
-        frame.render_widget(
-            Paragraph::new(key_line(
-                theme,
-                &pairs(&[("Esc", "clear and close"), ("Enter", "keep it")]),
-                keys.width as usize,
-            )),
-            keys,
-        );
-        return caret;
-    }
-
+fn render_settings_footer(
+    app: &App,
+    state: &SettingsState,
+    frame: &mut Frame,
+    footer: Rect,
+    keys: Rect,
+) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let (text, style) = match (state.error(), state.pending) {
         (Some(error), _) => (format!(" {} {error}", g.warn), theme.warn()),
         (None, true) => (" working…".to_string(), theme.dim()),
@@ -794,7 +854,6 @@ pub fn render_settings(
         Paragraph::new(key_line(theme, &key_pairs, keys.width as usize)),
         keys,
     );
-    caret
 }
 
 fn render_setting_editor(

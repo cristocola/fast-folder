@@ -2,6 +2,8 @@
 //! what it would do.
 
 use super::*;
+use crate::core::project::DryRunReport;
+use crate::tui::app::wizard::{ApplyPreview, FromFolderPreview, RecursivePreview, RegisterPreview};
 
 // ---------------------------------------------------------------------------
 // The flows: create, apply, register
@@ -195,251 +197,285 @@ fn render_flow_preview(app: &App, flow: &Flow, frame: &mut Frame, area: Rect) {
 
 fn preview_lines<'a>(app: &App, preview: &'a Preview) -> Vec<Line<'a>> {
     let theme = &app.theme;
-    let g = theme.glyphs;
     let mut lines: Vec<Line> = Vec::new();
     match preview {
-        Preview::Create(report) => {
-            lines.push(Line::from(vec![
-                Span::styled(" ", theme.dim()),
-                Span::styled(report.folder_name.clone(), theme.bold()),
-            ]));
-            for line in crate::tui::widgets::tree::lines(&report.structure, g.is_ascii()) {
-                lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
-            }
-            if !report.files.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(" Files", theme.accent())));
-                for file in &report.files {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {} {file}", g.sep),
-                        theme.dim(),
-                    )));
-                }
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(" Resolved", theme.accent())));
-            for value in &report.values {
-                lines.push(field_line(
-                    theme,
-                    &value.slug,
-                    if value.value.is_empty() {
-                        "(empty)"
-                    } else {
-                        &value.value
-                    },
-                ));
-            }
-            let (from, to) = report.counter;
-            lines.push(Line::from(vec![
-                Span::styled(format!("   {:<14} ", "{id}"), theme.dim()),
-                Span::styled(report.id.clone(), theme.text()),
-                Span::styled(format!("   counter {from} {} {to}", g.arrow), theme.dim()),
-            ]));
-            lines.push(field_line(theme, "{date}", &report.date));
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                Span::styled(
-                    crate::util::paths::display_path(&report.root_path),
-                    theme.text(),
-                ),
-            ]));
-            for preview in &report.previews {
-                lines.push(Line::from(""));
-                // The same marker the command line prints: this file's
-                // `{braces}` are what lands, not a substitution that failed.
-                let mut path = vec![Span::styled(format!(" {}", preview.path), theme.accent())];
-                if preview.verbatim {
-                    path.push(Span::styled("  (verbatim)", theme.dim()));
-                }
-                lines.push(Line::from(path));
-                for line in &preview.lines {
-                    lines.push(Line::from(Span::styled(format!("   {line}"), theme.dim())));
-                }
-                if preview.hidden > 0 {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {} {} more lines", g.ellipsis, preview.hidden),
-                        theme.dim(),
-                    )));
-                }
-            }
-        }
-        Preview::Apply(apply) => {
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                Span::styled(
-                    crate::util::paths::display_path(&apply.target),
-                    theme.text(),
-                ),
-            ]));
-            lines.push(Line::from(""));
-            for (create, path) in &apply.rows {
-                let (tag, style) = if *create {
-                    ("create", theme.good())
-                } else {
-                    ("skip  ", theme.dim())
-                };
-                lines.push(Line::from(vec![
-                    Span::styled(format!(" {tag} "), style),
-                    Span::styled(
-                        path.clone(),
-                        if *create { theme.text() } else { theme.dim() },
-                    ),
-                ]));
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} to create", apply.creates), theme.good()),
-                Span::styled(format!("   {} already there", apply.skips), theme.dim()),
-            ]));
-        }
-        Preview::Register(register) => {
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                Span::styled(
-                    crate::util::paths::display_path(&register.path),
-                    theme.text(),
-                ),
-            ]));
-            lines.push(Line::from(""));
-            lines.push(field_line(theme, "template", &register.template));
-            lines.push(Line::from(vec![
-                Span::styled(format!("   {:<14} ", "id"), theme.dim()),
-                Span::styled(register.id.clone(), theme.text()),
-                Span::styled(format!("   {}", register.id_note), theme.dim()),
-            ]));
-            lines.push(field_line(theme, "created", &register.created));
-            match &register.rename {
-                Some((from, to)) => lines.push(Line::from(vec![
-                    Span::styled(format!("   {:<14} ", "rename"), theme.dim()),
-                    Span::styled(from.clone(), theme.dim()),
-                    Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                    Span::styled(to.clone(), theme.text()),
-                ])),
-                None => lines.push(field_line(theme, "rename", "no")),
-            }
-            if register.apply_structure {
-                lines.push(field_line(
-                    theme,
-                    "fill in",
-                    "the template's missing folders",
-                ));
-            }
-            if register.pinfo_exists {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    format!(
-                        " {} PROJECT_INFO.md already exists — it will be overwritten",
-                        g.warn
-                    ),
-                    theme.warn(),
-                )));
-            }
-        }
-        Preview::FromFolder(scan) => {
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                Span::styled(scan.slug.clone(), theme.bold()),
-            ]));
-            if !scan.structure.is_empty() {
-                lines.push(Line::from(""));
-                for line in crate::tui::widgets::tree::lines(&scan.structure, g.is_ascii()) {
-                    lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
-                }
-            }
-            if !scan.files.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(" Files", theme.accent())));
-                for file in &scan.files {
-                    lines.push(Line::from(Span::styled(
-                        format!("   {} {file}", g.sep),
-                        theme.dim(),
-                    )));
-                }
-            }
-            if !scan.assets.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled(
-                    " Bundled byte for byte",
-                    theme.accent(),
-                )));
-                for (path, size) in &scan.assets {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("   {} {path}", g.sep), theme.dim()),
-                        Span::styled(
-                            format!("   {}", crate::util::human_bytes::human_bytes(*size)),
-                            theme.dim(),
-                        ),
-                    ]));
-                }
-            }
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!(
-                        " {} folder{}, {} text file{}",
-                        scan.folders,
-                        crate::util::plural::s(scan.folders),
-                        scan.files.len(),
-                        crate::util::plural::s(scan.files.len())
-                    ),
-                    theme.good(),
-                ),
-                Span::styled(
-                    if scan.bundle {
-                        format!(
-                            "   {} bundled ({})",
-                            scan.assets.len(),
-                            crate::util::human_bytes::human_bytes(scan.bundle_bytes)
-                        )
-                    } else if scan.skipped > 0 {
-                        format!("   {} skipped — turn on Bundle assets", scan.skipped)
-                    } else {
-                        String::new()
-                    },
-                    if scan.bundle {
-                        theme.dim()
-                    } else {
-                        theme.warn()
-                    },
-                ),
-            ]));
-        }
-        Preview::Recursive(recursive) => {
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", g.arrow), theme.accent()),
-                Span::styled(
-                    crate::util::paths::display_path(&recursive.base),
-                    theme.text(),
-                ),
-            ]));
-            lines.push(Line::from(""));
-            if recursive.rows.is_empty() {
-                lines.push(Line::from(Span::styled(
-                    " every direct child already has a PROJECT_INFO.md — nothing to register",
-                    theme.dim(),
-                )));
-                return lines;
-            }
-            for (name, note) in &recursive.rows {
-                lines.push(Line::from(vec![
-                    Span::styled(" + ", theme.good()),
-                    Span::styled(name.clone(), theme.text()),
-                    Span::styled(format!("   {note}"), theme.dim()),
-                ]));
-            }
-            lines.push(Line::from(""));
+        Preview::Create(report) => create_preview_lines(theme, report, &mut lines),
+        Preview::Apply(apply) => apply_preview_lines(theme, apply, &mut lines),
+        Preview::Register(register) => register_preview_lines(theme, register, &mut lines),
+        Preview::FromFolder(scan) => from_folder_preview_lines(theme, scan, &mut lines),
+        Preview::Recursive(recursive) => recursive_preview_lines(theme, recursive, &mut lines),
+    }
+    lines
+}
+
+fn create_preview_lines<'a>(
+    theme: &crate::tui::theme::Theme,
+    report: &'a DryRunReport,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let g = theme.glyphs;
+    lines.push(Line::from(vec![
+        Span::styled(" ", theme.dim()),
+        Span::styled(report.folder_name.clone(), theme.bold()),
+    ]));
+    for line in crate::tui::widgets::tree::lines(&report.structure, g.is_ascii()) {
+        lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
+    }
+    if !report.files.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(" Files", theme.accent())));
+        for file in &report.files {
             lines.push(Line::from(Span::styled(
-                format!(
-                    " {} folder{} would be registered",
-                    recursive.rows.len(),
-                    crate::util::plural::s(recursive.rows.len())
-                ),
-                theme.good(),
+                format!("   {} {file}", g.sep),
+                theme.dim(),
             )));
         }
     }
-    lines
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(" Resolved", theme.accent())));
+    for value in &report.values {
+        lines.push(field_line(
+            theme,
+            &value.slug,
+            if value.value.is_empty() {
+                "(empty)"
+            } else {
+                &value.value
+            },
+        ));
+    }
+    let (from, to) = report.counter;
+    lines.push(Line::from(vec![
+        Span::styled(format!("   {:<14} ", "{id}"), theme.dim()),
+        Span::styled(report.id.clone(), theme.text()),
+        Span::styled(format!("   counter {from} {} {to}", g.arrow), theme.dim()),
+    ]));
+    lines.push(field_line(theme, "{date}", &report.date));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", g.arrow), theme.accent()),
+        Span::styled(
+            crate::util::paths::display_path(&report.root_path),
+            theme.text(),
+        ),
+    ]));
+    for preview in &report.previews {
+        lines.push(Line::from(""));
+        // The same marker the command line prints: this file's
+        // `{braces}` are what lands, not a substitution that failed.
+        let mut path = vec![Span::styled(format!(" {}", preview.path), theme.accent())];
+        if preview.verbatim {
+            path.push(Span::styled("  (verbatim)", theme.dim()));
+        }
+        lines.push(Line::from(path));
+        for line in &preview.lines {
+            lines.push(Line::from(Span::styled(format!("   {line}"), theme.dim())));
+        }
+        if preview.hidden > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("   {} {} more lines", g.ellipsis, preview.hidden),
+                theme.dim(),
+            )));
+        }
+    }
+}
+
+fn apply_preview_lines<'a>(
+    theme: &crate::tui::theme::Theme,
+    apply: &'a ApplyPreview,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let g = theme.glyphs;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", g.arrow), theme.accent()),
+        Span::styled(
+            crate::util::paths::display_path(&apply.target),
+            theme.text(),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    for (create, path) in &apply.rows {
+        let (tag, style) = if *create {
+            ("create", theme.good())
+        } else {
+            ("skip  ", theme.dim())
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {tag} "), style),
+            Span::styled(
+                path.clone(),
+                if *create { theme.text() } else { theme.dim() },
+            ),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} to create", apply.creates), theme.good()),
+        Span::styled(format!("   {} already there", apply.skips), theme.dim()),
+    ]));
+}
+
+fn register_preview_lines<'a>(
+    theme: &crate::tui::theme::Theme,
+    register: &'a RegisterPreview,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let g = theme.glyphs;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", g.arrow), theme.accent()),
+        Span::styled(
+            crate::util::paths::display_path(&register.path),
+            theme.text(),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(field_line(theme, "template", &register.template));
+    lines.push(Line::from(vec![
+        Span::styled(format!("   {:<14} ", "id"), theme.dim()),
+        Span::styled(register.id.clone(), theme.text()),
+        Span::styled(format!("   {}", register.id_note), theme.dim()),
+    ]));
+    lines.push(field_line(theme, "created", &register.created));
+    match &register.rename {
+        Some((from, to)) => lines.push(Line::from(vec![
+            Span::styled(format!("   {:<14} ", "rename"), theme.dim()),
+            Span::styled(from.clone(), theme.dim()),
+            Span::styled(format!(" {} ", g.arrow), theme.accent()),
+            Span::styled(to.clone(), theme.text()),
+        ])),
+        None => lines.push(field_line(theme, "rename", "no")),
+    }
+    if register.apply_structure {
+        lines.push(field_line(
+            theme,
+            "fill in",
+            "the template's missing folders",
+        ));
+    }
+    if register.pinfo_exists {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            format!(
+                " {} PROJECT_INFO.md already exists — it will be overwritten",
+                g.warn
+            ),
+            theme.warn(),
+        )));
+    }
+}
+
+fn from_folder_preview_lines<'a>(
+    theme: &crate::tui::theme::Theme,
+    scan: &'a FromFolderPreview,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let g = theme.glyphs;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", g.arrow), theme.accent()),
+        Span::styled(scan.slug.clone(), theme.bold()),
+    ]));
+    if !scan.structure.is_empty() {
+        lines.push(Line::from(""));
+        for line in crate::tui::widgets::tree::lines(&scan.structure, g.is_ascii()) {
+            lines.push(Line::from(Span::styled(format!(" {line}"), theme.dim())));
+        }
+    }
+    if !scan.files.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(" Files", theme.accent())));
+        for file in &scan.files {
+            lines.push(Line::from(Span::styled(
+                format!("   {} {file}", g.sep),
+                theme.dim(),
+            )));
+        }
+    }
+    if !scan.assets.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            " Bundled byte for byte",
+            theme.accent(),
+        )));
+        for (path, size) in &scan.assets {
+            lines.push(Line::from(vec![
+                Span::styled(format!("   {} {path}", g.sep), theme.dim()),
+                Span::styled(
+                    format!("   {}", crate::util::human_bytes::human_bytes(*size)),
+                    theme.dim(),
+                ),
+            ]));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(
+                " {} folder{}, {} text file{}",
+                scan.folders,
+                crate::util::plural::s(scan.folders),
+                scan.files.len(),
+                crate::util::plural::s(scan.files.len())
+            ),
+            theme.good(),
+        ),
+        Span::styled(
+            if scan.bundle {
+                format!(
+                    "   {} bundled ({})",
+                    scan.assets.len(),
+                    crate::util::human_bytes::human_bytes(scan.bundle_bytes)
+                )
+            } else if scan.skipped > 0 {
+                format!("   {} skipped — turn on Bundle assets", scan.skipped)
+            } else {
+                String::new()
+            },
+            if scan.bundle {
+                theme.dim()
+            } else {
+                theme.warn()
+            },
+        ),
+    ]));
+}
+
+fn recursive_preview_lines<'a>(
+    theme: &crate::tui::theme::Theme,
+    recursive: &'a RecursivePreview,
+    lines: &mut Vec<Line<'a>>,
+) {
+    let g = theme.glyphs;
+    lines.push(Line::from(vec![
+        Span::styled(format!(" {} ", g.arrow), theme.accent()),
+        Span::styled(
+            crate::util::paths::display_path(&recursive.base),
+            theme.text(),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    if recursive.rows.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " every direct child already has a PROJECT_INFO.md — nothing to register",
+            theme.dim(),
+        )));
+        return;
+    }
+    for (name, note) in &recursive.rows {
+        lines.push(Line::from(vec![
+            Span::styled(" + ", theme.good()),
+            Span::styled(name.clone(), theme.text()),
+            Span::styled(format!("   {note}"), theme.dim()),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            " {} folder{} would be registered",
+            recursive.rows.len(),
+            crate::util::plural::s(recursive.rows.len())
+        ),
+        theme.good(),
+    )));
 }
 
 fn field_line<'a>(theme: &crate::tui::theme::Theme, key: &'a str, value: &'a str) -> Line<'a> {

@@ -6,21 +6,38 @@ use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::tui::app::data::BaseInfo;
 use crate::tui::app::{App, Screen, StatusLevel};
 use crate::tui::command;
 use crate::tui::view::{first_that_fits, fit, fit_spans, plural, split_line};
 
 pub fn header(app: &App, frame: &mut Frame, area: Rect) {
-    let theme = &app.theme;
-    let g = theme.glyphs;
     let width = area.width as usize;
     let gap = "   ";
 
-    // Line 1: the product's name, then the tabs. **Not the project count** —
-    // the search bar states it, live, beside the sort and the marks, which is
-    // where a reader looking for "how many am I seeing" already is. Three sites
-    // saying the same pair of numbers in three formats read as three different
-    // facts.
+    let known = app
+        .summary
+        .as_ref()
+        .and_then(crate::tui::app::data::Summary::bases_known);
+    let mut lines = vec![tabs_line(app, known, width, gap)];
+    lines.push(bases_line(app, known, width, gap));
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Line 1: the product's name, then the tabs. **Not the project count** —
+/// the search bar states it, live, beside the sort and the marks, which is
+/// where a reader looking for "how many am I seeing" already is. Three sites
+/// saying the same pair of numbers in three formats read as three different
+/// facts.
+fn tabs_line(
+    app: &App,
+    known: Option<&[BaseInfo]>,
+    width: usize,
+    gap: &'static str,
+) -> Line<'static> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let mut left = vec![
         Span::styled(
             " fast-folder",
@@ -45,10 +62,6 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
     let mut with_bases = left.clone();
-    let known = app
-        .summary
-        .as_ref()
-        .and_then(crate::tui::app::data::Summary::bases_known);
     if let Some(bases) = known {
         with_bases.push(Span::styled(
             format!("{gap}{}", plural(bases.len(), "base", "bases")),
@@ -66,7 +79,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
     };
     // A narrow window gives up the highest ID first, then the base count —
     // never the tabs, which say where you are and where `T` goes.
-    let mut lines = vec![first_that_fits(
+    first_that_fits(
         vec![
             (with_bases.clone(), highest),
             (with_bases, Vec::new()),
@@ -74,10 +87,45 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         ],
         width,
         g.ellipsis,
-    )];
+    )
+}
 
-    // Line 2: the bases, and on the right whatever needs attention — else
-    // what this session did.
+/// Line 2: the bases, and on the right whatever needs attention — else
+/// what this session did.
+fn bases_line(
+    app: &App,
+    known: Option<&[BaseInfo]>,
+    width: usize,
+    gap: &'static str,
+) -> Line<'static> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let mut bases = base_spans(app, known, gap);
+    // A running job is the first thing on the row: what it is and how far,
+    // with the spinner. It goes on whether or not its dialog is up.
+    if let Some(job) = app.background.live().next() {
+        let more = app.background.live().count().saturating_sub(1);
+        let mut chip = vec![
+            Span::styled(format!("{} ", g.spin(app.elapsed_ms)), theme.accent()),
+            Span::styled(crate::tui::app::background::chip_title(job), theme.text()),
+            Span::styled(
+                format!(" {} {}", g.sep, crate::tui::app::background::step_of(job)),
+                theme.dim(),
+            ),
+        ];
+        if more > 0 {
+            chip.push(Span::styled(format!(" {} {more} more", g.sep), theme.dim()));
+        }
+        chip.push(Span::raw("   "));
+        chip.extend(bases);
+        bases = chip;
+    }
+    attention_or_session(app, bases, width)
+}
+
+fn base_spans(app: &App, known: Option<&[BaseInfo]>, gap: &'static str) -> Vec<Span<'static>> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let mut bases = vec![Span::raw(" ")];
     match known {
         Some(known) => {
@@ -120,27 +168,14 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             None => bases.push(Span::styled("probing bases…", theme.dim())),
         },
     }
-    // A running job is the first thing on the row: what it is and how far,
-    // with the spinner. It goes on whether or not its dialog is up.
-    if let Some(job) = app.background.live().next() {
-        let more = app.background.live().count().saturating_sub(1);
-        let mut chip = vec![
-            Span::styled(format!("{} ", g.spin(app.elapsed_ms)), theme.accent()),
-            Span::styled(crate::tui::app::background::chip_title(job), theme.text()),
-            Span::styled(
-                format!(" {} {}", g.sep, crate::tui::app::background::step_of(job)),
-                theme.dim(),
-            ),
-        ];
-        if more > 0 {
-            chip.push(Span::styled(format!(" {} {more} more", g.sep), theme.dim()));
-        }
-        chip.push(Span::raw("   "));
-        chip.extend(bases);
-        bases = chip;
-    }
-    // Something needing attention wins the row over the bases; what this
-    // session did is the first thing a narrow window gives up.
+    bases
+}
+
+/// Something needing attention wins the row over the bases; what this
+/// session did is the first thing a narrow window gives up.
+fn attention_or_session(app: &App, bases: Vec<Span<'static>>, width: usize) -> Line<'static> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let attention = app.summary.as_ref().map(|summary| {
         let attention = &summary.attention;
         (
@@ -150,7 +185,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
         )
     });
     let key = crate::tui::command::key_of(crate::tui::command::CommandId::Attention);
-    lines.push(match attention {
+    match attention {
         // Only what needs a person is a warning; what fastf is finishing by
         // itself is said quietly, so nobody is sent to act on it.
         Some((needs_you, _, _)) if needs_you > 0 => split_line(
@@ -196,9 +231,7 @@ pub fn header(app: &App, frame: &mut Frame, area: Rect) {
             g.ellipsis,
         ),
         _ => Line::from(fit_spans(bases, width, g.ellipsis)),
-    });
-
-    frame.render_widget(Paragraph::new(lines), area);
+    }
 }
 
 /// The search bar. Returns where the caret is when the bar is being edited.
@@ -207,14 +240,73 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     let g = theme.glyphs;
     let width = area.width as usize;
 
-    // **The one place the count is stated.** Live, next to the sort it is
-    // ordered by, the filters that produced it and the marks a verb would act
-    // on — everything a reader asking "how many am I seeing" wants at once.
-    //
-    // Each part carries its priority: a narrow window gives up the sort
-    // first, then the "(from index)" words, then the filters, and never the
-    // count or the marks — the one fact a person looks here for, and the one
-    // that says a verb will act on more than the row under the cursor.
+    let right = list_report(app, width);
+    let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
+
+    let mut prefix = format!(" {} ", g.search);
+    if let Some(preset) = &app.library.preset {
+        // `fastf recent --tag draft`: the chip is a filter, and Esc takes it
+        // off like any other.
+        prefix.push_str(&format!("[{} {} Esc clears] ", preset.label(), g.sep));
+    }
+    let prefix_span = Span::styled(
+        prefix.clone(),
+        if app.search.editing {
+            theme.accent()
+        } else {
+            theme.dim()
+        },
+    );
+
+    let text_room = width.saturating_sub(right_width + 1);
+    let text_area = Rect::new(area.x, area.y, text_room as u16, 1);
+
+    let caret = if app.search.editing || !app.search.input.is_empty() {
+        app.search
+            .input
+            .render_line(text_area, frame.buffer_mut(), prefix_span, theme.text())
+    } else {
+        let placeholder = "/ to search";
+        let line = Line::from(vec![
+            prefix_span,
+            Span::styled(
+                fit(
+                    placeholder,
+                    text_room
+                        .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str())),
+                    g.ellipsis,
+                ),
+                theme.dim(),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(line), text_area);
+        None
+    };
+
+    let right_area = Rect::new(
+        area.x + width.saturating_sub(right_width) as u16,
+        area.y,
+        right_width as u16,
+        1,
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
+        right_area,
+    );
+    caret.filter(|_| app.search.editing)
+}
+
+/// **The one place the count is stated.** Live, next to the sort it is
+/// ordered by, the filters that produced it and the marks a verb would act
+/// on — everything a reader asking "how many am I seeing" wants at once.
+///
+/// Each part carries its priority: a narrow window gives up the sort
+/// first, then the "(from index)" words, then the filters, and never the
+/// count or the marks — the one fact a person looks here for, and the one
+/// that says a verb will act on more than the row under the cursor.
+fn list_report(app: &App, width: usize) -> Vec<Span<'static>> {
+    let theme = &app.theme;
+    let g = theme.glyphs;
     let mut parts: Vec<(u8, Span)> = vec![(
         0,
         Span::styled(
@@ -278,64 +370,11 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
         }
         parts.retain(|(priority, _)| *priority != dropped);
     }
-    let right = fit_spans(
+    fit_spans(
         parts.into_iter().map(|(_, s)| s).collect(),
         width,
         g.ellipsis,
-    );
-    let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
-
-    let mut prefix = format!(" {} ", g.search);
-    if let Some(preset) = &app.library.preset {
-        // `fastf recent --tag draft`: the chip is a filter, and Esc takes it
-        // off like any other.
-        prefix.push_str(&format!("[{} {} Esc clears] ", preset.label(), g.sep));
-    }
-    let prefix_span = Span::styled(
-        prefix.clone(),
-        if app.search.editing {
-            theme.accent()
-        } else {
-            theme.dim()
-        },
-    );
-
-    let text_room = width.saturating_sub(right_width + 1);
-    let text_area = Rect::new(area.x, area.y, text_room as u16, 1);
-
-    let caret = if app.search.editing || !app.search.input.is_empty() {
-        app.search
-            .input
-            .render_line(text_area, frame.buffer_mut(), prefix_span, theme.text())
-    } else {
-        let placeholder = "/ to search";
-        let line = Line::from(vec![
-            prefix_span,
-            Span::styled(
-                fit(
-                    placeholder,
-                    text_room
-                        .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str())),
-                    g.ellipsis,
-                ),
-                theme.dim(),
-            ),
-        ]);
-        frame.render_widget(Paragraph::new(line), text_area);
-        None
-    };
-
-    let right_area = Rect::new(
-        area.x + width.saturating_sub(right_width) as u16,
-        area.y,
-        right_width as u16,
-        1,
-    );
-    frame.render_widget(
-        Paragraph::new(Line::from(right)).alignment(ratatui::layout::Alignment::Right),
-        right_area,
-    );
-    caret.filter(|_| app.search.editing)
+    )
 }
 
 pub fn status(app: &App, frame: &mut Frame, area: Rect) {

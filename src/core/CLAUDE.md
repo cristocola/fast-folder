@@ -482,8 +482,12 @@ EAGAIN…) and Locked back off 0.2 s → 5 s, six tries; NotConnected waits for 
 mount (`wait_for_mount`, up to `MOUNT_WAIT`, two minutes) — **until the same
 mount answers**, since an unmounted mount point is an empty folder on the mount
 above it and answers "nothing there" for everything under it
-(`fs_kind::mount_identity`); Denied, Full, ReadOnly and NameRefused are
-answered at once. The walk, each file's copy (`copy_file_again`: the partial
+(`fs_kind::mount_identity`), and `schedule::MOUNT_LAG` apart while the mount
+answers about the path and the call on it still fails: a FUSE mount whose
+daemon went away answers a look from the kernel's cache for a second or so,
+and asked again at once the call spins and writes a log line each time round,
+megabytes of them, which rotates the log away; Denied, Full, ReadOnly and
+NameRefused are answered at once. The walk, each file's copy (`copy_file_again`: the partial
 file goes, the file is copied again whole), every unlink and rmdir, the
 record's removal and the probe go through it.
 

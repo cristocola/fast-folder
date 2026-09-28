@@ -6,7 +6,7 @@
 //!
 //! | who asks again | which errors ([`Next`]) | pauses ([`schedule`]) |
 //! |---|---|---|
-//! | [`with_retry`]: the walk, every unlink and rmdir, the probe | [`by_class`]: transient and locked again, not connected once the mount is back | `BY_CLASS`, and up to [`MOUNT_WAIT`] for a mount |
+//! | [`with_retry`]: the walk, every unlink and rmdir, the probe | [`by_class`]: transient and locked again, not connected once the mount is back | `BY_CLASS`, and up to [`MOUNT_WAIT`] for a mount, `MOUNT_LAG` apart while it answers and the call does not |
 //! | a file's copy (`transactions::copy`) | the same, of the error an `anyhow` chain holds, until a cancel | the same |
 //! | [`rename`], [`remove_file`], [`remove_dir`], [`remove_dir_all`] | contention: four Windows codes | `CONTENTION` |
 //! | [`rename_dir`] | contention | `FOLDER_RENAME` |
@@ -204,6 +204,10 @@ pub mod schedule {
     /// cloud mount whose listing has not caught up. Each pause follows a
     /// fresh listing (`core::removal`), the last one included.
     pub const LISTING_LAG: &[u64] = &[300, 600, 900, 1200];
+
+    /// A mount that answers about a path while the call on it still says "not
+    /// connected": the pause before the call is asked again.
+    pub const MOUNT_LAG: u64 = 200;
 }
 
 /// Asked again by what the error means ([`classify`]): an error a mount gives
@@ -312,8 +316,22 @@ impl<'a> Retry<'a> {
                             .map(|path| crate::util::fs_kind::mount_identity(path))
                             .collect()
                     });
+                    let mut waited = false;
                     for (path, identity) in self.mounts.iter().zip(identities.iter()) {
-                        wait_for_mount_sleeping(&mut sleep, path, identity.as_deref(), deadline);
+                        waited |= wait_for_mount_sleeping(
+                            &mut sleep,
+                            path,
+                            identity.as_deref(),
+                            deadline,
+                        );
+                    }
+                    // A mount can answer about the path while the call on it
+                    // still fails: a FUSE mount whose daemon went away answers
+                    // a look from the kernel's cache for a second or so. Asked
+                    // again at once, that is a loop that spins and writes a
+                    // line to the log each time round.
+                    if !waited {
+                        sleep(Duration::from_millis(schedule::MOUNT_LAG));
                     }
                 }
                 _ => return Err(error),
@@ -457,16 +475,18 @@ pub fn list_dir(
 /// empty folder that answers "nothing there" for everything under it: that
 /// is not the mount being back.
 pub fn wait_for_mount(path: &Path, mount: Option<&str>, deadline: std::time::Instant) {
-    wait_for_mount_sleeping(&mut std::thread::sleep, path, mount, deadline)
+    wait_for_mount_sleeping(&mut std::thread::sleep, path, mount, deadline);
 }
 
-/// [`wait_for_mount`], pausing through `sleep`.
+/// [`wait_for_mount`], pausing through `sleep`. Answers whether it paused:
+/// `false` is a mount that answered at the first look.
 fn wait_for_mount_sleeping(
     sleep: &mut impl FnMut(Duration),
     path: &Path,
     mount: Option<&str>,
     deadline: std::time::Instant,
-) {
+) -> bool {
+    let mut paused = false;
     while std::time::Instant::now() < deadline {
         let answers = match crate::util::paths::presence(path) {
             crate::util::paths::Presence::Unknown(error) => {
@@ -477,10 +497,12 @@ fn wait_for_mount_sleeping(
         let same_mount =
             mount.is_none() || crate::util::fs_kind::mount_identity(path).as_deref() == mount;
         if answers && same_mount {
-            return;
+            return paused;
         }
         sleep(Duration::from_secs(1));
+        paused = true;
     }
+    paused
 }
 
 /// True when `err` is the kind of transient contention worth waiting out.
@@ -809,22 +831,55 @@ mod tests {
     }
 
     /// A mount that stays gone is asked about until the wait is over, and no
-    /// longer. The folder asked about is there, so nothing is waited out
-    /// between two asks: only the deadline ends it.
+    /// longer. The folder asked about is there, so each ask follows the pause
+    /// of a mount that answers while the call fails.
     #[test]
     fn a_mount_that_stays_gone_is_given_up_on_when_the_wait_is_over() {
         let wait = Duration::from_millis(300);
+        let temp = tempfile::tempdir().unwrap();
         let started = std::time::Instant::now();
-        let mut asked = 0_u64;
-        let (answer, pauses) = by_class(wait, || {
-            asked += 1;
-            Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
-        });
+        let mut asked = 0_usize;
+        let mut pauses = Vec::new();
+        let answer: io::Result<()> = with_retry_sleeping(
+            |pause| {
+                pauses.push(pause.as_millis() as u64);
+                std::thread::sleep(Duration::from_millis(40));
+            },
+            temp.path(),
+            wait,
+            || {
+                asked += 1;
+                Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
+            },
+        );
         assert_eq!(answer.unwrap_err().kind(), io::ErrorKind::NotConnected);
         assert!(asked > 1, "asked again while the wait lasted");
         assert!(started.elapsed() >= wait, "{:?}", started.elapsed());
         assert!(started.elapsed() < wait + Duration::from_secs(2));
-        assert!(pauses.is_empty(), "a mount is waited for, not paused for");
+        assert_eq!(asked, pauses.len() + 1, "a pause before each further ask");
+        assert!(
+            pauses.iter().all(|pause| *pause == schedule::MOUNT_LAG),
+            "{pauses:?}"
+        );
+    }
+
+    /// **A mount that answers about the path while the call on it still fails
+    /// is asked again after a pause, never at once.** A FUSE mount whose
+    /// daemon went away answers a look from the kernel's cache for a second or
+    /// so; asked at once, the call is a loop that spins and fills the log.
+    #[test]
+    fn a_mount_that_answers_while_the_call_fails_is_asked_again_after_a_pause() {
+        let mut left = 3;
+        let (answer, pauses) = by_class(Duration::from_secs(60), || {
+            if left > 0 {
+                left -= 1;
+                Err(io::Error::new(io::ErrorKind::NotConnected, "gone"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(answer.is_ok());
+        assert_eq!(pauses, [schedule::MOUNT_LAG; 3]);
     }
 
     #[test]

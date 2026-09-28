@@ -195,6 +195,16 @@ pub fn run(detach: bool) -> Result<()> {
             report.rolled_back
         );
     }
+    if !report.repaired.is_empty() {
+        println!(
+            "   {} {} put right, and nothing to do about:",
+            "repaired".dimmed(),
+            report.repaired.len()
+        );
+        for item in &report.repaired {
+            println!("     - {item}");
+        }
+    }
     if !report.incomplete.is_empty() {
         println!(
             "   {} {} project(s) were never finished being created:",

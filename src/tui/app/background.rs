@@ -456,6 +456,13 @@ pub(crate) fn for_the_app(text: &str) -> String {
 /// What a reconcile's report says beyond its summary, one paragraph each.
 pub(crate) fn reconcile_notes(report: &crate::core::provisioning::ReconcileReport) -> Vec<String> {
     let mut notes = Vec::new();
+    if !report.repaired.is_empty() {
+        notes.push(format!(
+            "{} put right, and nothing to do about:\n{}",
+            report.repaired.len(),
+            report.repaired.join("\n")
+        ));
+    }
     if !report.incomplete.is_empty() {
         notes.push(format!(
             "{} project(s) were never finished being created and cannot be rebuilt \

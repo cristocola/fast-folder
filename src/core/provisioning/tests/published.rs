@@ -701,6 +701,39 @@ fn files_a_mount_left_in_an_old_records_staging_are_moved_into_place() {
     assert!(!operation.exists());
 }
 
+/// **A repair is not something to look at.** Strays moved into place with
+/// nothing left behind finish the record, and the pass says what it put right
+/// without asking anybody to do anything.
+#[test]
+fn strays_moved_into_place_are_a_repair_and_need_no_look() {
+    let temp = tempfile::tempdir().unwrap();
+    let (source_base, target_base, cfg) = bases(temp.path());
+    let (source, final_path, mut transaction) =
+        published_awaiting_cleanup(&source_base, &target_base);
+    fs::remove_dir_all(&source).unwrap();
+    transaction.set_phase(MovePhase::Retired).unwrap();
+    let operation = transaction.operation_dir.clone();
+    let stray_dir = operation.join(transactions::STAGING_DIR);
+    fs::create_dir_all(&stray_dir).unwrap();
+    fs::write(stray_dir.join("payload.part"), [0_u8, 1, 255]).unwrap();
+    fs::remove_file(final_path.join("payload.part")).unwrap();
+
+    let report = reconcile_unlocked(&cfg);
+    assert_eq!(report.completed, 1, "{report:?}");
+    assert!(!operation.exists(), "the record is gone");
+    assert_eq!(
+        fs::read(final_path.join("payload.part")).unwrap(),
+        [0_u8, 1, 255]
+    );
+    assert_eq!(report.repaired.len(), 1, "{report:?}");
+    assert!(
+        report.repaired[0].contains("moved into place"),
+        "{report:?}"
+    );
+    assert!(report.unrecoverable.is_empty(), "{report:?}");
+    assert!(!report.needs_a_look(), "{report:?}");
+}
+
 /// The same, with the manifest gone too (the mount misplaced its rename
 /// as well): a stray goes where the moved copy holds nothing, and one the
 /// moved copy already has a file for is kept, since nothing says which is

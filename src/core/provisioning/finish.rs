@@ -59,7 +59,7 @@ pub(super) fn finish_record(
         match transaction.sweep_strays(manifest.as_ref()) {
             Ok((moved, left)) if left.is_empty() => {
                 if moved > 0 {
-                    report.unrecoverable.push(format!(
+                    report.repaired.push(format!(
                         "{subject}: {moved} file{} the mount had put in the move's old staging \
                          folder after it was renamed away {} moved into place.",
                         if moved == 1 { "" } else { "s" },

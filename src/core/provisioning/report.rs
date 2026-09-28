@@ -12,6 +12,11 @@ pub struct ReconcileReport {
     pub restored: usize,
     /// Old folders of projects that had already left the library, removed.
     pub cleared: usize,
+    /// What the pass put right by itself that a person may want to know of,
+    /// and has nothing to do about: files a cloud mount misplaced, moved into
+    /// their place.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repaired: Vec<String>,
     pub incomplete: Vec<String>,
     /// Old folders of projects that have left the library — hidden, so not
     /// listed — that are not removed yet, and what to do about each.
@@ -54,6 +59,7 @@ impl ReconcileReport {
             && self.rolled_back == 0
             && self.restored == 0
             && self.cleared == 0
+            && self.repaired.is_empty()
             && self.incomplete.is_empty()
             && self.leftovers.is_empty()
             && self.unrecoverable.is_empty()

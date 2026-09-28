@@ -17,19 +17,19 @@ pub fn show() -> Result<()> {
     println!(
         "  {:<26} {}",
         "Config file:".dimmed(),
-        paths::config_path().display()
+        crate::util::paths::display_path(&paths::config_path())
     );
     println!(
         "  {:<26} {}",
         "Templates dir:".dimmed(),
-        paths::templates_dir().display()
+        crate::util::paths::display_path(&paths::templates_dir())
     );
     // The data-dir counter is a backup input, not the record — each base carries
     // its own `.fastf-counter.toml`. `fastf id show` lists them.
     println!(
         "  {:<26} {}",
         "Counter (this machine):".dimmed(),
-        paths::counters_path().display()
+        crate::util::paths::display_path(&paths::counters_path())
     );
     println!(
         "  {:<26} {}",
@@ -41,7 +41,10 @@ pub fn show() -> Result<()> {
         "  {:<26} {}",
         "base_dir:".green(),
         if config.base_dir.is_empty() {
-            format!("{} (home directory — not configured)", base.display())
+            format!(
+                "{} (home directory — not configured)",
+                crate::util::paths::display_path(&base)
+            )
         } else {
             base.display().to_string()
         }

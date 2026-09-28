@@ -101,7 +101,9 @@ impl ManifestEntry {
                     "a link"
                 };
                 match &self.link_target {
-                    Some(target) => format!("{noun} to {}", target.display()),
+                    Some(target) => {
+                        format!("{noun} to {}", crate::util::paths::display_path(target))
+                    }
                     None => noun.to_string(),
                 }
             }
@@ -150,7 +152,7 @@ impl MoveManifest {
             if !seen.insert(entry.path.clone()) {
                 bail!(
                     "move manifest contains duplicate path {}",
-                    entry.path.display()
+                    crate::util::paths::display_path(&entry.path)
                 );
             }
             if entry.kind.is_link() {
@@ -158,7 +160,7 @@ impl MoveManifest {
                     bail!(
                         "a version-{} move manifest cannot hold a link: {}",
                         self.version,
-                        entry.path.display()
+                        crate::util::paths::display_path(&entry.path)
                     );
                 }
                 if entry
@@ -166,18 +168,21 @@ impl MoveManifest {
                     .as_ref()
                     .is_none_or(|target| target.as_os_str().is_empty())
                 {
-                    bail!("move manifest link has no target: {}", entry.path.display());
+                    bail!(
+                        "move manifest link has no target: {}",
+                        crate::util::paths::display_path(&entry.path)
+                    );
                 }
             } else if entry.link_target.is_some() {
                 bail!(
                     "move manifest entry has a link target but is not a link: {}",
-                    entry.path.display()
+                    crate::util::paths::display_path(&entry.path)
                 );
             }
             if entry.kind != ManifestKind::File && entry.bytes != 0 {
                 bail!(
                     "move manifest entry that is not a file has a non-zero byte length: {}",
-                    entry.path.display()
+                    crate::util::paths::display_path(&entry.path)
                 );
             }
         }
@@ -225,8 +230,8 @@ impl MoveManifest {
                         format!(
                             "{} points into the original folder by its full path ({}); it is \
                              kept exactly, so it still points there, not into the new copy",
-                            entry.path.display(),
-                            target.display()
+                            crate::util::paths::display_path(&entry.path),
+                            crate::util::paths::display_path(target)
                         )
                     })
                 } else {
@@ -234,8 +239,8 @@ impl MoveManifest {
                         format!(
                             "{} points outside the project ({}); it is kept exactly, so from \
                              the new place it may point somewhere else",
-                            entry.path.display(),
-                            target.display()
+                            crate::util::paths::display_path(&entry.path),
+                            crate::util::paths::display_path(target)
                         )
                     })
                 }
@@ -547,21 +552,24 @@ impl ManifestDiff {
         let lines: Vec<String> = self
             .changed
             .iter()
-            .map(|(path, change)| format!("{}: {change}", path.display()))
-            .chain(
-                self.added
-                    .iter()
-                    .map(|path| format!("{}: not in the record", path.display())),
-            )
-            .chain(
-                self.problems
-                    .iter()
-                    .map(|problem| format!("{}: {}", problem.path.display(), problem.problem)),
-            )
+            .map(|(path, change)| format!("{}: {change}", crate::util::paths::display_path(path)))
+            .chain(self.added.iter().map(|path| {
+                format!(
+                    "{}: not in the record",
+                    crate::util::paths::display_path(path)
+                )
+            }))
+            .chain(self.problems.iter().map(|problem| {
+                format!(
+                    "{}: {}",
+                    crate::util::paths::display_path(&problem.path),
+                    problem.problem
+                )
+            }))
             .chain(
                 self.missing
                     .iter()
-                    .map(|path| format!("{}: missing", path.display())),
+                    .map(|path| format!("{}: missing", crate::util::paths::display_path(path))),
             )
             .collect();
         let mut out = counts.join(", ");

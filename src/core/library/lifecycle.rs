@@ -143,14 +143,14 @@ pub(crate) fn delete_project_inner(
     if path.parent() != Some(base.as_path()) {
         anyhow::bail!(
             "refusing to delete: {} is not a direct child of its base {}",
-            path.display(),
-            base.display()
+            crate::util::paths::display_path(&path),
+            crate::util::paths::display_path(&base)
         );
     }
     if !project_info::pinfo_path(&path).is_file() {
         anyhow::bail!(
             "refusing to delete: {} has no PROJECT_INFO.md",
-            path.display()
+            crate::util::paths::display_path(&path)
         );
     }
     // Before anything is renamed, the two things that would stop the removal
@@ -230,7 +230,7 @@ fn refuse_mounts_inside(path: &Path) -> Result<()> {
     {
         anyhow::bail!(
             "cannot delete {shown}: {} is {}. Unmount it first. Nothing was removed.",
-            mounted.path.display(),
+            crate::util::paths::display_path(&mounted.path),
             mounted.problem
         );
     }
@@ -443,7 +443,10 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
         }
     } else {
         if assets::entry_exists(&new_path)? {
-            anyhow::bail!("rename target already exists: {}", new_path.display());
+            anyhow::bail!(
+                "rename target already exists: {}",
+                crate::util::paths::display_path(&new_path)
+            );
         }
         crate::util::fs_retry::rename_dir(&project.path, &new_path)
             .map_err(|error| held_or(error, &project.path))?;

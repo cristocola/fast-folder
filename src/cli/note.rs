@@ -66,8 +66,12 @@ pub fn add(args: NoteAddArgs) -> Result<()> {
         bail!("the note is empty — nothing written");
     }
 
-    crate::core::operations::append_note(&candidate, &message)
-        .with_context(|| format!("appending a note to {}", pinfo.display()))?;
+    crate::core::operations::append_note(&candidate, &message).with_context(|| {
+        format!(
+            "appending a note to {}",
+            crate::util::paths::display_path(&pinfo)
+        )
+    })?;
 
     println!(
         "{}  Note added to {}",
@@ -246,11 +250,16 @@ fn create_scratch_file() -> Result<ScratchFile> {
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => {
-                return Err(err).with_context(|| format!("creating {}", path.display()));
+                return Err(err).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(&path))
+                });
             }
         }
     }
-    bail!("could not create a scratch file in {}", dir.display())
+    bail!(
+        "could not create a scratch file in {}",
+        crate::util::paths::display_path(&dir)
+    )
 }
 
 /// Open the configured editor and return what the user wrote.
@@ -303,7 +312,7 @@ fn open_in_editor(editor: &str, cwd: Option<&Path>) -> Result<String> {
         // anybody can read.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => bail!(
             "the editor left no file at {} — nothing written",
-            scratch.0.display()
+            crate::util::paths::display_path(&scratch.0)
         ),
         Err(err) => return Err(err).context("reading editor temp file"),
     };

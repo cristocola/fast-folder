@@ -222,10 +222,10 @@ impl Config {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Self =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+        let cfg: Self = toml::from_str(&raw)
+            .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
         Ok(cfg)
     }
 
@@ -234,7 +234,7 @@ impl Config {
         let path = paths::config_path();
         let raw = toml::to_string_pretty(self).context("serializing config")?;
         crate::util::atomic::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
     }
 
     /// Whether a taken folder name should get a `_2` suffix rather than fail.
@@ -442,7 +442,8 @@ pub fn expand_base_path(raw: &str) -> Result<std::path::PathBuf> {
 /// drive it stands for — an absent base is meant to be skipped, not conjured.
 pub fn resolve_base_dir_input(raw: &str) -> Result<std::path::PathBuf> {
     let expanded = expand_base_path(raw)?;
-    fs::create_dir_all(&expanded).with_context(|| format!("creating {}", expanded.display()))?;
+    fs::create_dir_all(&expanded)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&expanded)))?;
     // Stored canonical, rendered readable at the display sites. Keeping the
     // verbatim form is what preserves long-path support when this base is later
     // used for filesystem work.

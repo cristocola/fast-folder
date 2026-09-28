@@ -162,7 +162,7 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Vec<No
     if actions.print_path {
         let canonical = crate::util::paths::canonical(project_path)
             .unwrap_or_else(|_| project_path.to_path_buf());
-        notes.push(Note::Path(canonical.display().to_string()));
+        notes.push(Note::Path(crate::util::paths::display_path(&canonical)));
     }
 
     notes
@@ -293,6 +293,28 @@ mod tests {
         } else {
             format!("\"${PROJECT_PATH_VAR}\"")
         }
+    }
+
+    /// The path a create prints for a shell to use is one a shell can use: a
+    /// canonical path on Windows carries the `\\?\` prefix, which `cd` does
+    /// not take.
+    #[test]
+    fn the_printed_path_has_no_verbatim_prefix() {
+        let project = tempfile::tempdir().unwrap();
+        let actions = super::PostCreate {
+            print_path: true,
+            ..Default::default()
+        };
+        let notes = super::run(
+            &actions,
+            project.path(),
+            &crate::core::config::Config::default(),
+        );
+        let Some(super::Note::Path(printed)) = notes.last() else {
+            panic!("no path was printed: {notes:?}");
+        };
+        assert!(!printed.starts_with(r"\\?\"), "{printed}");
+        assert!(std::path::Path::new(printed).is_dir(), "{printed}");
     }
 
     #[test]

@@ -91,7 +91,7 @@ pub fn list(query: &str) -> Result<()> {
     let meta = project_info::read_metadata(&project.path)?.ok_or_else(|| {
         anyhow::anyhow!(
             "{} has no YAML frontmatter — cannot read tags",
-            path.display()
+            crate::util::paths::display_path(&path)
         )
     })?;
 

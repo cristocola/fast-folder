@@ -451,7 +451,8 @@ pub fn write_at(
     let body = render_at(plan, tmpl, tags, created)?;
     // Atomic: this file *is* the project's identity, so a half-written one would
     // make the project unreadable rather than merely stale.
-    crate::util::atomic::write(&path, body).with_context(|| format!("writing {}", path.display()))
+    crate::util::atomic::write(&path, body)
+        .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
 }
 
 /// Flag a project as still being built. Set immediately after the folder is
@@ -482,9 +483,14 @@ pub fn is_provisioning(project_root: &Path) -> bool {
 pub fn read(project_root: &Path) -> Result<String> {
     let path = pinfo_path(project_root);
     if !path.exists() {
-        anyhow::bail!("no {} found at {}", RESERVED_FILENAME, path.display());
+        anyhow::bail!(
+            "no {} found at {}",
+            RESERVED_FILENAME,
+            crate::util::paths::display_path(&path)
+        );
     }
-    fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))
+    fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))
 }
 
 /// Parse the YAML frontmatter into a typed [`Metadata`].
@@ -533,18 +539,22 @@ pub fn write_frontmatter(path: &Path, mutator: impl FnOnce(&mut Metadata)) -> Re
 /// it alone writes it back byte for byte, which is the promise every
 /// frontmatter-only verb keeps.
 pub fn write_document(path: &Path, mutator: impl FnOnce(&mut Metadata, &mut String)) -> Result<()> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(path)))?;
 
     let (frontmatter_yaml, body) = split_frontmatter_body(&content).ok_or_else(|| {
         anyhow::anyhow!(
             "{} has no YAML frontmatter — cannot update metadata (was it created by fastf new?)",
-            path.display()
+            crate::util::paths::display_path(path)
         )
     })?;
 
-    let mut meta: Metadata = crate::util::yaml::from_str(frontmatter_yaml)
-        .with_context(|| format!("parsing YAML frontmatter in {}", path.display()))?;
+    let mut meta: Metadata = crate::util::yaml::from_str(frontmatter_yaml).with_context(|| {
+        format!(
+            "parsing YAML frontmatter in {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
 
     let mut body = body.to_string();
     mutator(&mut meta, &mut body);

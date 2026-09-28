@@ -345,7 +345,10 @@ impl Removing<'_> {
                 .ok()
                 .filter(|relative| !relative.as_os_str().is_empty())
                 .unwrap_or(path);
-            notes.push(format!("{}: {why}", shown.display()));
+            notes.push(format!(
+                "{}: {why}",
+                crate::util::paths::display_path(shown)
+            ));
         }
     }
 

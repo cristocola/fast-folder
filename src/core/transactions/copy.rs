@@ -79,27 +79,36 @@ fn copy_file(
         Ok(reader) => reader,
         Err(error) if is_not_a_file_now(&error) => return Ok(None),
         Err(error) => {
-            return Err(error).with_context(|| format!("opening {}", source_path.display()));
+            return Err(error).with_context(|| {
+                format!("opening {}", crate::util::paths::display_path(&source_path))
+            });
         }
     };
     // What was opened, from its own handle: the mode and times to keep, and
     // what the copy is of.
-    let original = reader
-        .metadata()
-        .with_context(|| format!("reading metadata for {}", source_path.display()))?;
+    let original = reader.metadata().with_context(|| {
+        format!(
+            "reading metadata for {}",
+            crate::util::paths::display_path(&source_path)
+        )
+    })?;
     if !original.file_type().is_file() {
         return Ok(None);
     }
-    let as_copied =
-        ManifestEntry {
-            path: entry.path.clone(),
-            kind: ManifestKind::File,
-            bytes: original.len(),
-            source_modified: ModifiedTime::from_system_time(original.modified().with_context(
-                || format!("reading modification time for {}", source_path.display()),
-            )?),
-            link_target: None,
-        };
+    let as_copied = ManifestEntry {
+        path: entry.path.clone(),
+        kind: ManifestKind::File,
+        bytes: original.len(),
+        source_modified: ModifiedTime::from_system_time(original.modified().with_context(
+            || {
+                format!(
+                    "reading modification time for {}",
+                    crate::util::paths::display_path(&source_path)
+                )
+            },
+        )?),
+        link_target: None,
+    };
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -110,7 +119,7 @@ fn copy_file(
     let mut writer = options.open(&destination_path).map_err(|error| {
         anyhow::anyhow!(
             "{} cannot be made where the project is going: {}",
-            entry.path.display(),
+            crate::util::paths::display_path(&entry.path),
             name_refusal(&error)
         )
     })?;
@@ -126,24 +135,32 @@ fn copy_file(
             bail!("move cancelled");
         }
         crate::util::faults::check("move:mid-copy")?;
-        let count = reader
-            .read(&mut buffer)
-            .with_context(|| format!("reading {}", source_path.display()))?;
+        let count = reader.read(&mut buffer).with_context(|| {
+            format!("reading {}", crate::util::paths::display_path(&source_path))
+        })?;
         if count == 0 {
             break;
         }
         crate::util::faults::check_io("copy:write")
             .and_then(|()| writer.write_all(&buffer[..count]))
-            .with_context(|| format!("writing {}", destination_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "writing {}",
+                    crate::util::paths::display_path(&destination_path)
+                )
+            })?;
         copied = copied.saturating_add(count as u64);
         if let Ok(mut state) = progress.lock() {
             state.copied_bytes = state.copied_bytes.saturating_add(count as u64);
             state.touch();
         }
     }
-    writer
-        .flush()
-        .with_context(|| format!("flushing {}", destination_path.display()))?;
+    writer.flush().with_context(|| {
+        format!(
+            "flushing {}",
+            crate::util::paths::display_path(&destination_path)
+        )
+    })?;
     keep_attributes(&writer, &original);
     // A file written while it was read holds more (or fewer) bytes than its
     // handle said at the start: the record is what the copy holds, and its
@@ -153,9 +170,12 @@ fn copy_file(
         bytes: copied,
         ..as_copied
     };
-    writer
-        .sync_all()
-        .with_context(|| format!("syncing {}", destination_path.display()))?;
+    writer.sync_all().with_context(|| {
+        format!(
+            "syncing {}",
+            crate::util::paths::display_path(&destination_path)
+        )
+    })?;
     if let Ok(mut state) = progress.lock() {
         state.done_files += 1;
         state.step_done += 1;
@@ -209,12 +229,15 @@ pub(super) fn copy_file_again_sleeping(
         |error| {
             crate::util::log::info(format!(
                 "copying {} again after: {error:#}",
-                entry.path.display()
+                crate::util::paths::display_path(&entry.path)
             ));
             match fs::symlink_metadata(&destination) {
                 Ok(metadata) if metadata.file_type().is_file() => {
                     crate::util::fs_retry::remove_file(&destination).with_context(|| {
-                        format!("removing a part-copied {}", destination.display())
+                        format!(
+                            "removing a part-copied {}",
+                            crate::util::paths::display_path(&destination)
+                        )
                     })?;
                 }
                 _ => {}

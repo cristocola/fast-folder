@@ -367,18 +367,22 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
     if entry_exists(&job.dest)? {
         anyhow::bail!(
             "copy destination is already occupied: {}",
-            job.dest.display()
+            crate::util::paths::display_path(&job.dest)
         );
     }
     if let Some(parent) = job.dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dirs for {}", job.dest.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "creating parent dirs for {}",
+                crate::util::paths::display_path(&job.dest)
+            )
+        })?;
     }
     let (tmp, mut writer) = crate::util::atomic::create_temp_for(&job.dest)?;
 
     let result = (|| -> Result<()> {
-        let mut reader =
-            fs::File::open(&job.src).with_context(|| format!("opening {}", job.src.display()))?;
+        let mut reader = fs::File::open(&job.src)
+            .with_context(|| format!("opening {}", crate::util::paths::display_path(&job.src)))?;
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -396,10 +400,10 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
         }
         writer
             .flush()
-            .with_context(|| format!("flushing {}", tmp.display()))?;
+            .with_context(|| format!("flushing {}", crate::util::paths::display_path(&tmp)))?;
         writer
             .sync_all()
-            .with_context(|| format!("syncing {}", tmp.display()))?;
+            .with_context(|| format!("syncing {}", crate::util::paths::display_path(&tmp)))?;
         Ok(())
     })();
     drop(writer);
@@ -410,7 +414,10 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
                 Ok(false) => {}
                 Ok(true) => {
                     let _ = crate::util::fs_retry::remove_file(&tmp);
-                    anyhow::bail!("copy destination became occupied: {}", job.dest.display());
+                    anyhow::bail!(
+                        "copy destination became occupied: {}",
+                        crate::util::paths::display_path(&job.dest)
+                    );
                 }
                 Err(error) => {
                     let _ = crate::util::fs_retry::remove_file(&tmp);
@@ -418,7 +425,9 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
                 }
             }
             crate::util::fs_retry::rename(&tmp, &job.dest)
-                .with_context(|| format!("finalizing {}", job.dest.display()))
+                .with_context(|| {
+                    format!("finalizing {}", crate::util::paths::display_path(&job.dest))
+                })
                 .inspect_err(|_| {
                     let _ = crate::util::fs_retry::remove_file(&tmp);
                 })?;
@@ -512,7 +521,9 @@ fn walk_inner(root: &Path, current: &Path, depth: usize, out: &mut Vec<AssetEntr
     if depth >= crate::util::paths::MAX_WALK_DEPTH {
         return Err(crate::util::paths::too_deep(current));
     }
-    for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(current)))?
+    {
         let entry = entry?;
         let path = entry.path();
         // `DirEntry::file_type` does not follow links, so a symlink to a
@@ -564,7 +575,8 @@ pub fn entry_exists(path: &Path) -> Result<bool> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+        Err(error) => Err(error)
+            .with_context(|| format!("inspecting {}", crate::util::paths::display_path(path))),
     }
 }
 
@@ -790,8 +802,12 @@ pub fn copy_file(
     let dest = crate::util::paths::contained_destination(dest_root, rel)?;
     let dest = dest.as_path();
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating parent dirs for {}", dest.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "creating parent dirs for {}",
+                crate::util::paths::display_path(dest)
+            )
+        })?;
     }
 
     let interpolated = if force_verbatim {

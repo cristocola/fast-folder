@@ -289,7 +289,7 @@ pub fn plan_rename(
 /// exact set `--recursive` would write into.
 pub fn recursive_targets(base: &Path) -> Result<Vec<PathBuf>> {
     let mut targets: Vec<PathBuf> = fs::read_dir(base)
-        .with_context(|| format!("reading {}", base.display()))?
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(base)))?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_dir() && !project_info::pinfo_path(p).exists())
@@ -333,7 +333,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     let canonical = crate::util::paths::canonical(&args.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            args.path.display()
+            crate::util::paths::display_path(&args.path)
         )
     })?;
 
@@ -395,7 +395,10 @@ pub fn run(args: RegisterArgs) -> Result<()> {
         } else if tty::prompt_available() {
             println!();
             let overwrite = crate::tui::prompt::confirm(
-                &format!("{} already exists — overwrite?", pinfo_path.display()),
+                &format!(
+                    "{} already exists — overwrite?",
+                    crate::util::paths::display_path(&pinfo_path)
+                ),
                 false,
             )
             .ok()
@@ -410,7 +413,7 @@ pub fn run(args: RegisterArgs) -> Result<()> {
             eprintln!(
                 "{} {} already exists; pass --yes to overwrite or remove the file first",
                 "warning:".yellow().bold(),
-                pinfo_path.display()
+                crate::util::paths::display_path(&pinfo_path)
             );
             PinfoConflict::Skip
         }
@@ -480,11 +483,14 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
     let base = crate::util::paths::canonical(&args.base).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            args.base.display()
+            crate::util::paths::display_path(&args.base)
         )
     })?;
     if !base.is_dir() {
-        bail!("path is not a directory: {}", base.display());
+        bail!(
+            "path is not a directory: {}",
+            crate::util::paths::display_path(&base)
+        );
     }
 
     // Direct children that are directories without a PROJECT_INFO.md.
@@ -548,7 +554,12 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
                 registered += 1;
             }
             Err(e) => {
-                eprintln!("  {} {}: {}", "skip".yellow().bold(), path.display(), e);
+                eprintln!(
+                    "  {} {}: {}",
+                    "skip".yellow().bold(),
+                    crate::util::paths::display_path(&path),
+                    e
+                );
                 skipped += 1;
             }
         }

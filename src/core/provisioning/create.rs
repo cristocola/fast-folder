@@ -42,15 +42,15 @@ pub fn write_create_journal(
         let source = job.src.strip_prefix(template_files).with_context(|| {
             format!(
                 "deferred create source {} is outside template files {}",
-                job.src.display(),
-                template_files.display()
+                crate::util::paths::display_path(&job.src),
+                crate::util::paths::display_path(template_files)
             )
         })?;
         let destination = job.dest.strip_prefix(root).with_context(|| {
             format!(
                 "deferred create destination {} is outside project {}",
-                job.dest.display(),
-                root.display()
+                crate::util::paths::display_path(&job.dest),
+                crate::util::paths::display_path(root)
             )
         })?;
         crate::util::paths::require_native_relative(source, "create journal path")?;
@@ -84,14 +84,15 @@ pub fn path_is_reserved(path: &str) -> bool {
 pub(super) fn read_create_journal(root: &Path) -> Result<CreateJournal> {
     let path = create_journal_path(root);
     crate::util::paths::require_real_file(&path, "create journal")?;
-    let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    let journal: CreateJournal =
-        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let raw = fs::read(&path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+    let journal: CreateJournal = serde_json::from_slice(&raw)
+        .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
     if journal.version != CREATE_VERSION {
         bail!(
             "unsupported create journal version {} at {}",
             journal.version,
-            path.display()
+            crate::util::paths::display_path(&path)
         );
     }
     TemplateSlug::parse(&journal.template_slug)?;
@@ -108,7 +109,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
         Err(error) => {
             report.unrecoverable.push(format!(
                 "{}: malformed create journal ({error:#}); left untouched",
-                create_journal_path(root).display()
+                crate::util::paths::display_path(&create_journal_path(root))
             ));
             return;
         }
@@ -121,7 +122,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
         Ok(Some(metadata)) => {
             report.unrecoverable.push(format!(
                 "{}: create journal identity mismatch (metadata template '{}', journal '{}')",
-                root.display(),
+                crate::util::paths::display_path(root),
                 metadata.template,
                 journal.template_slug
             ));
@@ -130,14 +131,14 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
         Ok(None) => {
             report.unrecoverable.push(format!(
                 "{}: create journal has no readable project identity",
-                root.display()
+                crate::util::paths::display_path(root)
             ));
             return;
         }
         Err(error) => {
             report.unrecoverable.push(format!(
                 "{}: could not verify create identity ({error:#})",
-                root.display()
+                crate::util::paths::display_path(root)
             ));
             return;
         }
@@ -147,7 +148,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
         Err(error) => {
             report.unrecoverable.push(format!(
                 "{}: template '{}' is unavailable ({error:#})",
-                root.display(),
+                crate::util::paths::display_path(root),
                 journal.template_slug
             ));
             return;
@@ -174,9 +175,10 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
             Ok(destination) => destination,
             Err(error) => {
                 all_done = false;
-                report
-                    .unrecoverable
-                    .push(format!("{}: {error:#}", root.display()));
+                report.unrecoverable.push(format!(
+                    "{}: {error:#}",
+                    crate::util::paths::display_path(root)
+                ));
                 continue;
             }
         };
@@ -192,7 +194,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
                 all_done = false;
                 report.unrecoverable.push(format!(
                     "{}: destination is occupied with unexpected type/size; left untouched",
-                    destination.display()
+                    crate::util::paths::display_path(&destination)
                 ));
                 continue;
             }
@@ -201,7 +203,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
                 all_done = false;
                 report.unrecoverable.push(format!(
                     "{}: could not inspect destination ({error})",
-                    destination.display()
+                    crate::util::paths::display_path(&destination)
                 ));
                 continue;
             }
@@ -218,7 +220,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
                 all_done = false;
                 report.unrecoverable.push(format!(
                     "{}: create source changed or is unsupported",
-                    source.display()
+                    crate::util::paths::display_path(&source)
                 ));
                 continue;
             }
@@ -226,7 +228,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
                 all_done = false;
                 report.unrecoverable.push(format!(
                     "{}: create source is unavailable ({error})",
-                    source.display()
+                    crate::util::paths::display_path(&source)
                 ));
                 continue;
             }
@@ -243,7 +245,7 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
                 all_done = false;
                 report.unrecoverable.push(format!(
                     "{}: could not resume create copy ({error:#})",
-                    destination.display()
+                    crate::util::paths::display_path(&destination)
                 ));
             }
         }
@@ -254,14 +256,14 @@ pub(super) fn reconcile_create(root: &Path, report: &mut ReconcileReport) {
     if let Err(error) = crate::core::project_info::clear_provisioning(root) {
         report.unrecoverable.push(format!(
             "{}: copies complete but provisioning flag could not be cleared ({error:#})",
-            root.display()
+            crate::util::paths::display_path(root)
         ));
         return;
     }
     if let Err(error) = clear_create(root) {
         report.unrecoverable.push(format!(
             "{}: provisioning completed but journal could not be cleared ({error:#})",
-            root.display()
+            crate::util::paths::display_path(root)
         ));
         return;
     }

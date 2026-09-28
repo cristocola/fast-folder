@@ -436,10 +436,13 @@ fn render_preamble(text: &str) -> Result<String> {
 /// Read the file and require the frontmatter — every writer here does, since
 /// this is a structured project file.
 fn read_document(path: &Path, verb: &str) -> Result<String> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(path)))?;
     if split_frontmatter_body(&content).is_none() {
-        bail!("{} has no YAML frontmatter — cannot {verb}", path.display());
+        bail!(
+            "{} has no YAML frontmatter — cannot {verb}",
+            crate::util::paths::display_path(path)
+        );
     }
     Ok(content)
 }

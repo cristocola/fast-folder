@@ -160,19 +160,19 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
     let original_metadata = fs::symlink_metadata(&options.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            options.path.display()
+            crate::util::paths::display_path(&options.path)
         )
     })?;
     if original_metadata.file_type().is_symlink() || !original_metadata.file_type().is_dir() {
         bail!(
             "path is not a directory (or is a link): {}",
-            options.path.display()
+            crate::util::paths::display_path(&options.path)
         );
     }
     let canonical = crate::util::paths::canonical(&options.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
-            options.path.display()
+            crate::util::paths::display_path(&options.path)
         )
     })?;
 
@@ -186,7 +186,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             match options.on_pinfo_conflict {
                 PinfoConflict::Abort => bail!(
                     "{} already exists — this folder is already a project (confirm overwrite to re-register)",
-                    pinfo.display()
+                    crate::util::paths::display_path(&pinfo)
                 ),
                 PinfoConflict::Skip => {
                     let project = library::scan_base(&base)
@@ -195,7 +195,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
                         .ok_or_else(|| {
                             anyhow::anyhow!(
                                 "{} exists but has no readable project identity",
-                                pinfo.display()
+                                crate::util::paths::display_path(&pinfo)
                             )
                         })?;
                     return Ok(RegisterOutcome {
@@ -210,7 +210,10 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
                 PinfoConflict::Overwrite => {
                     let metadata = fs::symlink_metadata(&pinfo)?;
                     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-                        bail!("{} is not a real PROJECT_INFO.md file", pinfo.display());
+                        bail!(
+                            "{} is not a real PROJECT_INFO.md file",
+                            crate::util::paths::display_path(&pinfo)
+                        );
                     }
                 }
             }
@@ -252,7 +255,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
                     bail!(
                         "project ID {} is already used by {}; refusing duplicate registration",
                         id,
-                        existing.path.display()
+                        crate::util::paths::display_path(&existing.path)
                     );
                 }
             }
@@ -355,7 +358,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
     }
     bail!(
         "registration target must be a direct child of a configured base: {}",
-        canonical.display()
+        crate::util::paths::display_path(canonical)
     )
 }
 
@@ -428,8 +431,12 @@ pub fn resolve_created(
     if use_today {
         return Ok(crate::util::time::now_iso8601());
     }
-    let metadata =
-        fs::metadata(path).with_context(|| format!("reading metadata of {}", path.display()))?;
+    let metadata = fs::metadata(path).with_context(|| {
+        format!(
+            "reading metadata of {}",
+            crate::util::paths::display_path(path)
+        )
+    })?;
     match metadata.created().or_else(|_| metadata.modified()) {
         Ok(value) => {
             let date: DateTime<Utc> = value.into();

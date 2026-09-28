@@ -289,7 +289,8 @@ pub fn start_auto() -> Result<String> {
 
 fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
     let root = root_or_error()?;
-    std::fs::create_dir_all(&root).with_context(|| format!("creating {}", root.display()))?;
+    std::fs::create_dir_all(&root)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&root)))?;
     for _ in 0..64 {
         let id = crate::core::transactions::next_operation_id();
         let dir = root.join(&id);
@@ -302,17 +303,23 @@ fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
                     auto,
                 };
                 let text = serde_json::to_string_pretty(&request)?;
-                std::fs::write(dir.join("request.json"), text)
-                    .with_context(|| format!("writing {}", dir.display()))?;
+                std::fs::write(dir.join("request.json"), text).with_context(|| {
+                    format!("writing {}", crate::util::paths::display_path(&dir))
+                })?;
                 return Ok(id);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
-                return Err(error).with_context(|| format!("creating {}", dir.display()));
+                return Err(error).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(&dir))
+                });
             }
         }
     }
-    bail!("could not find a free name for a job in {}", root.display())
+    bail!(
+        "could not find a free name for a job in {}",
+        crate::util::paths::display_path(&root)
+    )
 }
 
 /// Start a job: write its request, start its worker, and wait until the
@@ -586,7 +593,8 @@ const STARTING_FOR: Duration = Duration::from_secs(15);
 /// depends on where it is — see `Progress::committed`.
 pub fn request_cancel(id: &str) -> Result<()> {
     let path = dir(id)?.join("cancel");
-    std::fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
+    std::fs::write(&path, b"")
+        .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
 }
 
 pub fn cancel_requested(id: &str) -> bool {

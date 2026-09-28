@@ -398,10 +398,16 @@ fn validate_source(source: &str) -> Result<PathBuf> {
     let root = PathBuf::from(source);
     paths::require_answer(&root)?;
     if !root.exists() {
-        bail!("source folder does not exist: {}", root.display());
+        bail!(
+            "source folder does not exist: {}",
+            crate::util::paths::display_path(&root)
+        );
     }
     if !root.is_dir() {
-        bail!("source is not a directory: {}", root.display());
+        bail!(
+            "source is not a directory: {}",
+            crate::util::paths::display_path(&root)
+        );
     }
     Ok(root)
 }

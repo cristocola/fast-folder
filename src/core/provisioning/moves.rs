@@ -14,7 +14,7 @@ pub(super) fn reconcile_transactions(
     if let Err(error) = crate::util::paths::require_real_directory(root, "transaction root") {
         report.unrecoverable.push(format!(
             "{}: {error:#}; fastf changed nothing",
-            root.display()
+            crate::util::paths::display_path(root)
         ));
         return;
     }
@@ -23,7 +23,7 @@ pub(super) fn reconcile_transactions(
         Err(error) => {
             report.unrecoverable.push(format!(
                 "could not read transaction root {} ({error})",
-                root.display()
+                crate::util::paths::display_path(root)
             ));
             return;
         }
@@ -40,7 +40,7 @@ pub(super) fn reconcile_transactions(
         {
             report.unrecoverable.push(format!(
                 "{}: transaction entry is not a real directory; fastf changed nothing",
-                operation_dir.display()
+                crate::util::paths::display_path(&operation_dir)
             ));
             continue;
         }
@@ -110,7 +110,7 @@ pub(super) fn reconcile_record(
         Err(error) => {
             report.unrecoverable.push(format!(
                 "{}: malformed/unknown move journal ({error:#}); fastf changed nothing",
-                operation_dir.display()
+                crate::util::paths::display_path(operation_dir)
             ));
             return;
         }
@@ -260,7 +260,7 @@ fn reconcile_transaction(
     let subject = format!(
         "{} ({}; move record {}, {:?})",
         journal.project_id,
-        journal.target_folder.display(),
+        crate::util::paths::display_path(&journal.target_folder),
         crate::util::paths::display_path(operation_dir),
         journal.phase
     );

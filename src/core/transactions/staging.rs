@@ -40,7 +40,11 @@ pub fn copy_to_staging(
                 }
             );
             for (one, other) in clashes.iter().take(LISTED) {
-                message.push_str(&format!("\n  {} and {}", one.display(), other.display()));
+                message.push_str(&format!(
+                    "\n  {} and {}",
+                    crate::util::paths::display_path(one),
+                    crate::util::paths::display_path(other)
+                ));
             }
             if count > LISTED {
                 message.push_str(&format!("\n  and {} more", count - LISTED));
@@ -110,15 +114,19 @@ pub fn adopt_staging(body: &MoveManifest, staging: &Path) -> Result<Vec<Manifest
                 _ => Ok(()),
             }
         };
-        removed
-            .with_context(|| format!("clearing {} from the paused copy", entry.path.display()))?;
+        removed.with_context(|| {
+            format!(
+                "clearing {} from the paused copy",
+                crate::util::paths::display_path(&entry.path)
+            )
+        })?;
     }
     // Anything the walk could not take is not part of a copy fastf made.
     if let Some(problem) = there.problems.first() {
         bail!(
             "the paused copy at {} holds something fastf did not put there: {}: {}",
-            staging.display(),
-            problem.path.display(),
+            crate::util::paths::display_path(staging),
+            crate::util::paths::display_path(&problem.path),
             problem.problem
         );
     }
@@ -289,7 +297,12 @@ fn catch_up(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         };
-        removed.with_context(|| format!("replacing {} in the copy", path.display()))?;
+        removed.with_context(|| {
+            format!(
+                "replacing {} in the copy",
+                crate::util::paths::display_path(path)
+            )
+        })?;
     }
     // Then everything new or changed, as a manifest of its own: folders and
     // links first, then the files, exactly as the first copy did.
@@ -464,7 +477,10 @@ fn create_names(manifest: &MoveManifest, staging: &Path, cancel: &AtomicBool) ->
         if count == 1 { "name" } else { "names" }
     );
     for (path, why) in refused.iter().take(LISTED) {
-        message.push_str(&format!("\n  {}: {why}", path.display()));
+        message.push_str(&format!(
+            "\n  {}: {why}",
+            crate::util::paths::display_path(path)
+        ));
     }
     if count > LISTED {
         message.push_str(&format!("\n  and {} more", count - LISTED));

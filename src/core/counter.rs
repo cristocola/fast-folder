@@ -68,10 +68,10 @@ impl Counters {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw =
-            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-        let c: Self =
-            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+        let c: Self = toml::from_str(&raw)
+            .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
         Ok(c)
     }
 
@@ -109,7 +109,7 @@ impl Counters {
                          left alone, and until it is fixed the next ID comes from \
                          the bases that are mounted, so one that is not may \
                          already hold it",
-                        paths::counters_path().display()
+                        crate::util::paths::display_path(&paths::counters_path())
                     ));
                 }
                 None
@@ -126,7 +126,7 @@ impl Counters {
         let path = paths::counters_path();
         let raw = toml::to_string_pretty(self).context("serializing counters")?;
         crate::util::atomic::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))
     }
 
     /// Record `value` everywhere a create must update it: the base the project
@@ -146,7 +146,7 @@ impl Counters {
         if let Err(err) = Self::save_base(base, value) {
             crate::util::diag::warn(format!(
                 "could not record the ID counter in {} ({err})",
-                base.display()
+                crate::util::paths::display_path(base)
             ));
         }
         Self::propagate(cfg, value);
@@ -168,7 +168,7 @@ impl Counters {
                 Ok(false) => {}
                 Err(err) => crate::util::diag::warn(format!(
                     "could not record the ID counter in {} ({err})",
-                    base.display()
+                    crate::util::paths::display_path(&base)
                 )),
             }
         }
@@ -191,7 +191,7 @@ impl Counters {
             if let Err(err) = local.save() {
                 crate::util::diag::warn(format!(
                     "could not record the ID counter in {} ({err})",
-                    paths::counters_path().display()
+                    crate::util::paths::display_path(&paths::counters_path())
                 ));
             }
         }
@@ -269,7 +269,7 @@ impl Counters {
         let raw =
             toml::to_string_pretty(&Self { global: value }).context("serializing counters")?;
         crate::util::atomic::write(&path, raw)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(&path)))?;
         Ok(true)
     }
 

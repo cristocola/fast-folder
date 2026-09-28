@@ -237,8 +237,12 @@ pub fn move_project_in_parts(
     let moved = (|| {
         let cfg = Config::load()?;
         let project = revalidate_project(&cfg, project)?;
-        let wanted = crate::util::paths::canonical_in_time(new_base)
-            .with_context(|| format!("resolving target base {}", new_base.display()))?;
+        let wanted = crate::util::paths::canonical_in_time(new_base).with_context(|| {
+            format!(
+                "resolving target base {}",
+                crate::util::paths::display_path(new_base)
+            )
+        })?;
         let target = cfg
             .answering_bases()
             .into_iter()
@@ -247,7 +251,7 @@ pub fn move_project_in_parts(
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "'{}' is not a currently configured base",
-                    new_base.display()
+                    crate::util::paths::display_path(new_base)
                 )
             })?;
         move_project_unlocked_in_parts(&project, &target, progress, cancel)
@@ -278,16 +282,29 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
     let project = revalidate_project(&cfg, project)?;
-    let wanted = crate::util::paths::canonical_in_time(new_base)
-        .with_context(|| format!("resolving target base {}", new_base.display()))?;
+    let wanted = crate::util::paths::canonical_in_time(new_base).with_context(|| {
+        format!(
+            "resolving target base {}",
+            crate::util::paths::display_path(new_base)
+        )
+    })?;
     let target = cfg
         .answering_bases()
         .into_iter()
         .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == wanted)
-        .ok_or_else(|| anyhow::anyhow!("'{}' is not a configured base", new_base.display()))?;
-    let old_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "'{}' is not a configured base",
+                crate::util::paths::display_path(new_base)
+            )
+        })?;
+    let old_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving source base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     if target == old_base {
         anyhow::bail!("move target is the source base");
     }
@@ -310,22 +327,30 @@ fn move_project_unlocked_in_parts(
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
     crate::util::paths::require_real_directory(new_base, "target base")?;
-    let new_base = crate::util::paths::canonical(new_base)
-        .with_context(|| format!("resolving target base {}", new_base.display()))?;
-    let old_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+    let new_base = crate::util::paths::canonical(new_base).with_context(|| {
+        format!(
+            "resolving target base {}",
+            crate::util::paths::display_path(new_base)
+        )
+    })?;
+    let old_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving source base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     if new_base == old_base {
         anyhow::bail!(
             "'{}' is already in base {}",
             project.name,
-            new_base.display()
+            crate::util::paths::display_path(&new_base)
         );
     }
 
     let folder_os = project.path.file_name().ok_or_else(|| {
         anyhow::anyhow!(
             "project path has no folder name: {}",
-            project.path.display()
+            crate::util::paths::display_path(&project.path)
         )
     })?;
     let folder = PathBuf::from(folder_os);
@@ -388,8 +413,8 @@ fn move_project_unlocked_in_parts(
                 return Err(error).with_context(|| {
                     format!(
                         "renaming project {} to {}",
-                        project.path.display(),
-                        new_path.display()
+                        crate::util::paths::display_path(&project.path),
+                        crate::util::paths::display_path(&new_path)
                     )
                 });
             }
@@ -422,14 +447,14 @@ fn report_cleanup_pending(outcome: &MoveOutcome, source: &Path) {
         SourceOutcome::Removed | SourceOutcome::SetAside { .. } => {}
         SourceOutcome::Leftover { path, reason, .. } => crate::util::diag::warn(format!(
             "moved to {}; the original's retired copy at {} is not removed yet ({reason})",
-            outcome.project.path.display(),
-            path.display()
+            crate::util::paths::display_path(&outcome.project.path),
+            crate::util::paths::display_path(path)
         )),
         SourceOutcome::KeptWhole { reason } | SourceOutcome::Unknown { reason } => {
             crate::util::diag::warn(format!(
                 "moved to {}, but the original at {} is still there ({reason})",
-                outcome.project.path.display(),
-                source.display()
+                crate::util::paths::display_path(&outcome.project.path),
+                crate::util::paths::display_path(source)
             ))
         }
     }
@@ -478,8 +503,12 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
     let ticker = Ticker::new(progress, cancel);
     ticker.plan(MOVE_STEPS);
-    let old_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+    let old_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving source base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     let folder = project
         .path
         .file_name()
@@ -593,8 +622,12 @@ fn staged_in_parts(
 
     let ticker = Ticker::new(progress, cancel);
     ticker.plan(MOVE_STEPS);
-    let old_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving source base {}", project.base.display()))?;
+    let old_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving source base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     ticker.update(|state| state.operation = Some(transaction.journal.operation_id.clone()));
     // Who works in the folder: asked after the scan, which Windows needs —
     // it asks about each file and folder the scan found.
@@ -664,7 +697,11 @@ fn staged_in_parts(
             }
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("copying '{}' into {}", project.name, new_base.display())
+                    format!(
+                        "copying '{}' into {}",
+                        project.name,
+                        crate::util::paths::display_path(new_base)
+                    )
                 });
             }
         }
@@ -700,8 +737,13 @@ fn staged_in_parts(
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
         publishing = true;
-        transactions::publish(&manifest, &project.path, &staging, progress)
-            .with_context(|| format!("publishing '{}' in {}", project.name, new_base.display()))?;
+        transactions::publish(&manifest, &project.path, &staging, progress).with_context(|| {
+            format!(
+                "publishing '{}' in {}",
+                project.name,
+                crate::util::paths::display_path(new_base)
+            )
+        })?;
         crate::util::faults::check("move:after-publish-write")?;
         published = true;
         let metadata_path = Path::new(project_info::RESERVED_FILENAME);

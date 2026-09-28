@@ -454,7 +454,7 @@ fn move_item<'v>(
     let project = Some(format!(
         "{} {}",
         journal.project_id,
-        journal.target_folder.display()
+        crate::util::paths::display_path(&journal.target_folder)
     ));
     if !journal.is_from_this_host() {
         return Item {
@@ -615,7 +615,9 @@ fn take_old(cfg: &Config, old_copy: &Path) -> anyhow::Result<String> {
             let folder = crate::util::paths::contained_destination(&final_path, &entry.path)?;
             match std::fs::create_dir(&folder) {
                 Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
-                    return Err(error).with_context(|| format!("making {}", folder.display()));
+                    return Err(error).with_context(|| {
+                        format!("making {}", crate::util::paths::display_path(&folder))
+                    });
                 }
                 _ => {}
             }
@@ -625,20 +627,31 @@ fn take_old(cfg: &Config, old_copy: &Path) -> anyhow::Result<String> {
         let to = crate::util::paths::contained_destination(&final_path, &entry.path)?;
         match std::fs::symlink_metadata(&to) {
             Ok(_) => crate::util::fs_retry::remove_file(&to)
-                .with_context(|| format!("replacing {}", to.display()))?,
+                .with_context(|| format!("replacing {}", crate::util::paths::display_path(&to)))?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).with_context(|| format!("reading {}", to.display())),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading {}", crate::util::paths::display_path(&to)));
+            }
         }
         match &entry.link_target {
             Some(target) => transactions::make_link(entry.kind, target, &to)
                 .map_err(|error| anyhow::anyhow!(transactions::link_refusal(&error)))?,
             // Written new at its place, never renamed into it: a cloud mount
             // misplaces renames with uploads in flight.
-            None => crate::core::merge::copy_whole(&from, &to, entry)
-                .map_err(|why| anyhow::anyhow!("copying {}: {why}", entry.path.display()))?,
+            None => crate::core::merge::copy_whole(&from, &to, entry).map_err(|why| {
+                anyhow::anyhow!(
+                    "copying {}: {why}",
+                    crate::util::paths::display_path(&entry.path)
+                )
+            })?,
         }
-        crate::util::fs_retry::remove_file(&from)
-            .with_context(|| format!("removing {} once taken", from.display()))?;
+        crate::util::fs_retry::remove_file(&from).with_context(|| {
+            format!(
+                "removing {} once taken",
+                crate::util::paths::display_path(&from)
+            )
+        })?;
         taken += 1;
         project_info |= entry.path == Path::new(crate::core::project_info::RESERVED_FILENAME);
     }
@@ -707,8 +720,8 @@ fn put_back(cfg: &Config, old_copy: &Path) -> anyhow::Result<String> {
 fn discard(item: &Item) -> anyhow::Result<String> {
     use anyhow::Context;
     let path = &item.path;
-    let metadata =
-        std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(path)))?;
     let shown = crate::util::paths::display_path(path);
     if metadata.is_dir() {
         let name = path

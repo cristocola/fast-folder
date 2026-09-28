@@ -311,8 +311,12 @@ impl Template {
     /// asked for.
     pub fn load_with(path: &Path, buffer: FileBuffer) -> Result<Self> {
         crate::util::trace::hit("template_load");
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("reading template {}", path.display()))?;
+        let raw = fs::read_to_string(path).with_context(|| {
+            format!(
+                "reading template {}",
+                crate::util::paths::display_path(path)
+            )
+        })?;
         // Strip a UTF-8 BOM. Notepad, PowerShell's `Out-File -Encoding utf8`,
         // and plenty of other Windows editors add one by default, and the parser
         // then fails with a thoroughly misleading `missing field \`slug\``
@@ -322,7 +326,7 @@ impl Template {
             format!(
                 "parsing template {}\n  (if you edited this file on Windows, \
                  check it is saved as UTF-8 without a BOM)",
-                path.display()
+                crate::util::paths::display_path(path)
             )
         })?;
         t.dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -402,7 +406,8 @@ impl Template {
         snapshot.validate()?;
 
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating {}", crate::util::paths::display_path(&dir)))?;
 
         // `template.yaml` is a file the user owns and may have keys in it that
         // this build knows nothing about. Merge onto what is already there so an
@@ -427,7 +432,7 @@ impl Template {
                 return Err(err).with_context(|| {
                     format!(
                         "refusing to replace an unreadable manifest at {}",
-                        path.display()
+                        crate::util::paths::display_path(path)
                     )
                 });
             }
@@ -435,15 +440,16 @@ impl Template {
         // Atomic: a manifest truncated by a crash is a template that no longer
         // loads, and `load_all` is what every create reads.
         crate::util::atomic::write(path, raw)
-            .with_context(|| format!("writing {}", path.display()))?;
+            .with_context(|| format!("writing {}", crate::util::paths::display_path(path)))?;
         crate::util::faults::check("template:mid-save")?;
 
         // Flush text files into files/. Uses `path`'s parent (authoritative)
         // rather than `self.dir`, which may be unset on an in-memory template.
         let files_dir = dir.join("files");
         if !snapshot.files.is_empty() {
-            fs::create_dir_all(&files_dir)
-                .with_context(|| format!("creating {}", files_dir.display()))?;
+            fs::create_dir_all(&files_dir).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(&files_dir))
+            })?;
         }
         for f in &snapshot.files {
             let rel = crate::core::validated::SafeRelativePath::parse(&f.path)?;
@@ -452,8 +458,9 @@ impl Template {
             // than written through.
             let dest = crate::util::paths::contained_destination(&files_dir, &rel.to_path_buf())?;
             if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("creating {}", parent.display()))?;
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(parent))
+                })?;
             }
             let content = if !f.template.is_empty() {
                 &f.template
@@ -461,7 +468,7 @@ impl Template {
                 &f.content
             };
             crate::util::atomic::write(&dest, content)
-                .with_context(|| format!("writing {}", dest.display()))?;
+                .with_context(|| format!("writing {}", crate::util::paths::display_path(&dest)))?;
         }
         Ok(())
     }
@@ -577,9 +584,12 @@ pub fn load_all() -> Result<Vec<Template>> {
         return Ok(vec![]);
     }
     let mut templates = Vec::new();
-    for entry in
-        fs::read_dir(&dir).with_context(|| format!("reading templates dir {}", dir.display()))?
-    {
+    for entry in fs::read_dir(&dir).with_context(|| {
+        format!(
+            "reading templates dir {}",
+            crate::util::paths::display_path(&dir)
+        )
+    })? {
         let entry = entry?;
         let path = entry.path();
         if !path.is_dir() {
@@ -593,7 +603,11 @@ pub fn load_all() -> Result<Vec<Template>> {
         // count templates. Anything that edits or previews one loads it again.
         match Template::load_with(&manifest, FileBuffer::Skip) {
             Ok(t) => templates.push(t),
-            Err(e) => crate::util::diag::warn(format!("skipping {}: {}", manifest.display(), e)),
+            Err(e) => crate::util::diag::warn(format!(
+                "skipping {}: {}",
+                crate::util::paths::display_path(&manifest),
+                e
+            )),
         }
     }
     templates.sort_by(|a, b| a.name.cmp(&b.name));

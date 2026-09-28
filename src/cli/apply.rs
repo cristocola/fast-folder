@@ -58,10 +58,16 @@ pub fn run(args: ApplyArgs) -> Result<()> {
 
     let target = PathBuf::from(&args.target);
     if !target.exists() {
-        bail!("target folder does not exist: {}", target.display());
+        bail!(
+            "target folder does not exist: {}",
+            crate::util::paths::display_path(&target)
+        );
     }
     if !target.is_dir() {
-        bail!("target is not a directory: {}", target.display());
+        bail!(
+            "target is not a directory: {}",
+            crate::util::paths::display_path(&target)
+        );
     }
 
     // Warn on unknown --vars
@@ -125,7 +131,11 @@ pub fn run(args: ApplyArgs) -> Result<()> {
         tty::require_tty("confirm", "pass --yes to apply without confirming")?;
         println!();
         let ok = crate::tui::prompt::confirm(
-            &format!("Apply template '{}' to {}?", tmpl.slug, target.display()),
+            &format!(
+                "Apply template '{}' to {}?",
+                tmpl.slug,
+                crate::util::paths::display_path(&target)
+            ),
             true,
         )?
         .unwrap_or(false);

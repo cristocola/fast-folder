@@ -183,8 +183,12 @@ fn copy_unlocked(
         .parent()
         .map(Path::to_path_buf)
         .context("the copy destination has no parent")?;
-    let source_base = crate::util::paths::canonical(&project.base)
-        .with_context(|| format!("resolving project base {}", project.base.display()))?;
+    let source_base = crate::util::paths::canonical(&project.base).with_context(|| {
+        format!(
+            "resolving project base {}",
+            crate::util::paths::display_path(&project.base)
+        )
+    })?;
     let folder = project
         .path
         .file_name()
@@ -235,7 +239,11 @@ fn copy_unlocked(
             }
             Err(error) => {
                 return Err(error).with_context(|| {
-                    format!("copying '{}' into {}", project.name, root.display())
+                    format!(
+                        "copying '{}' into {}",
+                        project.name,
+                        crate::util::paths::display_path(&root)
+                    )
                 });
             }
         }
@@ -265,8 +273,12 @@ fn copy_unlocked(
         }
         ticker.phase(JobPhase::Publishing, 0);
         ticker.update(|state| state.committed = true);
-        transactions::publish(&manifest, &project.path, &staging, progress)
-            .with_context(|| format!("publishing the copy at {}", target.display()))?;
+        transactions::publish(&manifest, &project.path, &staging, progress).with_context(|| {
+            format!(
+                "publishing the copy at {}",
+                crate::util::paths::display_path(target)
+            )
+        })?;
         transactions::keep_folder_attributes(&manifest, &project.path, &staging);
         transactions::sync_folders(&manifest, &staging);
         if let Some(parent) = staging.parent() {

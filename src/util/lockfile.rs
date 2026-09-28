@@ -90,8 +90,9 @@ impl DataLock {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
 
         let deadline = Instant::now() + timeout;
@@ -119,7 +120,9 @@ impl DataLock {
                 // Held by someone else — wait and retry.
                 Ok(None) => {}
                 Err(err) => {
-                    return Err(err).with_context(|| format!("locking {}", path.display()));
+                    return Err(err).with_context(|| {
+                        format!("locking {}", crate::util::paths::display_path(path))
+                    });
                 }
             }
             if let Some(cancel) = patient {
@@ -141,7 +144,7 @@ impl DataLock {
                      the process, not the file.",
                     holder(),
                     timeout.as_secs(),
-                    path.display()
+                    crate::util::paths::display_path(path)
                 );
             }
             std::thread::sleep(POLL_INTERVAL);
@@ -157,11 +160,12 @@ impl DataLock {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
         Ok(try_lock(path)
-            .with_context(|| format!("locking {}", path.display()))?
+            .with_context(|| format!("locking {}", crate::util::paths::display_path(path)))?
             .map(|file| Self {
                 _file: file,
                 path: path.to_path_buf(),
@@ -190,7 +194,7 @@ pub(crate) fn lock_path() -> PathBuf {
 /// [`try_lock`] on a file that must already exist: an `Err` for a missing one.
 fn try_lock_existing(path: &Path) -> Result<Option<File>> {
     if !path.is_file() {
-        anyhow::bail!("{} does not exist", path.display());
+        anyhow::bail!("{} does not exist", crate::util::paths::display_path(path));
     }
     try_lock_with(path, false)
 }

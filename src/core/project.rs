@@ -383,7 +383,8 @@ fn create_inner(
         );
     }
     let parent = parent.to_path_buf();
-    fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
+    fs::create_dir_all(&parent)
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(&parent)))?;
 
     // Claim the project folder with a single atomic operation.
     //
@@ -417,7 +418,9 @@ fn create_inner(
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(err) => {
-                return Err(err).with_context(|| format!("creating {}", path.display()));
+                return Err(err).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(&path))
+                });
             }
         }
     }
@@ -427,11 +430,11 @@ fn create_inner(
             "could not find a free folder name for '{}' after {} attempts in {}",
             plan.folder_name,
             MAX_NAME_ATTEMPTS,
-            parent.display()
+            crate::util::paths::display_path(&parent)
         ),
         None => anyhow::bail!(
             "project folder already exists: {}",
-            parent.join(&plan.folder_name).display()
+            crate::util::paths::display_path(&parent.join(&plan.folder_name))
         ),
     };
 
@@ -735,11 +738,16 @@ pub fn apply(
                 // The plan joined this onto `target` lexically. Re-derive the
                 // relative part and re-check it physically, here, right before
                 // the write.
-                let rel = p
-                    .strip_prefix(target)
-                    .with_context(|| format!("{} is not inside the apply target", p.display()))?;
+                let rel = p.strip_prefix(target).with_context(|| {
+                    format!(
+                        "{} is not inside the apply target",
+                        crate::util::paths::display_path(&p)
+                    )
+                })?;
                 let p = crate::util::paths::contained_destination(target, rel)?;
-                fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;
+                fs::create_dir_all(&p).with_context(|| {
+                    format!("creating {}", crate::util::paths::display_path(&p))
+                })?;
             }
             ApplyAction::SkipFolder(_) => {}
             // Files are copied below via the shared engine (handles binaries).
@@ -767,8 +775,12 @@ fn create_structure(
         let rendered = assets::interp_rel_with(raw.as_str(), vars, ctx);
         let actual_path = SafeRelativePath::parse(&rendered)?;
         let path = crate::util::paths::contained_destination(parent, &actual_path.to_path_buf())?;
-        fs::create_dir_all(&path)
-            .with_context(|| format!("creating directory {}", path.display()))?;
+        fs::create_dir_all(&path).with_context(|| {
+            format!(
+                "creating directory {}",
+                crate::util::paths::display_path(&path)
+            )
+        })?;
         if !node.children.is_empty() {
             create_structure(&node.children, &path, vars, ctx)?;
         }
@@ -867,8 +879,12 @@ fn copy_template_files(
 
         if planned.action == assets::FileAction::Folder {
             let dest = crate::util::paths::contained_destination(dest_root, &native)?;
-            fs::create_dir_all(&dest)
-                .with_context(|| format!("creating directory {}", dest.display()))?;
+            fs::create_dir_all(&dest).with_context(|| {
+                format!(
+                    "creating directory {}",
+                    crate::util::paths::display_path(&dest)
+                )
+            })?;
             continue;
         }
 

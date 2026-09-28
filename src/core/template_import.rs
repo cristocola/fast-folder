@@ -112,18 +112,25 @@ pub fn from_folder(
 
 fn require_real_directory(source: &Path) -> Result<()> {
     paths::require_answer(source)?;
-    let metadata = fs::symlink_metadata(source)
-        .with_context(|| format!("source folder does not exist: {}", source.display()))?;
+    let metadata = fs::symlink_metadata(source).with_context(|| {
+        format!(
+            "source folder does not exist: {}",
+            crate::util::paths::display_path(source)
+        )
+    })?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        bail!("source is not a real directory: {}", source.display());
+        bail!(
+            "source is not a real directory: {}",
+            crate::util::paths::display_path(source)
+        );
     }
     Ok(())
 }
 
 /// The one scan: the source as resolved, and what was found in it.
 fn plan_of(source: &Path, bundle_assets: bool) -> Result<(PathBuf, ImportPlan)> {
-    let source =
-        paths::canonical(source).with_context(|| format!("resolving {}", source.display()))?;
+    let source = paths::canonical(source)
+        .with_context(|| format!("resolving {}", crate::util::paths::display_path(source)))?;
     let mut plan = ImportPlan::default();
     plan.structure = scan_dir(&source, &source, bundle_assets, &mut plan)?;
     Ok((source, plan))
@@ -152,7 +159,9 @@ fn scan_dir_at(
         return Err(crate::util::paths::too_deep(current));
     }
     let mut folders = Vec::new();
-    for entry in fs::read_dir(current).with_context(|| format!("reading {}", current.display()))? {
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(current)))?
+    {
         let entry = entry?;
         let file_type = entry.file_type()?;
         let name = entry.file_name();
@@ -186,7 +195,12 @@ fn classify_file(
 ) -> Result<()> {
     let relative = path
         .strip_prefix(root)
-        .with_context(|| format!("deriving relative path for {}", path.display()))?
+        .with_context(|| {
+            format!(
+                "deriving relative path for {}",
+                crate::util::paths::display_path(path)
+            )
+        })?
         .to_path_buf();
     let portable = relative.to_string_lossy().replace('\\', "/");
     crate::core::validated::SafeRelativePath::parse(&portable)?;
@@ -227,11 +241,15 @@ fn materialize(
         if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
             bail!(
                 "refusing to replace a non-directory template path: {}",
-                template_dir.display()
+                crate::util::paths::display_path(&template_dir)
             );
         }
-        crate::util::fs_retry::remove_dir_all(&template_dir)
-            .with_context(|| format!("clearing {}", template_dir.display()))?;
+        crate::util::fs_retry::remove_dir_all(&template_dir).with_context(|| {
+            format!(
+                "clearing {}",
+                crate::util::paths::display_path(&template_dir)
+            )
+        })?;
     }
     fs::create_dir_all(paths::template_files_dir(slug)).context("creating template directory")?;
 
@@ -280,10 +298,16 @@ fn materialize(
         // the bundle out of it.
         let target = crate::util::paths::contained_destination(&files_dir, &asset.relative)?;
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("creating {}", crate::util::paths::display_path(parent))
+            })?;
         }
-        crate::util::atomic::copy(&asset.source, &target)
-            .with_context(|| format!("bundling {}", asset.relative.display()))?;
+        crate::util::atomic::copy(&asset.source, &target).with_context(|| {
+            format!(
+                "bundling {}",
+                crate::util::paths::display_path(&asset.relative)
+            )
+        })?;
         bundled_bytes += asset.bytes;
     }
     Ok(FromFolderReport {

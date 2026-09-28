@@ -209,7 +209,10 @@ fn append_job(path: &Path, line: &str) {
         .is_some_and(|(_, length)| *length > JOB_ROTATE_BYTES)
     {
         *slot = None;
-        let _ = std::fs::rename(path, PathBuf::from(format!("{}.1", path.display())));
+        let _ = std::fs::rename(
+            path,
+            PathBuf::from(format!("{}.1", crate::util::paths::display_path(path))),
+        );
         if let Ok(file) = OpenOptions::new().create(true).append(true).open(path) {
             *slot = Some((file, 0));
         }
@@ -260,7 +263,8 @@ pub(crate) fn rotate(path: &Path, rotate_at: u64) {
     if std::fs::metadata(path).map_or(true, |meta| meta.len() <= rotate_at) {
         return;
     }
-    let numbered = |n: usize| PathBuf::from(format!("{}.{n}", path.display()));
+    let numbered =
+        |n: usize| PathBuf::from(format!("{}.{n}", crate::util::paths::display_path(path)));
     let _ = std::fs::remove_file(numbered(KEEP));
     for n in (1..KEEP).rev() {
         let _ = std::fs::rename(numbered(n), numbered(n + 1));

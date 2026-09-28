@@ -96,8 +96,12 @@ pub fn ensure_bootstrapped() -> Result<()> {
     // The resolved data dir may not exist yet (fresh user-config-dir install,
     // e.g. after `pacman -S fast-folder` put the binary in read-only /usr/bin).
     // Only bootstrap creates it — path resolution itself never writes.
-    fs::create_dir_all(&install)
-        .map_err(|e| anyhow::anyhow!("cannot create data directory {}: {e}", install.display()))?;
+    fs::create_dir_all(&install).map_err(|e| {
+        anyhow::anyhow!(
+            "cannot create data directory {}: {e}",
+            crate::util::paths::display_path(&install)
+        )
+    })?;
 
     // Config
     let config_path = paths::config_path();
@@ -139,7 +143,7 @@ pub fn ensure_bootstrapped() -> Result<()> {
         // and on stdout this banner would land in `cd "$(fastf path lullaby)"`.
         eprintln!(
             "fastf: initialized in {} — {}\n       {written} default template{} written to templates/",
-            install.display(),
+            crate::util::paths::display_path(&install),
             mode.label(),
             if written == 1 { "" } else { "s" }
         );

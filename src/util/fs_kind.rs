@@ -168,7 +168,10 @@ mod imp {
     pub(super) fn mount_identity(path: &Path) -> Option<String> {
         let mountinfo = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
         let (point, kind) = super::mount_of(&mountinfo, path)?;
-        Some(format!("{kind} {}", point.display()))
+        Some(format!(
+            "{kind} {}",
+            crate::util::paths::display_path(&point)
+        ))
     }
 
     pub(super) fn of(path: &Path) -> FsKind {

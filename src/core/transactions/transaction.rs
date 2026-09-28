@@ -97,14 +97,17 @@ impl MoveTransaction {
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
                     return Err(error).with_context(|| {
-                        format!("claiming move transaction {}", operation_dir.display())
+                        format!(
+                            "claiming move transaction {}",
+                            crate::util::paths::display_path(&operation_dir)
+                        )
                     });
                 }
             }
         }
         bail!(
             "could not allocate a unique move operation under {}",
-            transaction_root.display()
+            crate::util::paths::display_path(&transaction_root)
         )
     }
 
@@ -211,9 +214,10 @@ impl MoveTransaction {
             _ => {}
         }
         crate::util::paths::require_real_file(&path, "published record")?;
-        let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let published: MoveManifest =
-            serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        let raw = fs::read(&path)
+            .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+        let published: MoveManifest = serde_json::from_slice(&raw)
+            .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
         published.validate()?;
         Ok(Some(published))
     }
@@ -312,8 +316,12 @@ impl MoveTransaction {
 
     pub fn claim_staging(&self) -> Result<PathBuf> {
         let staging = self.staging_path();
-        fs::create_dir(&staging)
-            .with_context(|| format!("claiming private staging {}", staging.display()))?;
+        fs::create_dir(&staging).with_context(|| {
+            format!(
+                "claiming private staging {}",
+                crate::util::paths::display_path(&staging)
+            )
+        })?;
         Ok(staging)
     }
 
@@ -370,7 +378,7 @@ impl MoveTransaction {
             crate::util::paths::Presence::Unknown(error) => {
                 bail!(
                     "the old staging folder {} does not answer ({error})",
-                    staging.display()
+                    crate::util::paths::display_path(&staging)
                 )
             }
             crate::util::paths::Presence::Present(_) => {}
@@ -406,7 +414,7 @@ impl MoveTransaction {
             if !placeable {
                 left.push(format!(
                     "{}: {}",
-                    entry.path.display(),
+                    crate::util::paths::display_path(&entry.path),
                     if manifest.is_some() {
                         "not as the move recorded it"
                     } else {
@@ -420,23 +428,36 @@ impl MoveTransaction {
                 match crate::util::paths::contained_destination(&final_path, &entry.path) {
                     Ok(destination) => destination,
                     Err(error) => {
-                        left.push(format!("{}: {error:#}", entry.path.display()));
+                        left.push(format!(
+                            "{}: {error:#}",
+                            crate::util::paths::display_path(&entry.path)
+                        ));
                         continue;
                     }
                 };
             if let Some(parent) = destination.parent()
                 && let Err(error) = fs::create_dir_all(parent)
             {
-                left.push(format!("{}: {error}", entry.path.display()));
+                left.push(format!(
+                    "{}: {error}",
+                    crate::util::paths::display_path(&entry.path)
+                ));
                 continue;
             }
             match crate::util::fs_retry::rename(&staging.join(&entry.path), &destination) {
                 Ok(()) => moved += 1,
-                Err(error) => left.push(format!("{}: {error}", entry.path.display())),
+                Err(error) => left.push(format!(
+                    "{}: {error}",
+                    crate::util::paths::display_path(&entry.path)
+                )),
             }
         }
         for problem in &walk.problems {
-            left.push(format!("{}: {}", problem.path.display(), problem.problem));
+            left.push(format!(
+                "{}: {}",
+                crate::util::paths::display_path(&problem.path),
+                problem.problem
+            ));
         }
         // Empty folders go; a folder something was left in stays.
         for entry in walk
@@ -466,7 +487,7 @@ impl MoveTransaction {
                 crate::util::paths::Presence::Unknown(error) => {
                     bail!(
                         "the copy at {} does not answer ({error})",
-                        staging.display()
+                        crate::util::paths::display_path(&staging)
                     )
                 }
             };
@@ -476,7 +497,7 @@ impl MoveTransaction {
                     Publication::Published => false,
                     Publication::Unknown(error) => bail!(
                         "cannot tell whether the copy at {} is published ({error})",
-                        staging.display()
+                        crate::util::paths::display_path(&staging)
                     ),
                 };
             if unpublished {
@@ -491,7 +512,7 @@ impl MoveTransaction {
                 {
                     bail!(
                         "removing the unpublished copy at {}: {reason}",
-                        staging.display()
+                        crate::util::paths::display_path(&staging)
                     );
                 }
             }
@@ -510,7 +531,7 @@ impl MoveTransaction {
         {
             bail!(
                 "refusing to remove the record while its old staging folder {} still holds files",
-                staging.display()
+                crate::util::paths::display_path(&staging)
             );
         }
         let expected_root = transaction_root(&self.target_base);
@@ -523,7 +544,7 @@ impl MoveTransaction {
         {
             bail!(
                 "refusing to remove transaction outside its owned location: {}",
-                self.operation_dir.display()
+                crate::util::paths::display_path(&self.operation_dir)
             );
         }
         crate::util::paths::require_real_directory(&self.operation_dir, "move transaction")?;
@@ -533,7 +554,12 @@ impl MoveTransaction {
         remove_record_folder(std::thread::sleep, &self.operation_dir, || {
             crate::util::fs_retry::remove_dir_all(&self.operation_dir)
         })
-        .with_context(|| format!("removing move transaction {}", self.operation_dir.display()))?;
+        .with_context(|| {
+            format!(
+                "removing move transaction {}",
+                crate::util::paths::display_path(&self.operation_dir)
+            )
+        })?;
         crate::core::records::remove(&self.journal.operation_id);
         Ok(())
     }
@@ -619,15 +645,15 @@ pub(crate) fn same_bytes(one: &Path, other: &Path) -> bool {
 /// which is removed.
 pub(crate) fn write_record_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let raw = serde_json::to_string_pretty(value)
-        .with_context(|| format!("serializing {}", path.display()))?;
+        .with_context(|| format!("serializing {}", crate::util::paths::display_path(path)))?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
+        .with_context(|| format!("creating {}", crate::util::paths::display_path(path)))?;
     file.write_all(raw.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
+        .with_context(|| format!("writing {}", crate::util::paths::display_path(path)))?;
     file.sync_all()
-        .with_context(|| format!("syncing {}", path.display()))?;
+        .with_context(|| format!("syncing {}", crate::util::paths::display_path(path)))?;
     Ok(())
 }

@@ -16,9 +16,10 @@ pub(super) fn reconcile_base(
     let entries = match fs::read_dir(base) {
         Ok(entries) => entries,
         Err(error) => {
-            report
-                .unrecoverable
-                .push(format!("could not read {}: {error}", base.display()));
+            report.unrecoverable.push(format!(
+                "could not read {}: {error}",
+                crate::util::paths::display_path(base)
+            ));
             return;
         }
     };
@@ -33,9 +34,10 @@ pub(super) fn reconcile_base(
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(error) => {
-                report
-                    .unrecoverable
-                    .push(format!("could not classify {}: {error}", path.display()));
+                report.unrecoverable.push(format!(
+                    "could not classify {}: {error}",
+                    crate::util::paths::display_path(&path)
+                ));
                 continue;
             }
         };
@@ -45,7 +47,7 @@ pub(super) fn reconcile_base(
             } else {
                 report.unrecoverable.push(format!(
                     "{}: reserved transaction root is not a real directory; left untouched",
-                    path.display()
+                    crate::util::paths::display_path(&path)
                 ));
             }
             continue;

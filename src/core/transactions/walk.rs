@@ -128,8 +128,12 @@ impl Walk {
         // design (`a_staged_move_walks_each_tree_as_few_times_as_it_can`).
         crate::util::trace::hit(&format!("walk {label}"));
         crate::util::paths::require_real_directory(root, label)?;
-        let device = RootDevice::of(root)
-            .with_context(|| format!("reading metadata for {}", root.display()))?;
+        let device = RootDevice::of(root).with_context(|| {
+            format!(
+                "reading metadata for {}",
+                crate::util::paths::display_path(root)
+            )
+        })?;
         let found = Mutex::new(Self::default());
         let walker = Walker {
             root,
@@ -170,7 +174,7 @@ impl Walk {
         for problem in self.problems.iter().take(LISTED) {
             message.push_str(&format!(
                 "\n  {}: {}",
-                problem.path.display(),
+                crate::util::paths::display_path(&problem.path),
                 problem.problem
             ));
         }
@@ -319,7 +323,8 @@ impl Walker<'_> {
         let children = match listing {
             Ok(children) => children,
             Err(error) if depth == 0 => {
-                return Err(error).with_context(|| format!("reading {}", dir.display()));
+                return Err(error)
+                    .with_context(|| format!("reading {}", crate::util::paths::display_path(dir)));
             }
             Err(error) => {
                 self.problem(here, Problem::Unreadable(error.to_string()));
@@ -405,7 +410,8 @@ pub(super) fn walk_at(
     let children = match fs::read_dir(current) {
         Ok(children) => children,
         Err(error) if depth == 0 => {
-            return Err(error).with_context(|| format!("reading {}", current.display()));
+            return Err(error)
+                .with_context(|| format!("reading {}", crate::util::paths::display_path(current)));
         }
         Err(error) => {
             walk.problems.push(WalkProblem {
@@ -419,7 +425,9 @@ pub(super) fn walk_at(
         let child = match child {
             Ok(child) => child,
             Err(error) if depth == 0 => {
-                return Err(error).with_context(|| format!("reading {}", current.display()));
+                return Err(error).with_context(|| {
+                    format!("reading {}", crate::util::paths::display_path(current))
+                });
             }
             Err(error) => {
                 walk.problems.push(WalkProblem {
@@ -600,5 +608,10 @@ pub(crate) fn agrees(recorded: &ManifestEntry, found: &ManifestEntry) -> bool {
 fn relative_to(root: &Path, path: &Path) -> Result<PathBuf> {
     path.strip_prefix(root)
         .map(Path::to_path_buf)
-        .with_context(|| format!("deriving relative path for {}", path.display()))
+        .with_context(|| {
+            format!(
+                "deriving relative path for {}",
+                crate::util::paths::display_path(path)
+            )
+        })
 }

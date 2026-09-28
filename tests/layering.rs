@@ -590,6 +590,68 @@ fn core_removes_through_fs_retry() {
     );
 }
 
+/// **A path is shown through `util::paths::display_path`.** On Windows a path
+/// that has been canonicalized carries the `\\?\` prefix, which is what makes
+/// long paths work and is not for reading: `Path::display` prints it, in a
+/// message, an error or the log. What is left of `.display()` is a path that
+/// is kept as text (`.display().to_string()`, where a stored path needs the
+/// prefix it came with) and a path relative to something, which has none.
+#[test]
+fn a_path_is_shown_through_display_path() {
+    const RELATIVE: [(&str, usize, &str); 1] =
+        [("lifecycle.rs", 1, "a mount's path inside the project")];
+
+    let mut offenders = Vec::new();
+    for layer in ["core", "cli", "tui", "util"] {
+        for path in sources(layer) {
+            if is_test_file(&path) || path.ends_with(Path::new("util").join("paths.rs")) {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let text = fs::read_to_string(&path).unwrap();
+            let mut found = Vec::new();
+            let mut gated = false;
+            for (number, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if gated && trimmed.starts_with("mod ") {
+                    break;
+                }
+                gated =
+                    trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test");
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                let shown = trimmed.matches(".display()").count();
+                let kept = trimmed.matches(".display().to_string()").count();
+                // `.display()` alone on its line is followed by `.to_string()`
+                // on the next, where rustfmt broke the chain.
+                if shown > kept && trimmed != ".display()" {
+                    found.push(format!("{}:{}: {trimmed}", path.display(), number + 1));
+                }
+            }
+            let allowed = RELATIVE
+                .iter()
+                .find(|(file, ..)| *file == name)
+                .map_or(0, |(_, count, _)| *count);
+            if found.len() != allowed {
+                offenders.push(format!(
+                    "{name}: {} shown with `.display()` where {allowed} are accounted for\n    {}",
+                    found.len(),
+                    found.join("\n    ")
+                ));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "show a path with `util::paths::display_path`:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// **Environment mutation lives in exactly one place per binary.**
 ///
 /// `setenv` is not thread-safe at the libc level, so two mutexes over the same

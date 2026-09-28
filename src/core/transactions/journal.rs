@@ -142,7 +142,10 @@ pub fn clear_target(path: &Path) -> Result<()> {
     match presence(path) {
         Presence::Absent => return Ok(()),
         Presence::Unknown(error) => {
-            bail!("move target {} does not answer ({error})", path.display());
+            bail!(
+                "move target {} does not answer ({error})",
+                crate::util::paths::display_path(path)
+            );
         }
         Presence::Present(metadata) if metadata.file_type().is_dir() => {
             let empty = fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_none());
@@ -170,18 +173,22 @@ pub fn clear_target(path: &Path) -> Result<()> {
             bail!(
                 "move target already exists: {} is a folder fastf is still removing (an \
                  earlier move's old copy, or a deleted project); try again once it is gone",
-                path.display()
+                crate::util::paths::display_path(path)
             );
         }
     }
-    bail!("move target already exists: {}", path.display())
+    bail!(
+        "move target already exists: {}",
+        crate::util::paths::display_path(path)
+    )
 }
 
 /// Read an in-place retire's pointer.
 pub fn read_pointer(path: &Path) -> Result<RetirePointer> {
-    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let pointer: RetirePointer =
-        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(path)))?;
+    let pointer: RetirePointer = serde_json::from_str(&text)
+        .with_context(|| format!("parsing {}", crate::util::paths::display_path(path)))?;
     validate_operation_id(&pointer.operation)?;
     validate_folder(&pointer.folder, "pointer")?;
     Ok(pointer)
@@ -269,8 +276,12 @@ pub fn ensure_transaction_root(target_base: &Path) -> Result<PathBuf> {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => {
-            return Err(error)
-                .with_context(|| format!("creating transaction root {}", root.display()));
+            return Err(error).with_context(|| {
+                format!(
+                    "creating transaction root {}",
+                    crate::util::paths::display_path(&root)
+                )
+            });
         }
     }
     crate::util::paths::require_real_directory(&root, "transaction root")?;
@@ -303,14 +314,15 @@ pub fn is_operation_id(text: &str) -> bool {
 pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
     let path = operation_dir.join(JOURNAL_FILE);
     crate::util::paths::require_real_file(&path, "move journal")?;
-    let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    let journal: MoveJournal =
-        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let raw = fs::read(&path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+    let journal: MoveJournal = serde_json::from_slice(&raw)
+        .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
     if !(MOVE_VERSION_OLDEST..=MOVE_VERSION).contains(&journal.version) {
         bail!(
             "unsupported move journal version {} at {}",
             journal.version,
-            path.display()
+            crate::util::paths::display_path(&path)
         );
     }
     let mut journal = journal;
@@ -325,7 +337,7 @@ pub fn read_journal(operation_dir: &Path) -> Result<MoveJournal> {
             bail!(
                 "a version-{} move journal cannot record what only version 3 has: {}",
                 journal.version,
-                path.display()
+                crate::util::paths::display_path(&path)
             );
         }
         journal.legacy_cleanup = true;
@@ -393,9 +405,10 @@ pub fn is_bare_record(operation_dir: &Path) -> bool {
 pub fn read_manifest(operation_dir: &Path) -> Result<MoveManifest> {
     let path = operation_dir.join(MANIFEST_FILE);
     crate::util::paths::require_real_file(&path, "move manifest")?;
-    let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    let manifest: MoveManifest =
-        serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    let raw = fs::read(&path)
+        .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
+    let manifest: MoveManifest = serde_json::from_slice(&raw)
+        .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
     manifest.validate()?;
     Ok(manifest)
 }

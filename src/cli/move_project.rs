@@ -61,7 +61,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 anyhow::bail!(
                     "'{}' is already in base {}",
                     project.name,
-                    current.display()
+                    crate::util::paths::display_path(&current)
                 );
             }
             // Accept a full path or a base's short label (its folder name).
@@ -72,7 +72,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
                 .ok_or_else(|| {
                     let list = candidates
                         .iter()
-                        .map(|b| format!("  {}", b.display()))
+                        .map(|b| format!("  {}", crate::util::paths::display_path(b)))
                         .collect::<Vec<_>>()
                         .join("\n");
                     anyhow::anyhow!(

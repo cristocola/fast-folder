@@ -210,12 +210,16 @@ pub fn print_apply_plan(actions: &[ApplyAction], kind: PreviewKind) {
     for action in actions {
         match action {
             ApplyAction::CreateFolder(p) | ApplyAction::CreateFile(p) => {
-                println!("  {} {}", "[create]".green().bold(), p.display())
+                println!(
+                    "  {} {}",
+                    "[create]".green().bold(),
+                    crate::util::paths::display_path(p)
+                )
             }
             ApplyAction::SkipFolder(p) | ApplyAction::SkipFile(p) => println!(
                 "  {} {}",
                 "[skip]  ".dimmed(),
-                p.display().to_string().dimmed()
+                crate::util::paths::display_path(p).dimmed()
             ),
         }
     }

@@ -95,6 +95,7 @@ pub fn preview_apply(
 ) -> Result<ApplyOutcome> {
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
+    crate::util::paths::require_answer(target)?;
     crate::util::paths::require_real_directory(target, "apply target")?;
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
     Ok(ApplyOutcome { actions })
@@ -108,6 +109,7 @@ pub fn apply(
     let _mutation_lock = DataLock::acquire()?;
     let config = Config::load()?;
     let template = template::find_by_slug(template_slug)?;
+    crate::util::paths::require_answer(target)?;
     crate::util::paths::require_real_directory(target, "apply target")?;
     // The authoritative occupancy plan is computed only after the lock is held.
     let actions = project::apply_plan(&template, target, variables, &config.date_format)?;
@@ -154,6 +156,7 @@ pub struct RegisterOutcome {
 }
 
 pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
+    crate::util::paths::require_answer(&options.path)?;
     let original_metadata = fs::symlink_metadata(&options.path).with_context(|| {
         format!(
             "path does not exist or is not accessible: {}",
@@ -240,7 +243,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
         };
         let id = Counters::format_id(&template.id.prefix, template.id.digits, id_value);
 
-        for configured in config.effective_bases() {
+        for configured in config.answering_bases() {
             let Ok(configured) = crate::util::paths::canonical(&configured) else {
                 continue;
             };
@@ -341,7 +344,7 @@ fn configured_parent(config: &Config, canonical: &Path) -> Result<PathBuf> {
     let parent = canonical
         .parent()
         .context("registration target has no parent directory")?;
-    for configured in config.effective_bases() {
+    for configured in config.answering_bases() {
         let Ok(configured) = crate::util::paths::canonical(&configured) else {
             continue;
         };

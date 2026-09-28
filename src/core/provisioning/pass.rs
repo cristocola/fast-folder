@@ -79,23 +79,28 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
     let mut seen = HashSet::new();
     let mut retired = Vec::new();
     let mut pointers = Vec::new();
-    for configured in cfg.effective_bases() {
-        let base = match crate::util::paths::canonical(&configured) {
-            Ok(base)
-                if crate::util::paths::require_real_directory(&base, "configured base").is_ok() =>
-            {
-                base
-            }
-            // An unplugged drive, a mount that dropped: ordinary, and nothing a
-            // person has to act on. Whatever fastf left there waits for it.
-            _ => {
-                report.waiting.push(format!(
-                    "{} is not mounted or does not answer; anything fastf left there waits \
-                     until it is back",
-                    crate::util::paths::display_path(&configured)
-                ));
-                continue;
-            }
+    // Every base asked at once, under one deadline: one that stopped
+    // answering is waited for by the report, never by the pass.
+    let probed =
+        crate::util::paths::probe_dirs(&cfg.effective_bases(), crate::util::paths::PROBE_TIMEOUT);
+    for (configured, probe) in probed {
+        // Asked only of a base that answered its probe.
+        let base = probe
+            .usable()
+            .then(|| crate::util::paths::canonical(&configured).ok())
+            .flatten()
+            .filter(|base| {
+                crate::util::paths::require_real_directory(base, "configured base").is_ok()
+            });
+        // An unplugged drive, a mount that dropped: ordinary, and nothing a
+        // person has to act on. Whatever fastf left there waits for it.
+        let Some(base) = base else {
+            report.waiting.push(format!(
+                "{} is not mounted or does not answer; anything fastf left there waits \
+                 until it is back",
+                crate::util::paths::display_path(&configured)
+            ));
+            continue;
         };
         if report.cancelled {
             break;

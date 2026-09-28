@@ -55,6 +55,7 @@ pub fn run(args: MoveArgs) -> Result<()> {
     let target = match &args.base {
         Some(raw) => {
             let wanted = PathBuf::from(raw);
+            crate::util::paths::require_answer(&wanted)?;
             let wanted = crate::util::paths::canonical(&wanted).unwrap_or(wanted);
             if wanted == current {
                 anyhow::bail!(

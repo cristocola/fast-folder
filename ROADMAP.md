@@ -77,10 +77,6 @@ None is a wrong result today; each is where the next one would come from.
 
 **The engine.**
 
-2. Three reads ask one base after another with no deadline: `library::max_id`
-   (every create and every preview), `Counters::base_floor` and `fastf
-   reindex`. A mount that stopped answering holds `fastf new` for the kernel's
-   own timeout, against the rule in `CLAUDE.md` › Configuration.
 3. Reconcile makes destructive filesystem calls that skip `util::fs_retry`.
 4. `transactions::target_ignores_case` ignores whether its probe file could be
    removed; one left behind is in the copy, and verification refuses the move.

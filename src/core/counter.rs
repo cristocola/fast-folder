@@ -162,10 +162,7 @@ impl Counters {
     /// re-stamping is what stops propagation from forcing a full rescan of every
     /// base after every create.
     fn propagate(cfg: &Config, value: u64) {
-        for base in cfg.effective_bases() {
-            if !base.is_dir() {
-                continue;
-            }
+        for base in cfg.answering_bases() {
             match Self::save_base(&base, value) {
                 Ok(true) => crate::core::library::touch_cache(&base),
                 Ok(false) => {}
@@ -248,6 +245,7 @@ impl Counters {
     /// follows, and safe because [`Counters::floor`] also consults the projects
     /// actually on disk.
     pub fn load_base(base: &Path) -> u64 {
+        crate::util::paths::stall_if_marked(base);
         let path = Self::base_path(base);
         fs::read_to_string(&path)
             .ok()
@@ -277,9 +275,8 @@ impl Counters {
 
     /// The highest value recorded by any configured base.
     pub(crate) fn base_floor(cfg: &Config) -> u64 {
-        cfg.effective_bases()
+        cfg.answering_bases()
             .iter()
-            .filter(|base| base.is_dir())
             .map(|base| Self::load_base(base))
             .max()
             .unwrap_or(0)

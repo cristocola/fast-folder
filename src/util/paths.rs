@@ -860,6 +860,48 @@ pub fn stall_if_marked(path: &Path) {
     let _ = path;
 }
 
+/// [`canonical`], under the deadline a base is given. A path on a mount that
+/// stopped answering is an error at once — `TimedOut`, saying so — where
+/// `canonical` alone blocks for the kernel's own timeout.
+pub fn canonical_in_time(path: &Path) -> std::io::Result<PathBuf> {
+    let asked = [path.to_path_buf()];
+    let answer = answer_within(&asked, PROBE_TIMEOUT, |path| {
+        canonical(path).map_err(|error| (error.kind(), error.to_string()))
+    })
+    .pop()
+    .flatten();
+    match answer {
+        Some(Ok(found)) => Ok(found),
+        Some(Err((kind, said))) => Err(std::io::Error::new(kind, said)),
+        None => Err(does_not_answer(path)),
+    }
+}
+
+/// **A path somebody typed answers inside the deadline**, whatever it
+/// answers — there, not there, not a folder. Asked before the first look at
+/// it, since every look blocks on a mount that stopped responding.
+pub fn require_answer(path: &Path) -> std::io::Result<()> {
+    let asked = [path.to_path_buf()];
+    let answered = answer_within(&asked, PROBE_TIMEOUT, |path| {
+        stall_if_marked(path);
+        let _ = std::fs::symlink_metadata(path);
+    })
+    .pop()
+    .flatten();
+    answered.ok_or_else(|| does_not_answer(path))
+}
+
+/// The error for a path that did not answer inside the deadline.
+pub fn does_not_answer(path: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        format!(
+            "{} does not answer: the drive or mount it is on stopped responding",
+            display_path(path)
+        ),
+    )
+}
+
 /// The subset of `paths` that answered and is a directory, reporting the rest.
 ///
 /// Every surface that lists bases goes through this rather than `is_dir()`, so

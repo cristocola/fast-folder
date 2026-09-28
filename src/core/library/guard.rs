@@ -18,10 +18,10 @@ use std::fs;
 /// child of a currently configured base, and its real `PROJECT_INFO.md` must
 /// carry the same ID as the candidate supplied by the caller.
 pub fn revalidate_project(cfg: &Config, candidate: &Project) -> Result<Project> {
-    let candidate_base = crate::util::paths::canonical(&candidate.base)
+    let candidate_base = crate::util::paths::canonical_in_time(&candidate.base)
         .with_context(|| format!("resolving project base {}", candidate.base.display()))?;
     let configured = cfg
-        .effective_bases()
+        .answering_bases()
         .into_iter()
         .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == candidate_base)

@@ -287,6 +287,15 @@ impl Config {
         resolved
     }
 
+    /// **The bases that answer**, of [`Self::effective_bases`]: each a folder
+    /// that answered inside the deadline, every one asked at once. What a read
+    /// or a mutation walks. One that does not answer is left out, never waited
+    /// for — a call into a mount that stopped answering blocks for the
+    /// kernel's own timeout — and an unplugged one is not there to read.
+    pub fn answering_bases(&self) -> Vec<std::path::PathBuf> {
+        paths::mounted_bases(&self.effective_bases()).0
+    }
+
     /// The bases as configured — `base_dir` (or its fallback) first, then
     /// `bases` as listed, each once — before anything is asked of them: no
     /// filesystem call, so a base that does not answer cannot hold this up.

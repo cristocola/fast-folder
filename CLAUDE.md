@@ -271,6 +271,12 @@ that look comes back. `effective_bases()` canonicalizes through it and keeps the
 configured path for a base that does not answer; `paths::probe_dirs` is it over
 `probe_blocking`; `Config::base_candidates()` is the list before anything is
 asked of it, for a caller that reads each base on a worker of its own.
+**What walks the bases walks `Config::answering_bases()`** — the counter's
+floor, a mutation finding a project's own base, a register's search for its
+id, reconcile — so a command about a project in one base is never held up by
+another; a base somebody names is resolved with `paths::canonical_in_time`, and
+a path somebody typed passes `paths::require_answer` before the first look at
+it. `tests/dead_base.rs` runs each command beside a base that stopped answering.
 `paths::stall_if_marked` is the suites' dead mount (`paths:stall-base`, a folder
 holding `.fastf-test-stall`), asked where fastf first touches a base.
 

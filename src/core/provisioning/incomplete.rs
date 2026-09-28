@@ -59,7 +59,7 @@ impl Incomplete {
 /// Cheap read-only discovery used by CLI/UI state. Invalid v2 journals are
 /// surfaced by their owned path and are never followed.
 pub fn list_incomplete(cfg: &Config) -> Vec<Incomplete> {
-    list_incomplete_in(&cfg.effective_bases())
+    list_incomplete_in(&cfg.answering_bases())
 }
 
 /// [`list_incomplete`] over `bases` alone: the ones that answered a probe

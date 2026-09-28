@@ -406,9 +406,9 @@ pub(super) fn is_configured_base(cfg: &Config, wanted: &Path) -> bool {
 }
 
 pub(super) fn configured_real_base(cfg: &Config, wanted: &Path) -> Result<PathBuf> {
-    let wanted = crate::util::paths::canonical(wanted)
+    let wanted = crate::util::paths::canonical_in_time(wanted)
         .with_context(|| format!("resolving configured base {}", wanted.display()))?;
-    for candidate in cfg.effective_bases() {
+    for candidate in cfg.answering_bases() {
         let Ok(candidate) = crate::util::paths::canonical(&candidate) else {
             continue;
         };

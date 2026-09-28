@@ -396,6 +396,7 @@ fn print_from_folder_preview(
 
 fn validate_source(source: &str) -> Result<PathBuf> {
     let root = PathBuf::from(source);
+    paths::require_answer(&root)?;
     if !root.exists() {
         bail!("source folder does not exist: {}", root.display());
     }

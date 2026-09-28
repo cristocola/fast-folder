@@ -111,6 +111,7 @@ pub fn from_folder(
 }
 
 fn require_real_directory(source: &Path) -> Result<()> {
+    paths::require_answer(source)?;
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("source folder does not exist: {}", source.display()))?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {

@@ -424,6 +424,7 @@ fn existing_directory(
     if path.as_os_str().is_empty() {
         return Err(PreviewRefusal::on(field, "enter a folder path"));
     }
+    paths::require_answer(path).map_err(|error| PreviewRefusal::on(field, format!("{error}")))?;
     if !path.exists() {
         return Err(PreviewRefusal::on(
             field,

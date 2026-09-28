@@ -561,7 +561,7 @@ fn record_of(
     cfg: &Config,
     old_copy: &Path,
 ) -> Option<(PathBuf, PathBuf, transactions::MoveJournal)> {
-    for base in cfg.effective_bases() {
+    for base in cfg.answering_bases() {
         let root = transactions::transaction_root(&base);
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;

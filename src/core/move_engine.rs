@@ -237,10 +237,10 @@ pub fn move_project_in_parts(
     let moved = (|| {
         let cfg = Config::load()?;
         let project = revalidate_project(&cfg, project)?;
-        let wanted = crate::util::paths::canonical(new_base)
+        let wanted = crate::util::paths::canonical_in_time(new_base)
             .with_context(|| format!("resolving target base {}", new_base.display()))?;
         let target = cfg
-            .effective_bases()
+            .answering_bases()
             .into_iter()
             .filter_map(|base| crate::util::paths::canonical(&base).ok())
             .find(|base| *base == wanted)
@@ -278,10 +278,10 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let cfg = Config::load()?;
     let project = revalidate_project(&cfg, project)?;
-    let wanted = crate::util::paths::canonical(new_base)
+    let wanted = crate::util::paths::canonical_in_time(new_base)
         .with_context(|| format!("resolving target base {}", new_base.display()))?;
     let target = cfg
-        .effective_bases()
+        .answering_bases()
         .into_iter()
         .filter_map(|base| crate::util::paths::canonical(&base).ok())
         .find(|base| *base == wanted)

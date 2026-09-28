@@ -11,9 +11,7 @@ use colored::Colorize;
 
 pub fn run() -> Result<()> {
     let (cfg, total) = crate::core::operations::reindex()?;
-    let bases = cfg.effective_bases();
-
-    let indexed = bases.iter().filter(|b| b.is_dir()).count();
+    let indexed = cfg.answering_bases().len();
     println!(
         "{}  Reindexed {} project{} across {} base{}.",
         "✓".green().bold(),

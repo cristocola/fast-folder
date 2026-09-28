@@ -30,6 +30,9 @@ What each suite guards — the intent, not the case list:
 - `log.rs` — the log and the messages: two processes appending at once (this
   binary started again as a writer), `fastf log` and `fastf messages` after a
   real move.
+- `dead_base.rs` — every kind of command beside a base that stopped answering
+  (`paths:stall-base`): each has to be done long before a look into that base
+  would come back. Debug-only.
 - `concurrency.rs` — races real **processes**: a thread test passes against an
   in-process `Mutex` while production stays broken.
 - `tui_update.rs` — the app's state machine with no terminal: a `tui::testing`

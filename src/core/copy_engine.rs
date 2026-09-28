@@ -94,7 +94,7 @@ pub const COPY_STEPS: &[JobPhase] = &[
 /// Returns the canonical destination *folder* — `destination/<the project's
 /// folder name>` — which is what gets published.
 pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) -> Result<PathBuf> {
-    let root = crate::util::paths::canonical(destination).with_context(|| {
+    let root = crate::util::paths::canonical_in_time(destination).with_context(|| {
         format!(
             "resolving the copy destination {}",
             crate::util::paths::display_path(destination)
@@ -111,7 +111,23 @@ pub fn resolve_destination(cfg: &Config, project: &Project, destination: &Path) 
         );
     }
 
-    for base in cfg.effective_bases() {
+    let probed =
+        crate::util::paths::probe_dirs(&cfg.effective_bases(), crate::util::paths::PROBE_TIMEOUT);
+    for (base, probe) in probed {
+        // A base that does not answer is compared as it is written: the
+        // destination answered a moment ago, so it is on no mount that
+        // stopped answering, and only a path spelled inside the base can be
+        // in it.
+        if probe == crate::util::paths::Probe::Unresponsive {
+            if root == base || root.starts_with(&base) {
+                anyhow::bail!(
+                    "'{}' is inside the configured base {}, which does not answer",
+                    crate::util::paths::display_path(&root),
+                    crate::util::paths::display_path(&base)
+                );
+            }
+            continue;
+        }
         // An unplugged base holds nothing to collide with. Any other failure
         // refuses: a base that cannot be resolved cannot be proven apart from
         // the destination, and a skipped check is a copy into the library.

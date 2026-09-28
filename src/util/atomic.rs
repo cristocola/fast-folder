@@ -1,11 +1,6 @@
 //! One atomic file write, shared by every writer that must not leave a
-//! half-written file behind.
-//!
-//! Before this module the same temp-file-plus-rename dance was open-coded in
-//! four places (`provisioning::write_atomic`, `library::write_cache`, and a
-//! variant inside `assets::copy_file`) while `Config::save` and
-//! `Counters::save` did a bare `fs::write` — so a crash mid-write truncated the
-//! config or the ID counter.
+//! half-written file behind. A bare `fs::write` truncates the target when a
+//! crash lands mid-write, which for the config or the ID counter loses it.
 //!
 //! The temp name carries the process id and a per-process counter, so two
 //! processes writing the same target never collide on the temp itself. A

@@ -1,7 +1,7 @@
 //! Counting the work fastf does, so a claim about it can be tested.
 //!
-//! "The browser no longer rescans the library after a tag" is not observable
-//! from output: the row looks the same either way, and the difference is seconds
+//! "The app does not rescan the library after a tag" is not observable from
+//! output: the row looks the same either way, and the difference is seconds
 //! on a network share and nothing at all on a local SSD. So the expensive
 //! operations name themselves, and a test counts the names.
 //!
@@ -42,9 +42,9 @@ pub fn hit(name: &str) {
     {
         // One `write` for the whole line. `writeln!` on a `File` can issue
         // the text and the newline as two writes, and two workers hitting
-        // at once — discovery and the summary start together — interleaved
-        // them into `template_loaddiscover` on a two-core runner. A single
-        // append write of this size is atomic.
+        // at once — discovery and the summary start together — interleave
+        // them into `template_loaddiscover`. A single append write of this
+        // size is atomic.
         let _ = file.write_all(format!("{name}\n").as_bytes());
     }
 }

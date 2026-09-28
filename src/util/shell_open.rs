@@ -1,18 +1,18 @@
 //! Opening a folder in the user's shell, on Windows, without a shell.
 //!
-//! `cmd /c start "" <path>` worked, and quoted its argument correctly — but
+//! Not `cmd /c start "" <path>`, though it quotes its argument correctly:
 //! `cmd.exe` reconstructs a command line and expands `%VAR%` inside it before
-//! anything sees the quoting. A project folder called `%USERPROFILE%` therefore
-//! opened the user's home directory instead of itself, and a folder name is
-//! user data.
+//! anything sees the quoting, so a project folder called `%USERPROFILE%` opens
+//! the user's home directory instead of itself — and a folder name is user
+//! data.
 //!
 //! `ShellExecuteW` takes the path as a UTF-16 argument. There is no command
 //! line, so there is nothing to expand and nothing to split. It honours the
-//! user's default folder handler exactly as `start` did.
+//! user's default folder handler exactly as `start` does.
 //!
 //! Declared by hand rather than pulling in `windows-sys`: this is one function
-//! with three null arguments, and the crate already used the same pattern for
-//! `MessageBoxW`.
+//! with three null arguments, and every other Windows call in the crate is
+//! declared the same way.
 //!
 //! **No COM initialisation is required to open a folder.** `ShellExecuteW`
 //! initialises what it needs on the calling thread for the shell verbs; the

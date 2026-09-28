@@ -28,8 +28,8 @@ impl DirMode {
 /// Precedence:
 /// 1. `FASTF_INSTALL_DIR` (non-empty) — test hermeticity hatch + power users.
 /// 2. Portable mode: the binary's directory, iff it already contains a
-///    `config.toml` or a `templates/` dir. Keeps binary-plus-data folders
-///    (USB stick, `target/release/`) working exactly as before.
+///    `config.toml` or a `templates/` dir, so a binary-plus-data folder
+///    (USB stick, `target/release/`) keeps its data beside it.
 /// 3. The per-user config directory: `$XDG_CONFIG_HOME/fastf` (or
 ///    `~/.config/fastf`) on Unix, `%APPDATA%\fastf` on Windows — the only
 ///    option that works when the binary sits in a read-only location like
@@ -52,7 +52,7 @@ pub fn try_install_dir() -> Result<(PathBuf, DirMode)> {
 /// Infallible wrapper around [`try_install_dir`] for the ~30 path helpers and
 /// their callers. `main()` runs `try_install_dir()?` first thing, so in the
 /// binary this can only be reached after a successful resolution; the exit
-/// branch is belt-and-braces for library consumers (e.g. UI server threads).
+/// branch is belt-and-braces for library consumers.
 pub fn install_dir() -> PathBuf {
     match try_install_dir() {
         Ok((dir, _)) => dir,
@@ -148,10 +148,10 @@ fn user_config_dir_from(xdg: Option<&str>, home: Option<&str>) -> Result<PathBuf
 /// Render a path for humans, stripping Windows' `\\?\` extended-length prefix.
 ///
 /// `Path::canonicalize` returns the verbatim form on Windows, so every path that
-/// had been through it surfaced as `\\?\C:\Users\...` — in the create success
-/// line, in `recent`, in `move`, and baked into every project's
-/// `PROJECT_INFO.md`. It is a valid path, but not one anyone wants to read or
-/// paste, and it reads as a bug.
+/// has been through it reads `\\?\C:\Users\...` — in the create success line,
+/// in `recent`, in `move`, and in every project's `PROJECT_INFO.md`. It is a
+/// valid path, but not one anyone wants to read or paste, and it reads as a
+/// bug.
 ///
 /// **Display only.** The verbatim form is what makes paths beyond `MAX_PATH`
 /// work, and long-path support without it is an opt-in system setting that is
@@ -228,10 +228,10 @@ pub fn require_real_directory(path: &Path, label: &str) -> Result<()> {
 /// **Only a filesystem that says "nothing there" is absence.** Any other
 /// failure — a mount that dropped (`ENOTCONN`), one that failed (`EIO`), a
 /// folder that may not be read — says nothing about the path, and code that
-/// removes something, or forgets a record of it, must not read it as gone:
-/// 3.13 did, through `symlink_metadata(p).is_ok()`, and cleared a move's record
-/// while its old copy was still on an rclone mount that had restarted, leaving
-/// a folder no reconcile would touch again.
+/// removes something, or forgets a record of it, must not read it as gone.
+/// `symlink_metadata(p).is_ok()` does, and clears a move's record while its
+/// old copy is still on an rclone mount that restarted, leaving a folder no
+/// reconcile touches again.
 #[derive(Debug)]
 pub enum Presence {
     Present(std::fs::Metadata),
@@ -285,8 +285,9 @@ pub fn is_absence(error: &std::io::Error) -> bool {
 /// filesystem mounts without it — rclone and every other WinFsp mount (S3,
 /// SFTP, Cryptomator vaults), ImDisk RAM disks — answers `ERROR_UNRECOGNIZED_VOLUME`
 /// (1005) or `ERROR_INVALID_FUNCTION` (1) for every path on it, although the
-/// files are right there. Every mutation canonicalizes its base, so on such a
-/// drive fastf could create and list projects but change none of them.
+/// files are right there. Every mutation canonicalizes its base, so with
+/// `canonicalize` alone fastf can create and list projects on such a drive but
+/// change none of them.
 ///
 /// For those errors the path is canonicalized by walking it: made absolute,
 /// every component from the root down checked to exist and to be **no link**,
@@ -446,11 +447,11 @@ pub(crate) fn is_link_like(metadata: &std::fs::Metadata) -> bool {
 /// link.
 ///
 /// `SafeRelativePath` and `require_native_relative` are **lexical**: they
-/// prove the text of a path cannot escape its root. Nothing proved the same
-/// about the filesystem, and `create_dir_all` walks straight through an existing
+/// prove the text of a path cannot escape its root. They prove nothing about
+/// the filesystem, and `create_dir_all` walks straight through an existing
 /// `docs -> /outside` — so a template file at `docs/new.md` applied to a folder
-/// with such a link wrote outside the folder entirely, while every lexical check
-/// passed.
+/// with such a link writes outside the folder entirely, while every lexical
+/// check passes.
 ///
 /// This is the physical half. `root` must be a real directory; every component
 /// of `root/rel` that already exists must be a real directory too, except the
@@ -506,16 +507,16 @@ pub fn contained_destination(root: &Path, rel: &Path) -> Result<PathBuf> {
 
 /// How deep any of fastf's walkers will descend before refusing.
 ///
-/// Every recursive walk in the tool is plain recursion on the call stack, and
-/// `tree_size` runs over whatever folder a user points at.
+/// A recursive walk is plain recursion on the call stack, and `tree_size` runs
+/// over whatever folder a user points at.
 ///
-/// **64, not 256.** The first value was chosen against a Linux main thread's
-/// 8 MiB stack; a Windows *thread* gets 1 MiB by default, and the TUI browser's
-/// size scan runs on worker threads. 256 frames of `read_dir` iterator plus
-/// locals overflowed one — which is the exact failure the limit exists to
-/// prevent, so a limit that only holds on the roomiest stack is not a limit.
-/// 64 is still far past any real project layout: discovery itself is depth-1,
-/// and a template's `files/` tree is a handful of levels.
+/// **64, not 256.** A Windows *thread* gets a 1 MiB stack by default, not a
+/// Linux main thread's 8 MiB, and the size scan and discovery run on worker
+/// threads. 256 frames of `read_dir` iterator plus locals overflow one — the
+/// exact failure the limit exists to prevent, so a limit that only holds on
+/// the roomiest stack is not a limit. 64 is still far past any real project
+/// layout: discovery itself is depth-1, and a template's `files/` tree is a
+/// handful of levels.
 pub const MAX_WALK_DEPTH: usize = 64;
 
 /// The error every walker reports at [`MAX_WALK_DEPTH`], naming where it stopped.
@@ -568,9 +569,9 @@ pub fn storable(path: &Path, label: &str) -> Result<String> {
 ///
 /// Spawning and catching `NotFound` would be simpler, but `clip.exe` under WSL
 /// and `wl-copy` without a Wayland socket both *start* and then fail, and each
-/// of those spawns is a visible pause. The clipboard needed that first; the
-/// relaunch and the notifier need the same answer about a terminal emulator and
-/// `notify-send`, so the lookup lives here rather than three times over.
+/// of those spawns is a visible pause. The clipboard, the relaunch and the
+/// notifier need the same answer about a clipboard tool, a terminal emulator
+/// and `notify-send`, so the lookup lives here rather than three times over.
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
     // A value with a separator in it is a path, not a name — `PATH` is not
     // consulted for `/usr/bin/konsole`, and joining it onto every `PATH` entry
@@ -698,7 +699,7 @@ pub fn probe_blocking(path: &Path) -> Probe {
 /// the *wait* has to be interruptible even though the *call* is not: a stat
 /// on a dead SMB, NFS or FUSE mount blocks in the kernel for the operating
 /// system's own timeout, and nothing cancels it. The thread is left behind,
-/// which costs one parked thread; waiting for it cost the session. One
+/// which costs one parked thread; waiting for it costs the session. One
 /// deadline for all, so three dead mounts cost one timeout, not three.
 ///
 /// **A path whose look was given up on is not asked again until that look
@@ -884,7 +885,7 @@ mod tests {
 
     #[test]
     fn strips_verbatim_prefix_for_display() {
-        // The exact shape that leaked into create/recent/move output.
+        // The shape `canonicalize` hands create, recent and move output.
         assert_eq!(
             strip_verbatim(r"\\?\C:\Users\Alice\Projects\2026_Thing_ID0001"),
             r"C:\Users\Alice\Projects\2026_Thing_ID0001"

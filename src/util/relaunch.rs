@@ -4,7 +4,7 @@
 //! desktop launcher — krunner, rofi, a `.desktop` entry, Win+R's equivalents —
 //! there is **no terminal at all**: stdin is `/dev/null`, stdout and stderr are
 //! journald sockets, and everything a command prints is written to nobody.
-//! `fastf search rust` from a launcher was a bouncing cursor and then nothing.
+//! `fastf search rust` from a launcher is a bouncing cursor and then nothing.
 //!
 //! So where fastf has text to show or a question to ask and provably nowhere to
 //! put it, it opens a terminal and runs itself again inside it. This is a
@@ -37,9 +37,9 @@ pub const RELAUNCHED_VAR: &str = "FASTF_RELAUNCHED";
 ///
 /// argv, not an environment variable, because **this one is a claim about the
 /// process rather than about the session**: only the program the emulator was
-/// asked to run receives it, and nothing that program starts inherits it. Every
-/// bug the variable caused came from a descendant answering a question only the
-/// rerun itself may answer.
+/// asked to run receives it, and nothing that program starts inherits it. A
+/// variable reaches every descendant, and each would then answer a question
+/// only the rerun itself may answer.
 pub const RELAUNCHED_FLAG: &str = "--relaunched";
 /// Set by the user to turn the whole mechanism off. Public, documented.
 pub const NO_RELAUNCH_VAR: &str = "FASTF_NO_RELAUNCH";
@@ -133,7 +133,7 @@ const XDG_RESOLVER: &str = "xdg-terminal-exec";
 ///    somewhere to write already.
 /// 2. **Both stdout and stderr are a socket, a character device, or closed.**
 ///    A regular file or a FIFO means somebody is reading — a redirect, a pipe,
-///    `nohup`, cron, the test harness — and those must keep today's behaviour
+///    `nohup`, cron, the test harness — and those must keep the plain behaviour
 ///    exactly. A closed descriptor (`EBADF`) is provably nobody.
 /// 3. **A display is set.** No display, no terminal to open.
 /// 4. **`SSH_CONNECTION` is unset.** A remote session's display may be
@@ -188,7 +188,7 @@ fn has_display() -> bool {
 ///
 /// Raw `fstat` rather than anything from std: this asks about the *kind* of the
 /// open file, which `File::metadata` would answer only by taking ownership of a
-/// descriptor we do not own. `libc` is already a unix dependency.
+/// descriptor we do not own.
 fn stream_has_no_reader(fd: i32) -> bool {
     // SAFETY: `fstat` writes into a caller-provided `stat` and reads nothing
     // else; a bad fd is reported as -1/EBADF rather than being dereferenced.
@@ -206,7 +206,7 @@ fn stream_has_no_reader(fd: i32) -> bool {
 /// `preference` names a program the caller resolved (`terminal` in the config,
 /// else `$TERMINAL`); `None` means probe. `Ok(())` means a terminal owns the
 /// rerun and the caller should return without doing the work itself. `Err` means
-/// no emulator could be started, and the caller falls through to today's plain
+/// no emulator could be started, and the caller falls through to the plain
 /// behaviour rather than failing.
 pub fn respawn_in_terminal(preference: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe()

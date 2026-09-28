@@ -67,11 +67,11 @@ thread_local! {
     ///
     /// The environment variable is process-global, and `cargo test` runs tests
     /// in parallel threads — so an env-armed failpoint fires inside *every*
-    /// concurrently running test that happens to touch the same code. That cost
-    /// three separate flaky failures before this existed. A thread-local is
-    /// scoped exactly to the test that armed it, needs no lock, and cannot leak
-    /// into a sibling. The env var remains for subprocess tests, which are a
-    /// different process and so cannot be affected by anyone else's thread.
+    /// concurrently running test that happens to touch the same code. A
+    /// thread-local is scoped exactly to the test that armed it, needs no lock,
+    /// and cannot leak into a sibling. The env var remains for subprocess tests,
+    /// which are a different process and so cannot be affected by anyone else's
+    /// thread.
     ///
     /// **A thread the armed one starts is armed the same way**
     /// ([`current`], [`with_arming`]): the engine's walks, copies and removals

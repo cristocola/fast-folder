@@ -223,8 +223,8 @@ mod imp {
     /// drive's own root**: a drive it does not know — every WinFsp mount,
     /// which is how rclone mounts on Windows — gets the path itself back from
     /// `GetVolumePathNameW` (with 1005), and a path that is no root has no
-    /// volume information, which read as a local disk. Measured in the VM:
-    /// `S:\` answers `FUSE-rclone`.
+    /// volume information, so asked alone it reads as a local disk. An rclone
+    /// drive's root `S:\` answers `FUSE-rclone`.
     pub(super) fn of(path: &Path) -> FsKind {
         [volume_root(path), drive_root(path)]
             .into_iter()

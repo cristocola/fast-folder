@@ -1,7 +1,7 @@
 //! Cooperative interrupt handling for Ctrl-C.
 //!
-//! Without this, Ctrl-C during a `fastf new` terminated the process wherever it
-//! happened to be — typically part-way through copying a template's assets,
+//! Left to the default, Ctrl-C during a `fastf new` terminates the process
+//! wherever it is — typically part-way through copying a template's assets,
 //! leaving a half-built project behind. Handlers here do the only thing that is
 //! safe from a signal context: set a flag. The create path polls it between
 //! files and unwinds normally, which lets the ordinary rollback remove the
@@ -55,9 +55,9 @@ pub fn check() -> anyhow::Result<()> {
 /// Serializes every test that touches the interrupt flag.
 ///
 /// The flag is process-global by nature, so a test that raises it would
-/// otherwise be visible to any test running in parallel — which is exactly how
-/// this module's own test started failing. It lives here, next to the state it
-/// guards, so anything reaching for `raise_for_test` finds the lock too.
+/// otherwise be visible to any test running in parallel. It lives here, next
+/// to the state it guards, so anything reaching for `raise_for_test` finds the
+/// lock too.
 ///
 /// **Lock order:** a test that also needs
 /// [`crate::util::test_env::ENV_LOCK`] takes that one **first**. The same note
@@ -102,12 +102,11 @@ pub fn reset() {
 /// a script is reading, which is a worse bug than the one being fixed.
 ///
 /// On unix this is reached from inside the SIGINT handler, so it is written to
-/// be async-signal-safe: `isatty` and `write` are, while `Term::show_cursor`
-/// takes std's stream lock and can panic re-entering a `RefCell` the
-/// interrupted thread already holds. The bytes are exactly what `console`
-/// writes on unix, so no output changes. Elsewhere the handler runs on its own
-/// thread — Windows spawns one for a console control event — so the ordinary
-/// path is safe there, and the console API is what a legacy conhost needs.
+/// be async-signal-safe: `isatty` and `write` are, while writing through
+/// `std::io::stdout()` takes std's stream lock and can panic re-entering a
+/// `RefCell` the interrupted thread already holds. Elsewhere the handler runs
+/// on its own thread — Windows spawns one for a console control event — so the
+/// ordinary path is safe there.
 pub fn restore_terminal() {
     #[cfg(unix)]
     {

@@ -2,9 +2,9 @@
 //!
 //! `PROJECT_INFO.md`'s frontmatter and `template.yaml` are both user-owned files
 //! that fastf rewrites in place: tagging, moving, renaming, and every template
-//! editor round-trips them through a typed struct. Anything the struct has no
-//! field for used to vanish at that point — a key written by a newer fastf, or
-//! by the user's own tooling, deleted by an older build running `tag add`.
+//! editor round-trips them through a typed struct. A plain round trip drops
+//! anything the struct has no field for — a key written by a newer fastf, or by
+//! the user's own tooling, deleted by an older build running `tag add`.
 //!
 //! The obvious fix is a `#[serde(flatten)]` catch-all, and it is the wrong one.
 //! `flatten` routes *every* field through serde's `Content` buffer, so a plain
@@ -15,7 +15,7 @@
 //! not cost a new way to lose a project.
 //!
 //! So the merge happens one level down, on the parsed document rather than on
-//! the type. Deserialization is left exactly as it was, and the surviving keys
+//! the type. Deserialization stays plainly typed, and the surviving keys
 //! keep their original positions because [`serde_yaml_ng::Mapping`] is insertion
 //! ordered.
 
@@ -30,10 +30,9 @@ use serde_yaml_ng::Value;
 /// Serialize a value to a YAML document.
 ///
 /// Every YAML call in fastf goes through this module, so the crate underneath is
-/// named in one file. That matters because `serde_yaml 0.9` is archived
-/// upstream: replacing it is a change here rather than at nine call sites across
-/// `template`, `project_info` and `library`, every one of which sits under a
-/// byte-identity test.
+/// named in one file: replacing it is a change here rather than at every call
+/// site across `template`, `project_info` and `library`, each of which sits
+/// under a byte-identity test.
 pub fn to_string<T: Serialize>(value: &T) -> Result<String, serde_yaml_ng::Error> {
     serde_yaml_ng::to_string(value)
 }
@@ -71,7 +70,7 @@ pub fn to_string_preserving_unknown<T: Serialize>(
     };
 
     // A BOM here is routine: Notepad and PowerShell's `Out-File -Encoding utf8`
-    // both add one, and `Template::load_from_file` has stripped it for years.
+    // both add one, and `Template::load_from_file` strips it too.
     let original = original.strip_prefix('\u{feff}').unwrap_or(original);
     let Ok(Value::Mapping(mut merged)) = serde_yaml_ng::from_str::<Value>(original) else {
         return serde_yaml_ng::to_string(&Value::Mapping(fresh)).context("serializing");
@@ -208,11 +207,10 @@ mod tests {
     /// everything a `PROJECT_INFO.md` can hold: a colon, a quote, a `#`, a
     /// multi-line value, unicode, an empty string, and a nested map.
     ///
-    /// Captured from `serde_yaml 0.9.34` before the crate was replaced. This is
-    /// what makes the swap checkable: every existing round-trip test proves
-    /// fastf can read what it wrote, and only this one proves the bytes did not
-    /// move — which they must not, because these files are diffed, committed and
-    /// hand-edited by users.
+    /// The expected bytes are what `serde_yaml 0.9.34` emitted. Every
+    /// round-trip test proves fastf can read what it wrote; only this one
+    /// proves the bytes do not move — which they must not, because these files
+    /// are diffed, committed and hand-edited by users.
     #[test]
     fn the_emitted_bytes_are_the_ones_we_have_always_emitted() {
         use serde::Serialize;

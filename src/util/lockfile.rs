@@ -1,21 +1,20 @@
 //! A cross-process lock over the fastf data directory.
 //!
 //! The global ID counter is a read-modify-write across two files
-//! (`counters.toml` plus a scan of every base), and nothing used to serialize it
-//! between processes. An in-process `Mutex` cannot: a `fastf new` in one
-//! terminal cannot see one in another, which is the documented workflow. Ten
-//! concurrent creates reliably minted duplicate IDs.
+//! (`counters.toml` plus a scan of every base), and an in-process `Mutex`
+//! cannot serialize it: a `fastf new` in one terminal cannot see one in
+//! another, which is the documented workflow, and two creates left unserialized
+//! mint the same ID.
 //!
-//! This lock closes that. It is held across the whole plan→create→save span, so
-//! ID allocation and the folder claim are one indivisible step no matter how
-//! many fastf processes are running.
+//! This lock is held across the whole plan→create→save span, so ID allocation
+//! and the folder claim are one indivisible step no matter how many fastf
+//! processes are running.
 //!
 //! **Implementation:** no FFI on Windows — opening the lock file with
 //! `share_mode(0)` makes `CreateFile` itself the mutual-exclusion primitive, and
 //! the OS drops the lock when the process dies (including a hard kill), so a
 //! crash can never strand it. On Unix the same guarantee comes from `flock`,
-//! which the kernel likewise releases on exit. `libc` is already a Unix-only
-//! dependency; nothing new is pulled in.
+//! which the kernel likewise releases on exit.
 
 use anyhow::{Context, Result};
 use std::fs::{File, OpenOptions};
@@ -299,10 +298,10 @@ mod tests {
             .expect("lock must be available once released");
     }
 
-    /// The timeout message used to end "delete the lock file and retry", which
-    /// is advice that breaks the lock: `flock` is held on the inode, so the
-    /// deleter and the next process end up locking two different files and both
-    /// believing they hold it.
+    /// The timeout message never tells anyone to delete the lock file, which
+    /// breaks the lock: `flock` is held on the inode, so the deleter and the
+    /// next process end up locking two different files and both believing they
+    /// hold it.
     #[test]
     fn the_timeout_message_never_suggests_deleting_the_lock_file() {
         let dir = tempfile::tempdir().unwrap();

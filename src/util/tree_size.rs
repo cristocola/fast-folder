@@ -31,9 +31,8 @@ pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u
 }
 
 /// The depth-0 entry point. **Nothing else may call it** — the recursive step
-/// goes to `directory_size_at` with `depth + 1`, which is what it used to do
-/// through here instead, resetting the counter at every level and leaving the
-/// limit below unreachable.
+/// goes to `directory_size_at` with `depth + 1`. Recursing through here resets
+/// the counter at every level and leaves the limit below unreachable.
 fn directory_size_inner(root: &Path, cancel: &AtomicBool) -> io::Result<u64> {
     directory_size_at(root, cancel, 0)
 }
@@ -121,11 +120,9 @@ mod tests {
     /// The depth limit is enforced, so a pathological tree is `None` rather
     /// than a dead process.
     ///
-    /// It was written down and unreachable: `directory_size_at` checked `depth`
-    /// and then recursed through `directory_size_inner`, which starts again at
-    /// zero. This walk runs on `util::size_scan`'s workers without anybody
-    /// asking for it, and a stack overflow is not an unwind — so the failure was
-    /// the whole app dying while looking at a folder.
+    /// This walk runs on `util::size_scan`'s workers without anybody asking for
+    /// it, and a stack overflow is not an unwind: a limit the walk never
+    /// reaches means the whole app dies while looking at a folder.
     ///
     /// Unix only, for the setup's sake rather than the code's: a tree this deep
     /// needs a path past Windows' MAX_PATH, which `create_dir_all` refuses
@@ -233,13 +230,12 @@ mod tests {
         // **The refusal is `ERROR_PRIVILEGE_NOT_HELD` (1314), not
         // `PermissionDenied`.** Rust maps only `ERROR_ACCESS_DENIED` (5) to
         // that kind and leaves 1314 uncategorized, so a guard reading the kind
-        // alone never fires — and this test failed on every un-elevated
-        // Windows machine without Developer Mode, which is the ordinary state
-        // of a contributor's box. It passed in CI because the runners are
-        // elevated, so the whole suite was red for outside contributors and
-        // green everywhere it was looked at. Elsewhere the crate sidesteps the
-        // privilege entirely by testing with `mklink /J` junctions, which need
-        // none; here real symlinks are the subject, so the skip is the answer.
+        // alone never fires, and the test fails on every un-elevated Windows
+        // machine without Developer Mode — the ordinary state of a
+        // contributor's box — while CI, whose runners are elevated, stays
+        // green. Elsewhere the crate sidesteps the privilege entirely by
+        // testing with `mklink /J` junctions, which need none; here real
+        // symlinks are the subject, so the skip is the answer.
         let unprivileged = |error: &std::io::Error| {
             error.kind() == ErrorKind::PermissionDenied || error.raw_os_error() == Some(1314)
         };

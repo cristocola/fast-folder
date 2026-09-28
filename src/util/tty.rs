@@ -1,12 +1,11 @@
 //! Is there a terminal to prompt on, and what to say when there is not.
 //!
-//! Every guard in fastf used to probe **stdout**, which is not where a prompt
-//! happens: a prompt draws on stderr and reads from stdin (falling back to
-//! `/dev/tty`). The probe therefore answered a different question than the one
-//! being asked. `fastf new t > out.txt` refused although a terminal was right
-//! there, and `fastf new t 2>/dev/null` passed the guard and died on
-//! a bare "not a terminal" failure, which tells a script author
-//! nothing about what to do.
+//! **The guard probes stderr, not stdout**: a prompt draws on stderr and reads
+//! from stdin (falling back to `/dev/tty`), so stdout answers a different
+//! question than the one being asked. Probing stdout, `fastf new t > out.txt`
+//! refuses although a terminal is right there, and `fastf new t 2>/dev/null`
+//! passes the guard and dies on a bare "not a terminal" failure, which tells a
+//! script author nothing about what to do.
 //!
 //! Stdout still decides **output format** — `recent`/`search` print their plain
 //! list when piped, and the move progress line is skipped. That is a genuinely
@@ -48,7 +47,6 @@ pub fn require_tty(what: &str, how: &str) -> Result<()> {
     bail!("no terminal to {what} on — {how}")
 }
 
-/// Record that a prompt, a picker or the app was drawn and waited on.
 /// The terminal's settings before raw mode was switched on, kept so a signal
 /// handler can put them back without going through crossterm — whose
 /// `disable_raw_mode` takes a lock, which a handler may not.
@@ -152,6 +150,7 @@ pub fn pseudo_console() -> bool {
     false
 }
 
+/// Record that a prompt, a picker or the app was drawn and waited on.
 pub fn mark_interactive_surface() {
     SURFACE_RAN.store(true, Ordering::Relaxed);
 }

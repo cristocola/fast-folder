@@ -580,11 +580,10 @@ fn clear_readonly_tree_at(path: &Path, depth: usize) {
 /// consults the target's mode — replacing a file is a property of the
 /// directory — so on Linux a read-only `PROJECT_INFO.md` is simply written
 /// through. Windows refuses `MoveFileEx` onto a target carrying
-/// `FILE_ATTRIBUTE_READONLY`, and the retry schedule then spent its full
-/// backoff before failing with `Access is denied`. A project restored from a
-/// backup, copied off read-only media or synced down by a cloud client
-/// arrives with that attribute set, and every one of those verbs stopped
-/// working on it.
+/// `FILE_ATTRIBUTE_READONLY` with `Access is denied`, which no amount of
+/// waiting changes. A project restored from a backup, copied off read-only
+/// media or synced down by a cloud client arrives with that attribute set,
+/// and without the fallback every one of those verbs fails on it.
 pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
     match retry(|| std::fs::rename(from, to)) {
         Ok(()) => Ok(()),
@@ -641,9 +640,8 @@ fn rename_without_readonly(_from: &Path, _to: &Path, err: io::Error) -> io::Resu
 /// stands.
 ///
 /// These are split by platform rather than written with `#[cfg]` inside the
-/// expression: the Unix arm of the inlined version collapsed to
-/// `or_else(|e| Err(e))`, which is both pointless and a clippy error — invisible
-/// from Windows, because that code only compiles on Linux.
+/// expression: inlined, the Unix arm collapses to `or_else(|e| Err(e))`, a
+/// clippy error that a Windows build never compiles and so never sees.
 #[cfg(windows)]
 fn retry_without_readonly(path: &Path, err: io::Error, recursive: bool) -> io::Result<()> {
     if !is_transient(&err) && err.kind() != io::ErrorKind::PermissionDenied {
@@ -1002,12 +1000,10 @@ mod tests {
 
     /// The publish step of `atomic::write` is a rename **over** an existing
     /// file, and Windows refuses that when the target carries the read-only
-    /// attribute. Unix `rename(2)` never looks at the target's mode, so every
-    /// metadata verb — tag, note, rename, move, config, the counters — worked
-    /// on Linux and failed here with `Access is denied` after the full
-    /// backoff. Found by driving a real project whose `PROJECT_INFO.md` had
-    /// the attribute set, which is how one arrives from a backup, from
-    /// read-only media, or from a cloud client.
+    /// attribute. Every metadata verb — tag, note, rename, move, config, the
+    /// counters — publishes this way, onto a `PROJECT_INFO.md` that arrives
+    /// with the attribute set from a backup, from read-only media, or from a
+    /// cloud client.
     #[cfg(windows)]
     #[test]
     fn a_read_only_destination_does_not_block_the_publish() {

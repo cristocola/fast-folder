@@ -35,8 +35,8 @@ use std::sync::atomic::{AtomicU8, Ordering};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
     /// Every entry a walk, a copy or a removal touches — one line per file of
-    /// a move, so only when asked for: 3.13 wrote these at debug into every
-    /// job's log, 85 MB for one move of twelve projects.
+    /// a move, so only when asked for: written at debug into every job's log,
+    /// they come to 85 MB for one move of twelve projects.
     Trace = 0,
     Debug = 1,
     Info = 2,
@@ -95,8 +95,7 @@ static THRESHOLD: AtomicU8 = AtomicU8::new(Level::Info as u8);
 static JOB: Mutex<Option<(String, PathBuf)>> = Mutex::new(None);
 
 /// The job log, open. Only the job's worker writes it, so it is opened once
-/// rather than for every line (3.13 made a folder, looked twice and opened
-/// the file for each of them), with how long it is, for its rotation.
+/// rather than for every line, with how long it is, for its rotation.
 static JOB_FILE: Mutex<Option<(std::fs::File, u64)>> = Mutex::new(None);
 
 /// Write lines at `level` and above to the central log from now on.

@@ -135,9 +135,10 @@ tell you.
   around a keyword and `std::path`.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
   `runtime.rs` (the one owner of the alternate screen, the threads and the loop),
-  `entry.rs` (how the app was opened), `app/` (`App`, `update`, the app's own
-  `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`,
-  and a module per flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
+  `entry.rs` (how the app was opened), `app/` (`App` and `update`; the app's own
+  `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`
+  and, for the pane, `pane_edit` / `pane_add` / `pane_cursor`; and a module per
+  flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`), `view/` (renderers only, `&App`
   in), `command.rs` (**the one registry** every key, palette entry, help line,
   key line and hint comes from), `guide.rs` (**the one place** an explanation is

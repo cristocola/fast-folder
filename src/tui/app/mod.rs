@@ -30,6 +30,9 @@ mod geometry;
 mod keys;
 mod listing;
 mod messages;
+mod pane_add;
+mod pane_cursor;
+mod pane_edit;
 mod run;
 mod status;
 

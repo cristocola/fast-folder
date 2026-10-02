@@ -63,6 +63,7 @@ pub fn sample_summary(projects: usize) -> Summary {
         bases: vec![
             BaseInfo {
                 path: PathBuf::from(BASE),
+                configured: PathBuf::from(BASE),
                 label: "projects".to_string(),
                 probe: Probe::Mounted,
                 indexed: Some(projects),
@@ -70,6 +71,7 @@ pub fn sample_summary(projects: usize) -> Summary {
             },
             BaseInfo {
                 path: PathBuf::from("/media/usb/archive"),
+                configured: PathBuf::from("/media/usb/archive"),
                 label: "archive".to_string(),
                 probe: Probe::Absent,
                 indexed: None,

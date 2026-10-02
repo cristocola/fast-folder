@@ -172,20 +172,79 @@ pub(super) fn render_actions(
     frame: &mut Frame,
     area: Rect,
 ) -> Option<Position> {
-    let theme = &app.theme;
-    let g = theme.glyphs;
+    let g = app.theme.glyphs;
     let entries = crate::tui::app::actions::action_entries(app);
-    let area = crate::tui::layout::actions_box(area, entries.len());
-    super::clear(frame, area, &app.theme);
-    let project = app.library.selected();
     // Over marks the verbs act on every one of them, and the title says so.
     let marked = app.library.marks.len();
-    let title = match project {
+    let title = match app.library.selected() {
         _ if marked > 0 => format!(" {marked} marked {} actions ", g.sep),
         Some(p) => format!(" {} {} actions ", p.id, g.sep),
         None => " actions ".to_string(),
     };
-    let block = frame_block(app, title, true);
+    let menu = VerbMenu {
+        title,
+        entries: &entries,
+        selected: actions.selected,
+        offset: actions.offset,
+    };
+    render_verb_menu(app, menu, |id| command::find(id).title, frame, area);
+    None
+}
+
+/// A base's menu: the shape of the project action menu, about one base.
+pub(super) fn render_base_menu(
+    app: &App,
+    menu: &crate::tui::app::bases::BaseMenu,
+    frame: &mut Frame,
+    area: Rect,
+) -> Option<Position> {
+    let g = app.theme.glyphs;
+    let entries = crate::tui::app::bases::base_menu_entries(app);
+    let label = app
+        .base_in_hand()
+        .map(|base| base.label.clone())
+        .unwrap_or_default();
+    let menu = VerbMenu {
+        title: format!(" {label} {} actions ", g.sep),
+        entries: &entries,
+        selected: menu.selected,
+        offset: 0,
+    };
+    render_verb_menu(
+        app,
+        menu,
+        |id| crate::tui::app::bases::base_verb_title(app, id),
+        frame,
+        area,
+    );
+    None
+}
+
+/// A menu of verbs: its title, its rows and its cursor.
+struct VerbMenu<'a> {
+    title: String,
+    entries: &'a [(CommandId, Availability)],
+    selected: usize,
+    offset: usize,
+}
+
+/// **A menu of verbs, each with its key**: the key, the title and what it
+/// does, a verb that cannot run dimmed with its reason. `title_of` is what a
+/// row is called — the registry's title, or one that names the change a
+/// toggle would make.
+fn render_verb_menu(
+    app: &App,
+    menu: VerbMenu<'_>,
+    title_of: impl Fn(CommandId) -> &'static str,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let theme = &app.theme;
+    let g = theme.glyphs;
+    let entries = menu.entries;
+    let area = crate::tui::layout::actions_box(area, entries.len());
+    super::clear(frame, area, &app.theme);
+    let block = frame_block(app, menu.title, true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let width = inner.width as usize;
@@ -206,7 +265,7 @@ pub(super) fn render_actions(
         + 1;
     let title_w = entries
         .iter()
-        .map(|(id, _)| command::find(*id).title.chars().count())
+        .map(|(id, _)| title_of(*id).chars().count())
         .max()
         .unwrap_or(0)
         .clamp(8, 36)
@@ -229,11 +288,12 @@ pub(super) fn render_actions(
             let (title_style, detail) = match availability {
                 Availability::Enabled => (theme.text(), command.description),
                 Availability::Disabled(reason) => (theme.dim(), *reason),
-                // `action_entries` filters `Hidden` out before this is reached, so a
-                // row that says nothing cannot get here; the arm is only for the match
-                // to be exhaustive.
+                // The entries leave `Hidden` out before this is reached, so a
+                // row that says nothing cannot get here; the arm is only for
+                // the match to be exhaustive.
                 Availability::Hidden => (theme.dim(), ""),
             };
+            let title = title_of(*id);
             let mut left = vec![Span::raw(" ")];
             left.push(Span::styled(pad(&key, key_w), theme.key()));
             // A description squeezed to a letter or two says nothing and
@@ -241,12 +301,12 @@ pub(super) fn render_actions(
             // and titles, and a disabled verb says why when it is pressed.
             let room = width.saturating_sub(1 + key_w + title_w + 2);
             if room >= DESCRIPTION_MIN {
-                left.push(Span::styled(pad(command.title, title_w), title_style));
+                left.push(Span::styled(pad(title, title_w), title_style));
                 left.push(Span::styled(fit(detail, room, g.ellipsis), theme.dim()));
             } else {
                 let title_room = width.saturating_sub(1 + key_w);
                 left.push(Span::styled(
-                    fit(command.title, title_room, g.ellipsis),
+                    fit(title, title_room, g.ellipsis),
                     title_style,
                 ));
             }
@@ -255,10 +315,9 @@ pub(super) fn render_actions(
         .collect();
     let list = List::new(items).highlight_style(theme.selection);
     let mut state = ListState::default()
-        .with_offset(actions.offset)
-        .with_selected(Some(actions.selected));
+        .with_offset(menu.offset)
+        .with_selected(Some(menu.selected));
     frame.render_stateful_widget(list, inner, &mut state);
-    None
 }
 
 /// The least a description column in the action menu is worth: below it the

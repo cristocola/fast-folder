@@ -159,6 +159,42 @@ impl Sort {
     }
 }
 
+/// Which bases the list shows: every one, or only those not marked inactive.
+///
+/// **A view, not a setting**: kept in `state.toml` with the sort and the pane
+/// (`tui::session`), read by nothing outside the app — so no command, count,
+/// move or ID is decided by it, and discovery still reads every base, which is
+/// what makes switching instant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BasesView {
+    /// Every base, as the configuration lists them. What a first run shows,
+    /// and what an unknown word in `state.toml` reads as.
+    #[default]
+    Every,
+    /// Only the bases not marked inactive.
+    Active,
+}
+
+impl BasesView {
+    /// The word `state.toml` keeps.
+    pub fn label(self) -> &'static str {
+        match self {
+            BasesView::Every => "every",
+            BasesView::Active => "active",
+        }
+    }
+
+    /// Reads what `label` writes; anything else is the default, because a
+    /// view nobody can read back is no reason to hide a base.
+    pub fn from_label(label: &str) -> Self {
+        if label.trim().eq_ignore_ascii_case("active") {
+            BasesView::Active
+        } else {
+            BasesView::Every
+        }
+    }
+}
+
 /// Where a fuzzy query hit a row, as char offsets into the id and the name.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct MatchInfo {
@@ -202,6 +238,22 @@ pub struct LibraryState {
     /// what `base_label` shortens for display, not what identifies a base.
     pub base_filter: Option<PathBuf>,
     pub preset: Option<Preset>,
+    /// Whether the list shows every base or only the active ones.
+    pub view: BasesView,
+    /// The bases marked inactive, **as the configuration spells them** — the
+    /// one name a base keeps whether or not it answers, which its real path
+    /// does not (an unmounted base has none to give).
+    pub inactive: BTreeSet<PathBuf>,
+    /// A base's real path — what its rows carry in `Project::base` — to the
+    /// spelling the configuration gives it, where the two differ: learned from
+    /// each base's rows as they land (`install_base`) and from the summary.
+    spelled: HashMap<PathBuf, PathBuf>,
+    /// The rows the view keeps, before any filter or query: the whole the
+    /// search bar counts a list against.
+    pub in_view: usize,
+    /// Rows the filters and the query keep that the active view leaves out,
+    /// so an empty list can say they are there and how to see them.
+    pub beyond_view: usize,
     /// Landed size cells; a missing key is still pending.
     pub sizes: HashMap<PathBuf, Option<u64>>,
     /// Metadata read on demand; `Some(None)` is a project whose file could not
@@ -265,6 +317,11 @@ impl LibraryState {
             template_filter: None,
             base_filter: None,
             preset: None,
+            view: BasesView::Every,
+            inactive: BTreeSet::new(),
+            spelled: HashMap::new(),
+            in_view: 0,
+            beyond_view: 0,
             sizes: HashMap::new(),
             meta: HashMap::new(),
             known_tags: Vec::new(),
@@ -326,6 +383,9 @@ impl LibraryState {
             return false;
         }
         self.silent.remove(&base);
+        if let Some(real) = projects.first().map(|project| project.base.clone()) {
+            self.spelled.insert(real, base.clone());
+        }
         self.by_base.insert(
             base,
             BaseRows {
@@ -489,6 +549,46 @@ impl LibraryState {
             .collect()
     }
 
+    /// Which configured spelling a real base path has, from the summary's
+    /// bases — so rows the app was handed whole (`fastf recent`) are matched
+    /// to the bases the view names, as a discovery's are.
+    pub fn learn_spellings(&mut self, pairs: impl IntoIterator<Item = (PathBuf, PathBuf)>) {
+        for (real, configured) in pairs {
+            self.spelled.insert(real, configured);
+        }
+    }
+
+    /// Whether the base a row carries is marked inactive: by its configured
+    /// spelling when that is known, else by its path — the two are one path
+    /// wherever the configuration names a base by its real path.
+    pub fn is_inactive(&self, base: &Path) -> bool {
+        if self.inactive.is_empty() {
+            return false;
+        }
+        let spelled = self.spelled.get(base).map(PathBuf::as_path);
+        self.inactive
+            .iter()
+            .any(|marked| marked == base || Some(marked.as_path()) == spelled)
+    }
+
+    /// Whether the view is leaving rows out right now. **A base somebody
+    /// named beats the view**: shown alone (`base_filter`), or named by
+    /// `fastf recent --base`, an inactive base is what was asked for.
+    pub fn view_narrows(&self) -> bool {
+        self.view == BasesView::Active
+            && !self.inactive.is_empty()
+            && self.base_filter.is_none()
+            && !self
+                .preset
+                .as_ref()
+                .is_some_and(|preset| preset.base.is_some())
+    }
+
+    /// Whether the view leaves this row out.
+    pub fn out_of_view(&self, project: &Project) -> bool {
+        self.view_narrows() && self.is_inactive(&project.base)
+    }
+
     /// The order the rows are in right now.
     pub fn effective_sort(&self, query: &Query) -> Sort {
         match self.explicit_sort {
@@ -505,6 +605,8 @@ impl LibraryState {
         let keep_path = self.selected().map(|p| p.path.clone());
         let words = Fuzzy::words(&query.free_text());
 
+        let narrows = self.view_narrows();
+        let mut beyond = 0;
         let mut rows: Vec<(usize, Option<MatchInfo>)> = Vec::new();
         for (index, project) in self.snapshot.iter().enumerate() {
             if let Some(slug) = &self.template_filter
@@ -539,8 +641,15 @@ impl LibraryState {
                     None => continue,
                 }
             };
+            // Last, so what the view leaves out is counted as the query
+            // sees it: "3 more in inactive bases" is three matches.
+            if narrows && self.is_inactive(&project.base) {
+                beyond += 1;
+                continue;
+            }
             rows.push((index, info));
         }
+        self.beyond_view = beyond;
 
         let sort = self.effective_sort(query);
         rows.sort_by(|a, b| self.compare(sort, a, b));
@@ -551,22 +660,26 @@ impl LibraryState {
         self.filtered = rows.iter().map(|(index, _)| *index).collect();
         self.scores = rows.into_iter().map(|(_, info)| info).collect();
         // The table's claim on the window, measured over the whole library
-        // rather than the rows the query leaves: a claim that shrank as a
-        // search was typed would move the pane on every keystroke — beside the
-        // list for one letter, under it for the next.
-        self.widths = self
+        // in view rather than the rows the query leaves: a claim that shrank
+        // as a search was typed would move the pane on every keystroke —
+        // beside the list for one letter, under it for the next. A base out of
+        // view claims nothing: its long names are not on the screen.
+        let in_view: Vec<&Project> = self
             .snapshot
             .iter()
-            .fold((4, 8), |(id_w, name_w), project| {
-                (
-                    id_w.max(UnicodeWidthStr::width(project.id.as_str())),
-                    name_w.max(UnicodeWidthStr::width(project.name.as_str())),
-                )
-            });
+            .filter(|project| !(narrows && self.is_inactive(&project.base)))
+            .collect();
+        self.in_view = in_view.len();
+        self.widths = in_view.iter().fold((4, 8), |(id_w, name_w), project| {
+            (
+                id_w.max(UnicodeWidthStr::width(project.id.as_str())),
+                name_w.max(UnicodeWidthStr::width(project.name.as_str())),
+            )
+        });
         let mut base_width = 4usize;
         let mut first_base: Option<&Path> = None;
         let mut many = false;
-        for project in &self.snapshot {
+        for project in &in_view {
             let base = project.base.as_path();
             base_width = base_width.max(UnicodeWidthStr::width(library::base_label(base).as_str()));
             match first_base {

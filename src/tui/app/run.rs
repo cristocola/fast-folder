@@ -177,7 +177,11 @@ impl App {
                 let slug = self.library.selected().map(|p| p.template.clone());
                 self.set_template_filter(slug)
             }
-            CommandId::FilterBase => self.open_base_filter(),
+            CommandId::Bases => self.open_bases_panel(),
+            CommandId::ListBasesView | CommandId::BasesView => self.switch_bases_view(),
+            CommandId::BaseToggleActive | CommandId::BaseShowOnly => self.base_verb(id),
+            CommandId::BasesOpenMenu => self.open_base_menu(),
+            CommandId::BasesEditList => self.edit_base_list(),
             CommandId::FilterTag => self.open_tag_filter(),
             CommandId::ClearFilters => self.clear_filters(),
             CommandId::Actions | CommandId::ActionsEnter => {
@@ -322,6 +326,13 @@ impl App {
         if self.library.template_filter.is_some() {
             return self.set_template_filter(None);
         }
+        // Showing one base alone is a filter like the template's. The view —
+        // every base or the active ones — is not: it is a remembered choice,
+        // and Esc never changes what the next run will show.
+        if self.library.base_filter.is_some() {
+            self.info("showing every base in view again");
+            return self.set_base_filter(None);
+        }
         if !self.library.marks.is_empty() {
             // Marks can hide nothing, but clearing them first matches
             // the Esc ladder: one keystroke at a time, nothing lost.
@@ -378,6 +389,9 @@ impl App {
     }
 
     fn run_chosen_action(&mut self) -> Vec<Effect> {
+        if matches!(self.modals.top(), Some(Modal::BaseMenu(_))) {
+            return self.run_chosen_base_verb();
+        }
         let chosen = match self.modals.top() {
             Some(Modal::Actions(actions)) => crate::tui::app::actions::action_entries(self)
                 .get(actions.selected)
@@ -862,41 +876,5 @@ impl App {
             Some(project) => vec![Effect::Spawn(kind(Box::new(project.clone())))],
             None => Vec::new(),
         }
-    }
-
-    /// `b`: pick the base to restrict the list to. Every configured base is
-    /// offered, mounted or not — an unmounted one showing `0` is the answer to
-    /// "where did those projects go", where hiding it is not.
-    fn open_base_filter(&mut self) -> Vec<Effect> {
-        let Some(bases) = self.summary.as_ref().and_then(Summary::bases_known) else {
-            return Vec::new();
-        };
-        let mut items: Vec<PickItem> = bases
-            .iter()
-            .map(|base| PickItem {
-                label: base.label.clone(),
-                detail: base.note(),
-                value: base.path.display().to_string(),
-            })
-            .collect();
-        if items.is_empty() {
-            return Vec::new();
-        }
-        // The way out is in the list, not only on a second key: a picker whose
-        // only escape is Esc cannot say that "every base" is a choice.
-        items.insert(
-            0,
-            PickItem {
-                label: "every base".to_string(),
-                detail: String::new(),
-                value: String::new(),
-            },
-        );
-        self.modals.push(Modal::Pick(PickState::new(
-            "Show which base?",
-            items,
-            Then::BaseFilter,
-        )));
-        Vec::new()
     }
 }

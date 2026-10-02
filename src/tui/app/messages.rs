@@ -286,8 +286,11 @@ impl App {
         // reading; a read that lands after it was closed has nothing
         // to fill in and is dropped.
         let (theme, motion) = (loaded.theme.clone(), loaded.motion.clone());
+        let rows = layout::settings_rows(self.area());
         if let Some(Modal::Settings(state)) = self.modals.top_mut() {
             state.refresh(*loaded);
+            // A screen opened on one row lands with that row in view.
+            state.clamp_viewport(rows);
         }
         // A theme — or a motion setting — written on this screen takes
         // effect on the frame that shows it was written.

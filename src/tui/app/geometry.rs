@@ -13,11 +13,11 @@ impl App {
     }
 
     /// What the table asks of the body (`layout::TableNeeds`): measured over
-    /// the whole library, so a search never moves the pane.
+    /// the whole library in view, so a search never moves the pane.
     pub fn table_needs(&self) -> layout::TableNeeds {
         layout::TableNeeds {
             min_width: self.table_min_width(),
-            rows: self.library.snapshot.len(),
+            rows: self.library.in_view,
         }
     }
 
@@ -55,7 +55,7 @@ impl App {
     /// pane arrives with the first project, in its place, rather than sitting
     /// beside an empty list and then moving when the names come in.
     pub fn pane_live(&self) -> bool {
-        self.detail_open && !self.library.snapshot.is_empty()
+        self.detail_open && self.library.in_view > 0
     }
 
     /// Whether the library's pane is drawn this frame: beside or under the

@@ -55,6 +55,7 @@ fn base_rows(app: &mut App, generation: u64, base: &str, rows: Vec<Project>) -> 
 fn two_bases_answered() -> Box<SummaryPart> {
     let base = |path: &str, label: &str, default| BaseInfo {
         path: PathBuf::from(path),
+        configured: PathBuf::from(path),
         label: label.to_string(),
         probe: Probe::Mounted,
         indexed: Some(3),

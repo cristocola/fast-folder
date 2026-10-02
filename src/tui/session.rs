@@ -1,11 +1,13 @@
 //! What the app remembers between runs: the sort order, whether the detail
 //! pane was open, the row the cursor was on, whether the template guide has
-//! been shown, and whether the editor's explanation panel is open.
+//! been shown, whether the editor's explanation panel is open, and which
+//! bases the list shows — every one, or only those not marked inactive.
 //!
 //! A few keystrokes' worth, kept in `state.toml` beside `config.toml` — the
 //! data directory is the one place that is this machine's own — and never
 //! anything a project holds. It is read once before the first frame and written
-//! once after the screen is given back; `update` never touches it. A file that
+//! after the screen is given back — and the moment the bases' view changes
+//! (`Effect::SaveSession`); `update` never touches it. A file that
 //! is missing, unreadable or garbage starts the app with the defaults and says
 //! so once, because a lost convenience is not an error.
 
@@ -15,7 +17,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::App;
-use crate::tui::app::library::{Order, Sort};
+use crate::tui::app::library::{BasesView, Order, Sort};
 use crate::util::paths::display_path;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,6 +44,13 @@ pub struct Session {
     /// the panel than from the width.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explain_open: Option<bool>,
+    /// Which bases the list shows (`BasesView::label`); absent is every base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bases_view: Option<String>,
+    /// The bases marked inactive, as the configuration spells them: the name
+    /// a base has whether or not it is mounted when the app starts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inactive_bases: Vec<String>,
 }
 
 /// `state.toml` in the data directory.
@@ -99,11 +108,14 @@ impl Session {
 
     /// What this run leaves behind. `fastf recent`/`search` own their order
     /// and their rows, so only the guided app (`fastf`) updates the sort and
-    /// the selection; the pane's state is everyone's.
+    /// the selection; the pane's state and the bases' view are everyone's.
     pub fn capture(app: &App, previous: &Session) -> Self {
         let mut session = previous.clone();
         session.detail_open = Some(app.detail_open);
         session.explain_open = Some(app.explain_open);
+        session.bases_view =
+            (app.library.view == BasesView::Active).then(|| BasesView::Active.label().to_string());
+        session.inactive_bases = app.inactive_to_remember();
         if app.guide_seen {
             session.guide_seen = Some(true);
         }
@@ -112,6 +124,15 @@ impl Session {
             session.selected = app.library.selected().map(|project| project.id.clone());
         }
         session
+    }
+
+    /// The bases' view this session names; anything it cannot read is every
+    /// base.
+    pub fn bases_view(&self) -> BasesView {
+        self.bases_view
+            .as_deref()
+            .map(BasesView::from_label)
+            .unwrap_or_default()
     }
 
     /// The sort order this session names, if it names a real one. `newest` is
@@ -129,7 +150,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::Session;
-    use crate::tui::app::library::{Order, Sort};
+    use crate::tui::app::library::{BasesView, Order, Sort};
     use crate::util::test_env::EnvGuard;
 
     #[test]
@@ -140,6 +161,8 @@ mod tests {
             selected: Some("ID0240".to_string()),
             guide_seen: Some(true),
             explain_open: Some(false),
+            bases_view: Some("active".to_string()),
+            inactive_bases: vec!["/mnt/projects/archive".to_string()],
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
@@ -182,6 +205,39 @@ mod tests {
         assert_eq!(odd.sort_order(), None);
     }
 
+    /// **The bases' view reads back as it was left, and anything else is
+    /// every base**: a word this version does not know must not hide a base,
+    /// and a file from before there was a view still loads, showing every
+    /// base, as it did then.
+    #[test]
+    fn the_bases_view_round_trips_and_anything_else_is_every_base() {
+        let active = Session::parse(
+            "bases_view = \"active\"\ninactive_bases = [\"/mnt/projects/archive\"]\n",
+        )
+        .unwrap();
+        assert_eq!(active.bases_view(), BasesView::Active);
+        assert_eq!(active.inactive_bases, vec!["/mnt/projects/archive"]);
+        for word in ["every", "Active ", "sideways", ""] {
+            let session = Session {
+                bases_view: Some(word.to_string()),
+                ..Session::default()
+            };
+            let expected = if word.trim().eq_ignore_ascii_case("active") {
+                BasesView::Active
+            } else {
+                BasesView::Every
+            };
+            assert_eq!(session.bases_view(), expected, "{word:?}");
+        }
+        let older = Session::parse("sort = \"id\"\ndetail_open = true\n").unwrap();
+        assert_eq!(older.bases_view(), BasesView::Every);
+        assert!(older.inactive_bases.is_empty());
+        // Nothing is written for the default, so a file that never chose
+        // stays as short as it was.
+        let text = toml::to_string(&Session::default()).unwrap();
+        assert!(!text.contains("bases"), "{text}");
+    }
+
     #[test]
     fn newest_and_nonsense_read_as_no_explicit_sort() {
         let newest = Session {
@@ -210,6 +266,7 @@ mod tests {
             selected: None,
             guide_seen: None,
             explain_open: Some(true),
+            ..Session::default()
         };
         session.save_to(&path).unwrap();
         assert_eq!(Session::load_from(&path), session);

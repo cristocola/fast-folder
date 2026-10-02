@@ -259,6 +259,19 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::PickCancel => "cancel",
         CommandId::SearchAccept => "keep",
         CommandId::SearchCancel => "clear / leave",
+        // A base verb says the change it would make, as its menu row does
+        // (`app::bases::base_verb_title`).
+        CommandId::BasesOpenMenu => "menu",
+        CommandId::BaseToggleActive if app.base_in_hand_active() => "mark inactive",
+        CommandId::BaseToggleActive => "mark active",
+        CommandId::BaseShowOnly if app.base_in_hand_alone() => "show all",
+        CommandId::BaseShowOnly => "only this",
+        CommandId::BasesView | CommandId::ListBasesView
+            if app.library.view == crate::tui::app::library::BasesView::Active =>
+        {
+            "every base"
+        }
+        CommandId::BasesView | CommandId::ListBasesView => "active only",
         _ => title,
     }
 }

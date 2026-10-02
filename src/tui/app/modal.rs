@@ -41,8 +41,6 @@ pub enum Then {
     AddTag(crate::tui::app::actions::Targets),
     /// The picked value is a base path to move these projects into.
     MoveToBase(crate::tui::app::actions::Targets),
-    /// The picked value is a base path to restrict the list to.
-    BaseFilter,
     /// The picked value is a tag; it goes into the search bar as `tag:x`,
     /// because that is what a tag filter *is* here — the grammar has it, and
     /// this is a way to find it without typing it.
@@ -353,6 +351,10 @@ pub enum Modal {
     Pick(PickState),
     /// The selected project's action menu.
     Actions(ActionsState),
+    /// `b`: which bases the list shows.
+    Bases(crate::tui::app::bases::BasesPanel),
+    /// One base's verbs, each with its key.
+    BaseMenu(crate::tui::app::bases::BaseMenu),
     /// A single-line prompt (rename, add a tag, the delete confirmation).
     TextPrompt(TextPrompt),
     /// The quick journal note: a few lines, Enter saves.
@@ -400,6 +402,8 @@ impl Modal {
         match self {
             Modal::Palette(_) => Context::Palette,
             Modal::Actions(_) => Context::Actions,
+            Modal::Bases(_) => Context::Bases,
+            Modal::BaseMenu(_) => Context::BaseMenu,
             Modal::Builder(builder) if builder.pending.is_none() => match &builder.open {
                 None => Context::Builder,
                 Some(Open::Variables(list)) if list.editing.is_none() => Context::Builder,
@@ -504,10 +508,6 @@ impl App {
                 let effects = self.after_query_change();
                 self.pulse_selected();
                 effects
-            }
-            Then::BaseFilter => {
-                let base = (!item.value.is_empty()).then(|| PathBuf::from(&item.value));
-                self.set_base_filter(base)
             }
             Then::AddTag(targets) => {
                 if item.value == crate::tui::app::actions::NEW_TAG {
@@ -676,6 +676,12 @@ impl App {
 
     /// The arrows on whatever dialog is on top.
     pub(super) fn step_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        if matches!(
+            self.modals.top(),
+            Some(Modal::Bases(_) | Modal::BaseMenu(_))
+        ) {
+            return self.step_bases(delta);
+        }
         let area = self.area();
         let actions_len = crate::tui::app::actions::action_entries(self).len();
         match self.modals.top_mut() {
@@ -745,6 +751,13 @@ impl App {
     /// A page, or the ends (`isize::MIN`/`isize::MAX`), on whatever dialog
     /// is on top.
     pub(super) fn page_top_modal(&mut self, delta: isize) -> Vec<Effect> {
+        // `nav::step` stops at the ends, so a page and an end are a step.
+        if matches!(
+            self.modals.top(),
+            Some(Modal::Bases(_) | Modal::BaseMenu(_))
+        ) {
+            return self.step_bases(delta);
+        }
         let area = self.area();
         let actions_len = crate::tui::app::actions::action_entries(self).len();
         let jump = |selected: usize, len: usize| -> usize {

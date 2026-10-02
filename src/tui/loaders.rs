@@ -72,7 +72,8 @@ pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>
     let mut probed = Vec::new();
     let (mut projects, mut max_id, mut newest) = (0, None::<String>, None);
     for (at, (configured, answer)) in candidates.into_iter().zip(answers).enumerate() {
-        let (base, probe, index) = answer.unwrap_or((configured, paths::Probe::Unresponsive, None));
+        let (base, probe, index) =
+            answer.unwrap_or_else(|| (configured.clone(), paths::Probe::Unresponsive, None));
         if bases.iter().any(|known| known.path == base) {
             continue;
         }
@@ -91,6 +92,7 @@ pub fn summary_bases(cfg: &Config) -> (SummaryPart, Vec<(PathBuf, paths::Probe)>
         }
         probed.push((base.clone(), probe));
         bases.push(BaseInfo {
+            configured,
             label: library::base_label(&base),
             // `base_dir` is the first candidate, however it is spelled.
             is_default: at == 0,

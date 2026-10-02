@@ -123,32 +123,41 @@ fn bases_line(
     attention_or_session(app, bases, width)
 }
 
+/// **The bases, and which of them are active.** Showing every base, an
+/// inactive one is named dim; showing the active ones, the inactive are one
+/// quiet count at the end of the row — the first thing a narrow window cuts.
 fn base_spans(app: &App, known: Option<&[BaseInfo]>, gap: &'static str) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let g = theme.glyphs;
     let mut bases = vec![Span::raw(" ")];
     match known {
         Some(known) => {
-            for (i, base) in known.iter().enumerate() {
-                if i > 0 {
+            let active_only = app.library.view == crate::tui::app::library::BasesView::Active;
+            let mut left_out = 0;
+            let mut first = true;
+            for base in known {
+                let active = app.base_is_active(base);
+                if active_only && !active {
+                    left_out += 1;
+                    continue;
+                }
+                if !first {
                     bases.push(Span::raw(gap));
                 }
+                first = false;
                 if base.is_default {
                     bases.push(Span::styled(format!("{} ", g.arrow), theme.dim()));
                 }
-                bases.push(Span::styled(base.label.clone(), theme.accent()));
-                // A base the last discovery did not hear from is silent,
-                // whatever its probe said a moment before.
-                let note = if app.library.silent.contains(&base.path) {
-                    crate::util::paths::Probe::Unresponsive
-                        .note()
-                        .trim()
-                        .trim_matches(['(', ')'])
-                        .to_string()
-                } else {
-                    base.note()
-                };
+                let label = if active { theme.accent() } else { theme.dim() };
+                bases.push(Span::styled(base.label.clone(), label));
+                let note = crate::tui::view::modals::base_note_text(app, base);
                 bases.push(Span::styled(format!(" {note}"), theme.dim()));
+            }
+            if left_out > 0 {
+                bases.push(Span::styled(
+                    format!("{gap}{left_out} inactive"),
+                    theme.dim(),
+                ));
             }
         }
         None => match &app.summary_error {
@@ -307,10 +316,12 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
 fn list_report(app: &App, width: usize) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let g = theme.glyphs;
+    // Counted against the projects in view: a base the view leaves out is
+    // not part of what this list could show.
     let mut parts: Vec<(u8, Span)> = vec![(
         0,
         Span::styled(
-            format!("{}/{}", app.library.len(), app.library.snapshot.len()),
+            format!("{}/{}", app.library.len(), app.library.in_view),
             theme.text(),
         ),
     )];
@@ -349,6 +360,12 @@ fn list_report(app: &App, width: usize) -> Vec<Span<'static>> {
                 format!(" {} base={}", g.sep, crate::core::library::base_label(base)),
                 theme.accent_alt(),
             ),
+        ));
+    }
+    if app.library.view_narrows() {
+        parts.push((
+            2,
+            Span::styled(format!(" {} active bases", g.sep), theme.accent_alt()),
         ));
     }
     if !app.library.marks.is_empty() {
@@ -439,6 +456,18 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
                 crate::tui::command::key_of(crate::tui::command::CommandId::NewProject),
                 crate::tui::command::key_of(crate::tui::command::CommandId::Register)
             )
+        } else if app.library.is_empty() && app.library.beyond_view > 0 {
+            // The view is what hides them: say how many, and the key.
+            format!(
+                "{} in the active bases — {} in inactive ones, {} shows every base",
+                if app.search.input.is_empty() {
+                    "no projects"
+                } else {
+                    "no matches"
+                },
+                app.library.beyond_view,
+                crate::tui::command::key_of(crate::tui::command::CommandId::ListBasesView)
+            )
         } else if app.library.is_empty() {
             // Name the thing that is hiding the rows, not every thing that
             // could.
@@ -510,6 +539,7 @@ pub fn hints(app: &App, frame: &mut Frame, area: Rect) {
         | Some(Modal::Flow(_))
         | Some(Modal::Builder(_))
         | Some(Modal::Settings(_))
+        | Some(Modal::Bases(_))
         | Some(Modal::Guide(_))
         | Some(Modal::Onboarding(_)) => Vec::new(),
         _ => {

@@ -254,6 +254,28 @@ pub fn actions_box(area: Rect, entries: usize) -> Rect {
     centered_fixed(area, 64, height)
 }
 
+/// The rows of the bases panel's box that are not bases: the borders, the
+/// line that says which view is on and the blank under it, a blank over the
+/// footer, the footer and the key line.
+const BASES_CHROME: u16 = 7;
+
+/// The bases panel's box: `width` is what its widest row measures, and it is
+/// as tall as its bases — within the window, which always wins.
+pub fn bases_box(area: Rect, rows: usize, width: u16) -> Rect {
+    let wanted = (rows as u16).saturating_add(BASES_CHROME);
+    centered_fixed(
+        area,
+        fit_between(width, 44, area.width.saturating_sub(2)),
+        fit_between(wanted, BASES_CHROME + 1, area.height),
+    )
+}
+
+/// How many bases the panel shows at once: what its box holds besides the
+/// chrome. The width plays no part, so `update` can ask without measuring.
+pub fn bases_list_rows(area: Rect, rows: usize) -> usize {
+    bases_box(area, rows, 0).height.saturating_sub(BASES_CHROME) as usize
+}
+
 /// A fuzzy picker's box: a query line, a blank, then the ranked rows.
 pub fn pick_box(area: Rect, items: usize) -> Rect {
     let height = (items as u16 + 4).clamp(6, 16);

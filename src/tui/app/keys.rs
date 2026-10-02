@@ -80,6 +80,7 @@ impl App {
             Some(Modal::Palette(_)) => self.on_palette_key(key),
             Some(Modal::Pick(_)) => self.on_pick_key(key),
             Some(Modal::Actions(_)) => self.on_actions_key(key),
+            Some(Modal::Bases(_) | Modal::BaseMenu(_)) => self.lookup_and_run(key),
             Some(Modal::TextPrompt(_)) => self.on_text_prompt_key(key),
             Some(Modal::Note(_)) => self.on_note_key(key),
             Some(Modal::Confirm(_)) => self.on_confirm_key(key),

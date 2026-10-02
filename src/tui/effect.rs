@@ -100,6 +100,10 @@ pub enum Effect {
         id: String,
         title: String,
     },
+    /// Write what the app remembers (`tui::session`) now, not only on the
+    /// way out: a choice of which bases to see is one a person expects to
+    /// find again after a crash or a closed window.
+    SaveSession,
     /// Give the terminal back, run something that needs it, take it again.
     Suspend(Suspended),
     Quit(Exit),

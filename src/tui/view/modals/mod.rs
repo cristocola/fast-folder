@@ -18,12 +18,15 @@ use crate::tui::layout::{centered, centered_fixed};
 use super::clear;
 use crate::tui::view::{fit, fit_spans, highlighted, pad, split_line};
 
+mod bases;
 mod flow;
 mod jobs;
 mod lists;
 mod prompts;
 mod reading;
 
+pub(crate) use bases::base_note_text;
+use bases::*;
 pub(crate) use flow::*;
 pub use jobs::*;
 use lists::*;
@@ -40,6 +43,11 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
         }
         Modal::Pick(pick) => Some(render_pick(app, pick, frame, area)),
         Modal::Actions(actions) => render_actions(app, actions, frame, area),
+        Modal::Bases(panel) => {
+            render_bases(app, panel, frame, area);
+            None
+        }
+        Modal::BaseMenu(menu) => render_base_menu(app, menu, frame, area),
         Modal::TextPrompt(prompt) => Some(render_text_prompt(app, prompt, frame, area)),
         Modal::Note(note) => Some(render_note(app, note, frame, area)),
         Modal::Confirm(confirm) => render_confirm(app, confirm, frame, area),

@@ -151,6 +151,38 @@ pub fn wrapped_rows(note: &Note, width: usize) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// The bases panel
+// ---------------------------------------------------------------------------
+
+/// What the bases panel says about the base under its cursor, one sentence a
+/// case, in the order `base_note` picks them.
+pub static BASE_NOTES: &[Block] = &[
+    Block::Para("The default base: new projects go here, so it is always in the list."),
+    Block::Para("Active: in the list whichever view is on."),
+    Block::Para(
+        "Inactive: in the list while it shows every base; {key:BasesView} shows only the active ones.",
+    ),
+    Block::Para(
+        "Inactive: out of the list; {key:BasesView} shows every base, {key:BaseShowOnly} this one alone.",
+    ),
+];
+
+/// The panel's sentence for a base: the default, an active one, or an
+/// inactive one in the view on now.
+pub fn base_note(is_default: bool, active: bool, every_base_shown: bool) -> String {
+    let at = match (is_default, active, every_base_shown) {
+        (true, _, _) => 0,
+        (false, true, _) => 1,
+        (false, false, true) => 2,
+        (false, false, false) => 3,
+    };
+    match &BASE_NOTES[at] {
+        Block::Para(text) => resolve(text),
+        _ => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The guide's pages
 // ---------------------------------------------------------------------------
 
@@ -1025,6 +1057,7 @@ mod tests {
         for page in PAGES {
             out.extend(page.body.iter());
         }
+        out.extend(BASE_NOTES.iter());
         for section in Section::ALL {
             out.extend(static_body(section).iter());
         }

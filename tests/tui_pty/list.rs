@@ -813,6 +813,55 @@ fn the_sort_order_and_the_cursor_survive_a_restart() {
     );
 }
 
+/// **Which bases the list shows survives a restart**: a base unticked in the
+/// bases panel leaves the list at once, `state.toml` keeps the choice, and the
+/// next run starts without the base — its rows never drawn.
+#[test]
+fn an_unticked_base_stays_out_of_the_list_after_a_restart() {
+    let sb = Sandbox::new();
+    let archive = sb.with_bases(&["archive"])[0].clone();
+    plant_dated_project(&sb, "Home_Project", "ID0001", "2026-01-01T00:00:00Z", 64);
+    sb.plant_project(&archive, "Archived_Project", "ID0002");
+
+    let script = pty::Script::new()
+        .pause(1500)
+        .key("b")
+        .pause(300)
+        .key("j") // the archive, under the default base
+        .pause(200)
+        .key(" ")
+        .pause(300)
+        .esc()
+        .pause(200)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    assert_eq!(code, 0, "the first run should quit cleanly:\n{screen}");
+    assert!(
+        screen.contains("Home_Project") && !screen.contains("Archived_Project"),
+        "the archive's row should leave the list at once:\n{screen}"
+    );
+    let state = fs::read_to_string(sb.install.join("state.toml")).unwrap_or_default();
+    assert!(
+        state.contains("bases_view = \"active\"") && state.contains("archive"),
+        "the run should leave the view and the inactive base behind:\n{state}"
+    );
+
+    let script = pty::Script::new().pause(2000).key(KEY_QUIT).build();
+    let (out, code) = launch(&sb, script);
+    let screen = app_screen(&out);
+    assert_eq!(code, 0, "the second run should quit cleanly:\n{screen}");
+    assert!(
+        !out.contains("Archived_Project"),
+        "an inactive base's rows are never drawn, not even for a frame:\n{screen}"
+    );
+    assert!(
+        screen.contains("1 inactive") && screen.contains("active bases"),
+        "the header and the search bar should say the view:\n{screen}"
+    );
+}
+
 /// The **other** half of the batch tag: a tag the library already knows, picked
 /// from the list rather than typed. It is the path a real library takes — the
 /// text prompt only appears when no tag exists anywhere.

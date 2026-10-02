@@ -134,8 +134,8 @@ fix is the one `Builder::summary` and `transform_example` took: hand it the
   for. The "here is the path" dialog is the answer until then.
 - Delete to the system trash instead of permanently (a dependency and a core
   change).
-- A `base=` search operator, or a base filter key, for a library on several
-  drives.
+- A `base=` search operator, and `fastf search --base`, for a library on
+  several drives; the app's bases panel (`b`) covers it there.
 - "Open in `$EDITOR`" as a project verb; the journal's `--since` in the app;
   `fastf new --no-post` parity in the wizard.
 - Windows terminal-layer tests: the pty suite is unix by construction, so raw

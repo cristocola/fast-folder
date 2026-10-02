@@ -33,11 +33,15 @@ Top to bottom:
   only you can make, a dim `finishing n` when fastf is finishing leftovers
   by itself, or `n waiting` when what it would finish is on a base that does
   not answer (else the last few things this session did). `!` lists them.
+  A base marked inactive is named dim while every base is shown, and while
+  only the active ones are, the inactive are one count at the end of the line
+  (`2 inactive`) — see [Which bases the list shows](#which-bases-the-list-shows).
   Until every base has answered it says `probing bases…`; the templates tab
   never waits for them.
 - **The search bar** — the query, and on the right the one place the list
-  reports itself: how many rows matched out of how many there are, the sort
-  order, the template and base filters, and how many rows are marked. The
+  reports itself: how many rows matched out of how many are in view, the sort
+  order, the template and base filters, `active bases` while only those are
+  shown, and how many rows are marked. The
   first frame's counts come from each base's index and are labelled
   `(from index)` until discovery answers. Each base's projects are listed as
   soon as that base answers — first as its index has them, then as the
@@ -135,11 +139,13 @@ and the variables table under the frontmatter follows — while it is still the
 table fastf wrote.
 
 **Remembered between runs.** The sort order, whether the detail pane was open,
-the row the cursor was on, whether the template guide has been offered, and
-whether the builder's explanation panel is shown live in `state.toml` beside
-`config.toml` (`fastf paths` names the folder). `fastf recent` and `fastf
-search` keep their own order and rows and take only the pane's state. Delete
-the file to start fresh; a file that cannot be read is skipped with a note.
+the row the cursor was on, whether the template guide has been offered,
+whether the builder's explanation panel is shown, and which bases the list
+shows live in `state.toml` beside `config.toml` (`fastf paths` names the
+folder). The bases are saved the moment they change, the rest on the way out.
+`fastf recent` and `fastf search` keep their own order and rows and take the
+pane's state and the bases. Delete the file to start fresh; a file that cannot
+be read is skipped with a note.
 
 ## Keys
 
@@ -181,7 +187,8 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size — and every one of those but the dates runs **both ways**, so `size reversed` is the smallest first and `id reversed` is the highest ID first |
-| `f` / `b` / `F` | show only the selected project's template / show only one base's projects / clear both filters. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
+| `f` / `F` | show only the selected project's template / clear the filters — the template's, and a base shown alone. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
+| `b` / `B` | the bases panel: which bases are active, and one shown alone / switch the list between every base and only the active ones — see [Which bases the list shows](#which-bases-the-list-shows) |
 | `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
@@ -229,10 +236,55 @@ lack it and filled in as it lands; everything else is answered from the row.
 A clause the grammar cannot read is named as you type it.
 
 The bar's right edge is where the list's own state is reported, and the only
-place it is: what matched out of what there is (`4/12`), the sort order, the
-template and base filters, and how many rows are marked. When nothing matches,
-the status line says so and the query stays in the bar, one keystroke from
-being fixed.
+place it is: what matched out of what is in view (`4/12`), the sort order, the
+template and base filters, `active bases` while only those are shown, and how
+many rows are marked. When nothing matches, the status line says so — and how
+many matches the inactive bases hold, when they hold some — and the query stays
+in the bar, one keystroke from being fixed.
+
+## Which bases the list shows
+
+`b` opens the **bases panel**: every base, one row each, ticked when it is
+active, with `→` on the default base, how many projects its index holds (or
+that it is not mounted) and where it is.
+
+```
+┌ bases ───────────────────────────────────────────────────────┐
+│ showing the active bases   1 inactive left out               │
+│                                                              │
+│   [x] → projects  9   /mnt/projects                          │
+│ ▸ [ ]   archive   3   /mnt/projects/archive                  │
+│                                                              │
+│ Inactive: out of the list; B shows every base, f this one…   │
+│ ↑↓ choose   Space mark active   Enter menu   Esc close       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- **Space** ticks or unticks the base under the cursor. Unticking one while
+  every base is shown switches the list to the active bases, so the base's
+  projects leave the list at once, behind the panel; ticking the last
+  inactive one again shows every base. The default base stays active — new
+  projects go there.
+- **Enter** opens the base's menu: everything there is to do with it, each
+  with its key — mark it active or inactive, show it alone, switch the view,
+  and *Add or remove bases*, which opens the settings on the list of bases.
+- **`f`** shows that base alone — the one way to look into an inactive base
+  without making it active. `f` on it again, Esc or `F` shows every base in
+  view again.
+- **`B`** — here or on the list — switches between every base and only the
+  active ones.
+
+Which bases are active, and which of the two the list shows, is **a view, not
+a setting**: it is remembered in `state.toml` and read by nothing but the app.
+Every base is still read, so switching is instant; the ID counter, moves,
+`fastf recent` and every other command see every base as before. Esc and `F`
+never change the view — they take off filters, and the view is a choice the
+next run starts on.
+
+Nothing is out of sight in silence. A search the active bases leave empty says
+how many matches the inactive ones hold, and which key shows them. A project
+asked for by name — picked in the palette, or just created in an inactive
+base — is shown with its base alone rather than not at all.
 
 ## Columns
 
@@ -323,7 +375,8 @@ line it is on, pre-filled, so a correction is a keystroke rather than a retype.
 A value `fastf config set` would refuse is refused here in the same words,
 under the value that is still there to be fixed; Esc leaves it unchanged. The
 library bases are one text area — one folder per line, `Ctrl-S` keeps it —
-because that is what the list is. The keys and what each one means are in
+because that is what the list is; *Add or remove bases* in a base's menu opens
+the settings on it. The keys and what each one means are in
 [config.md](config.md).
 
 The same screen holds the **ID counter** (what the highest ID is, what the next

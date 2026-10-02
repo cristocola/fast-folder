@@ -29,8 +29,10 @@ The data folder holds:
   the projects; see [The ID counter](#the-id-counter).
 - `state.toml` — what the app remembers between runs: the sort order, whether
   the detail pane was open, the row the cursor was on, whether the template
-  guide has been offered, and whether the builder's panel is shown. Delete it
-  to start fresh.
+  guide has been offered, whether the builder's panel is shown, and which
+  bases the list shows — the ones marked inactive, and whether only the
+  active ones are shown ([app.md](app.md#which-bases-the-list-shows)). Delete
+  it to start fresh.
 - `messages.log` — every message fastf showed you, in the app and on the
   command line, one per line; `fastf messages` and `L` in the app read it.
 - `logs/fastf.log` — the log: every step of every move, copy and reconcile
@@ -104,8 +106,9 @@ base directory is created if it is missing. The extra bases are not: an
 unmounted drive is an empty mount point, and creating a folder there would
 plant an empty base over the drive it stands for.
 
-Keys in `config.toml` that fastf does not recognise are kept, so a setting an
-older or newer fastf wrote survives an edit. Three retired keys — `show-banner`,
+Keys in `config.toml` that fastf does not recognise are read past, never
+refused, so a setting a newer fastf wrote does not stop an older one — but they
+are not kept: the next change this fastf writes leaves them out. Three retired keys — `show-banner`,
 `show-frame` and `mouse` — are accepted by `config set` and reported as no
 longer used, so a script that sets one keeps working, and `recent-default-limit`
 still parses as `recent-limit`.

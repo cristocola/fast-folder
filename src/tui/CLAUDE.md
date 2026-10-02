@@ -183,11 +183,15 @@ prints `aborted.` and exits 130 as a signal would. An external SIGINT is seen on
 the idle wake. **`diag` goes through the channel** as `Msg::Diag`, because a
 worker's `eprintln!` would land mid-frame on the alternate screen.
 
-**`session.rs`** keeps five things in `state.toml` beside `config.toml`: the sort,
-whether the pane is open, the selected row's id, `guide_seen` and `explain_open`.
-It is read before the first frame, written after the screen is given back, and
-applied once on the first discovery — a reload is not a restart. `fastf recent`
-and `search` own their order and take only the pane's state.
+**`session.rs`** keeps seven things in `state.toml` beside `config.toml`: the
+sort, whether the pane is open, the selected row's id, `guide_seen`,
+`explain_open`, and the bases' view — `bases_view` and `inactive_bases`. It is
+read before the first frame and written after the screen is given back, and the
+bases' view also the moment it changes (`Effect::SaveSession`, on the main
+thread, so an earlier save can never land after a later one). The remembered
+row is applied once on the first discovery — a reload is not a restart.
+`fastf recent` and `search` own their order and take the pane's state and the
+bases' view.
 
 **`run_action` refuses while one is already running**, and `on_action_done` drops
 an answer whose `ActionId` is not the one in flight, or a second action would
@@ -524,7 +528,8 @@ included.
 **The base is promoted above the date when the rows the filter keeps span more
 than one base** — a question about the list, not the configuration. The
 *claim* is another question: `LibraryState.widths`, `many_bases` and
-`base_width` are measured in `recompute` over the **whole library**, so
+`base_width` are measured in `recompute` over the **whole library in view**
+(a base the bases' view leaves out claims nothing), so
 `App::table_min_width` can claim the base column before long names take its
 room, and so a claim that shrank as a query was typed cannot move the pane on
 every keystroke; the view's `choose_columns` still measures the rows in the
@@ -822,7 +827,8 @@ for the table, the pane and both templates-tab panes. Dialogs keep
 `FADE_MS`.
 
 **Find my row**: `App::reordered` recomputes and pulses the selected row for
-every reorder someone asked for — `s`, `S`, `f`, `b`, `F`, the tag filter — and is
+every reorder someone asked for — `s`, `S`, `f`, `F`, `B`, a base ticked or
+shown alone in the bases panel, the tag filter — and is
 deliberately not in `after_rows_changed`, which discovery, sizes and every search
 keystroke run through.
 
@@ -1002,6 +1008,46 @@ has — one follows every `$EDITOR` note and every `fg` — is no message at all
 `validators::tag` is the same rule for the prompts that refuse before a worker is
 asked.
 
+## Which bases the list shows
+
+**A view, not a setting.** Each base is active or not, and the list shows every
+base or only the active ones (`library::BasesView`). Both live in `state.toml`
+and nothing outside `src/tui` reads them: discovery still reads every base, so
+switching never waits on a rescan, and the counter, moves, reconcile and the
+command line cannot be changed by a view. **The default base is always
+active** — new projects land there — and a base the configuration no longer
+names is forgotten; both are settled when the summary's `Bases` part lands.
+
+**A base is named by its configured spelling** (`BaseInfo::configured`,
+`LibraryState.inactive`), because an unmounted base has no real path to give;
+rows carry the real path, mapped back through `LibraryState.spelled`, learned
+from each base's rows as they land and from the summary, with plain path
+equality for rows handed in whole. **The view is in place before the first
+frame** (`apply_session`, every entry), so an inactive base's rows are never
+drawn and taken away.
+
+**A base somebody named beats the view**: "show only this base" (`f` in the
+panel, the old `b`; still `base_filter`) and `fastf recent --base`
+(`LibraryState::view_narrows`). **The view is not a filter**: Esc's ladder and
+`F` take off the base shown alone and never switch the view, which is a choice
+the next run starts on. **Nothing is out of view in silence**: `recompute`
+counts what the view left out of the query's matches (`beyond_view`), which
+the status line and the empty table name with `B`; and a project asked for by
+name — a palette jump, `select_when_found` after a create — is shown with its
+base alone (`show_its_base_alone`) rather than not found.
+
+**The panel holds only its cursor** (`Modal::Bases`); its rows are
+`Summary::bases_known()` each frame. Enter opens a base's menu
+(`Modal::BaseMenu`, carrying the base by its configured spelling), the action
+menu's renderer (`render_verb_menu`) over every `Search` verb declared on
+`BaseMenu`, each row titled with the change it would make
+(`bases::base_verb_title`). The verbs are declared over `BASE_VERBS`, so a key
+means one thing in the panel and the menu. Unticking a base while every base is
+shown switches to the active view, and ticking the last inactive one back shows
+every base, so the two views are never one list under two names. The panel
+draws its own key line with the way out third (`modals::bases::key_pairs`),
+since `key_line` cuts from the end; its sentences are `guide::BASE_NOTES`.
+
 ## Settings, the counter, maintenance, the first run
 
 `,` opens `Modal::Settings`: every setting on one screen, grouped, each value
@@ -1011,7 +1057,8 @@ a refusal is the command line's, word for word, and `app/settings.rs` knows
 nothing about what is legal. A yes/no or a two-way choice toggles in place;
 anything else edits **on its own line**, pre-filled, with the refusal under it and
 the text kept. The **library bases** are one `TextArea`, a folder per line, Ctrl-S
-to keep. The **ID counter** and the maintenance verbs (reindex, reconcile,
+to keep; a base's menu opens the screen on that row (`SettingsState::pending_at`).
+The **ID counter** and the maintenance verbs (reindex, reconcile,
 data locations) are rows too; the palette's "Reconcile now" is
 `CommandId::Reconcile`. `ActionOutcome::settings()` re-reads the screen after a
 write, so a normalised value shows as stored.

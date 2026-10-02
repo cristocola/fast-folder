@@ -485,3 +485,188 @@ fn the_panel_cursor_stays_on_a_base_that_is_still_there() {
     );
     assert_eq!(app.base_in_hand().map(|b| b.label.as_str()), Some("home"));
 }
+
+fn summary_of_home_only() -> Msg {
+    Msg::SummaryPart {
+        generation: 2,
+        part: Box::new(SummaryPart::Bases {
+            bases: vec![BaseInfo {
+                path: PathBuf::from(HOME),
+                configured: PathBuf::from(HOME),
+                label: "home".to_string(),
+                probe: Probe::Mounted,
+                indexed: Some(3),
+                is_default: true,
+            }],
+            projects: 3,
+            max_id: Some("ID0003".to_string()),
+            newest: None,
+        }),
+    }
+}
+
+/// The base removed from the settings the panel opened, which lie over it:
+/// the panel underneath is set right too, so it answers its keys when the
+/// settings close.
+#[test]
+fn a_base_removed_from_the_settings_over_the_panel_leaves_it_working() {
+    let mut app = two_bases();
+    press(&mut app, Key::ch('b'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    press(&mut app, Key::plain(KeyCode::End));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(app.modals.top(), Some(Modal::Settings(_))));
+    update(&mut app, summary_of_home_only());
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(matches!(app.modals.top(), Some(Modal::Bases(_))));
+    assert_eq!(app.base_in_hand().map(|b| b.label.as_str()), Some("home"));
+}
+
+/// **Nothing marked, nothing narrowed**: the base that was inactive is gone
+/// from the configuration, and the view goes back to every base rather than
+/// calling the whole library "the active bases".
+#[test]
+fn with_no_base_left_inactive_the_view_is_every_base() {
+    let mut app = archive_unticked();
+    assert_eq!(app.library.view, BasesView::Active);
+    update(&mut app, summary_of_home_only());
+    assert!(app.library.inactive.is_empty());
+    assert_eq!(app.library.view, BasesView::Every);
+    assert_eq!(
+        Session::capture(&app, &Session::default()).bases_view(),
+        BasesView::Every
+    );
+}
+
+/// A project asked for that something else leaves out too — here a template
+/// filter — is not found, and the list is put back as it was rather than left
+/// on a base nobody asked to see.
+#[test]
+fn a_project_still_left_out_leaves_the_list_as_it_was() {
+    let mut app = archive_unticked();
+    app.library.template_filter = Some("no-such-template".to_string());
+    let wanted = rows_in(ARCHIVE, 1, 10)[0].path.clone();
+    app.select_when_found = Some(wanted);
+    press(&mut app, Key::plain(KeyCode::F(5)));
+    let generation = app.library.inflight.expect("a discovery");
+    update(
+        &mut app,
+        Msg::DiscoveryPlanned {
+            generation,
+            bases: vec![PathBuf::from(HOME), PathBuf::from(ARCHIVE)],
+        },
+    );
+    update(
+        &mut app,
+        Msg::DiscoveredBase {
+            generation,
+            base: PathBuf::from(ARCHIVE),
+            projects: rows_in(ARCHIVE, 2, 10),
+        },
+    );
+    assert_eq!(app.library.base_filter, None);
+}
+
+/// **`fastf recent` is cut after the view, not before.** It hands the app
+/// every match and the limit; the newest projects here are in an inactive
+/// base, and the list still shows as many active ones as the limit allows —
+/// and Esc does not take a limit nobody typed off.
+#[test]
+fn fastf_recent_is_cut_to_its_limit_after_the_view() {
+    let mut rows = rows_in(ARCHIVE, 2, 10);
+    rows.extend(rows_in(HOME, 3, 1));
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Preset {
+                default_limit: Some(2),
+                ..Default::default()
+            },
+            initial: rows,
+        },
+        Theme::mono(),
+        (110, 30),
+    );
+    app.apply_session(&Session {
+        bases_view: Some("active".to_string()),
+        inactive_bases: vec![ARCHIVE.to_string()],
+        ..Session::default()
+    });
+    let _ = app.start();
+    assert_eq!(app.library.len(), 2, "{:?}", names(&app));
+    assert!(names(&app).iter().all(|name| name.starts_with("home_")));
+    let screen = render_to_string(&app, 110, 30);
+    assert!(
+        !screen.contains("recent:"),
+        "no chip for the default:\n{screen}"
+    );
+    let effects = press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::Quit(_))),
+        "Esc has no filter to take off: {effects:?}"
+    );
+}
+
+/// **A base reached through a link is matched before any summary**: the
+/// session keeps its real path beside its configured one, so rows handed in
+/// whole — carrying the real path — are never drawn and taken away.
+#[test]
+fn a_linked_base_is_matched_by_its_real_path_from_the_first_frame() {
+    const REAL: &str = "/mnt/projects/real_archive";
+    let session = Session {
+        bases_view: Some("active".to_string()),
+        inactive_bases: vec![ARCHIVE.to_string(), REAL.to_string()],
+        ..Session::default()
+    };
+    let mut rows = rows_in(REAL, 2, 10);
+    rows.extend(rows_in(HOME, 3, 1));
+    let mut app = App::new(
+        Entry::Search {
+            terms: Vec::new(),
+            initial: rows,
+        },
+        Theme::mono(),
+        (110, 30),
+    );
+    app.apply_session(&session);
+    let _ = app.start();
+    assert_eq!(app.library.len(), 3, "{:?}", names(&app));
+
+    // And the session written from a summary that knows the link keeps both.
+    let mut app = two_bases();
+    let mut summary = summary_of_two_bases();
+    if let SummaryPart::Bases { bases, .. } = summary.as_mut() {
+        bases[1].path = PathBuf::from(REAL);
+    }
+    update(
+        &mut app,
+        Msg::SummaryPart {
+            generation: 2,
+            part: summary,
+        },
+    );
+    press(&mut app, Key::ch('b'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    press(&mut app, Key::ch(' '));
+    let kept = Session::capture(&app, &Session::default()).inactive_bases;
+    assert_eq!(kept, vec![ARCHIVE.to_string(), REAL.to_string()]);
+    // Ticked again, both names go.
+    press(&mut app, Key::ch(' '));
+    assert!(app.library.inactive.is_empty());
+}
+
+/// **The way out survives the narrowest window**: at 40 columns the panel's
+/// key line keeps Space and Esc, and gives up the arrows first.
+#[test]
+fn the_panel_key_line_keeps_esc_at_forty_columns() {
+    let mut app = two_bases();
+    app.size = (40, 12);
+    press(&mut app, Key::ch('b'));
+    let screen = render_to_string(&app, 40, 12);
+    assert!(screen.contains("Esc close"), "{screen}");
+    let wide = render_to_string(&app, 110, 30);
+    assert!(
+        wide.contains("↑↓ choose"),
+        "the arrows where there is room:\n{wide}"
+    );
+}

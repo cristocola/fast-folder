@@ -571,6 +571,12 @@ impl LibraryState {
             .any(|marked| marked == base || Some(marked.as_path()) == spelled)
     }
 
+    /// The flags the app was opened with, if any narrowed the list: what the
+    /// chip names and Esc takes off.
+    pub fn preset_filter(&self) -> Option<&Preset> {
+        self.preset.as_ref().filter(|preset| !preset.is_empty())
+    }
+
     /// Whether the view is leaving rows out right now. **A base somebody
     /// named beats the view**: shown alone (`base_filter`), or named by
     /// `fastf recent --base`, an inactive base is what was asked for.
@@ -653,7 +659,11 @@ impl LibraryState {
 
         let sort = self.effective_sort(query);
         rows.sort_by(|a, b| self.compare(sort, a, b));
-        if let Some(limit) = self.preset.as_ref().and_then(|p| p.limit) {
+        if let Some(limit) = self
+            .preset
+            .as_ref()
+            .and_then(|preset| preset.limit.or(preset.default_limit))
+        {
             rows.truncate(limit);
         }
 

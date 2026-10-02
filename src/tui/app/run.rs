@@ -340,11 +340,20 @@ impl App {
             self.info("marks cleared");
             return Vec::new();
         }
-        if self.library.preset.is_some() {
+        if self.library.preset_filter().is_some() {
             // `fastf recent --tag draft` opened the app already
             // narrowed; the chip is a filter like any other, and Esc
-            // takes it off rather than leaving the app inside it.
-            self.library.preset = None;
+            // takes it off rather than leaving the app inside it. The
+            // configured limit is no flag, and stays.
+            self.library.preset = self
+                .library
+                .preset
+                .take()
+                .and_then(|preset| preset.default_limit)
+                .map(|limit| crate::tui::entry::Preset {
+                    default_limit: Some(limit),
+                    ..Default::default()
+                });
             self.recompute();
             self.info("showing every project");
             return self.after_rows_changed();

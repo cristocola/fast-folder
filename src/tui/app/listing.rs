@@ -81,7 +81,7 @@ impl App {
                 let markable: Vec<PathBuf> = bases
                     .iter()
                     .filter(|base| !base.is_default)
-                    .map(|base| base.configured.clone())
+                    .flat_map(|base| [base.configured.clone(), base.path.clone()])
                     .collect();
                 summary.bases = bases;
                 summary.projects = projects;
@@ -89,17 +89,25 @@ impl App {
                 summary.newest = newest;
                 summary.probing = false;
                 self.library.learn_spellings(spellings);
-                // The panel's rows are these bases: one removed under it
-                // leaves its cursor on the last that is left.
+                // The panel's rows are these bases: one removed under it —
+                // the settings it opened, over it, changed the list — leaves
+                // its cursor on the last that is left.
                 let count = summary.bases.len();
-                if let Some(Modal::Bases(panel)) = self.modals.top_mut() {
-                    panel.selected = panel.selected.min(count.saturating_sub(1));
+                for modal in self.modals.iter_mut() {
+                    if let Modal::Bases(panel) = modal {
+                        panel.selected = panel.selected.min(count.saturating_sub(1));
+                    }
                 }
                 let before = self.library.inactive.len();
                 self.library
                     .inactive
                     .retain(|marked| markable.contains(marked));
                 let unhid = self.library.inactive.len() != before;
+                // With nothing left inactive the two views are one list, and
+                // the one shown is the one that says nothing is left out.
+                if self.library.inactive.is_empty() {
+                    self.library.view = library::BasesView::Every;
+                }
                 if unhid || self.library.view_narrows() {
                     self.recompute();
                     return self.after_rows_changed();

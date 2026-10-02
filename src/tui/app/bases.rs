@@ -95,8 +95,11 @@ impl App {
             .is_some_and(|base| self.shown_alone(base))
     }
 
+    /// Marked by either of its names: the configured one is what a tick
+    /// writes, the real one what `state.toml` keeps beside it.
     pub fn base_is_active(&self, base: &BaseInfo) -> bool {
         !self.library.inactive.contains(&base.configured)
+            && !self.library.inactive.contains(&base.path)
     }
 
     /// Whether the list shows this base and no other.
@@ -113,11 +116,19 @@ impl App {
         }
     }
 
-    /// The inactive bases, for `state.toml`.
+    /// The inactive bases, for `state.toml`: as configured, and by their
+    /// real path too where the two differ (a base reached through a link), so
+    /// the next run can match rows handed in whole — `fastf recent` — before
+    /// any summary has said which path is which base.
     pub fn inactive_to_remember(&self) -> Vec<String> {
-        self.library
-            .inactive
-            .iter()
+        let mut out: std::collections::BTreeSet<PathBuf> = self.library.inactive.clone();
+        for base in self.known_bases().unwrap_or(&[]) {
+            if !self.base_is_active(base) {
+                out.insert(base.configured.clone());
+                out.insert(base.path.clone());
+            }
+        }
+        out.iter()
             .map(|base| base.to_string_lossy().into_owned())
             .collect()
     }
@@ -191,6 +202,7 @@ impl App {
             std::mem::replace(&mut self.library.view, BasesView::Active) == BasesView::Every
         } else {
             self.library.inactive.remove(&base.configured);
+            self.library.inactive.remove(&base.path);
             if !self.some_base_inactive() {
                 self.library.view = BasesView::Every;
             }
@@ -198,6 +210,12 @@ impl App {
         };
         let view_key = command::key_of(CommandId::ListBasesView);
         match (was_active, switched) {
+            // Shown alone, it stays on screen: a base named beats the view.
+            (true, _) if self.shown_alone(base) => self.info(format!(
+                "{} is inactive — shown alone until {} clears it",
+                base.label,
+                command::key_of(CommandId::ClearFilters)
+            )),
             (true, true) => self.info(format!(
                 "{} is inactive — the list shows the active bases now, {view_key} shows every base",
                 base.label
@@ -280,9 +298,14 @@ impl App {
         if !self.library.out_of_view(&project) {
             return false;
         }
-        self.library.base_filter = Some(project.base.clone());
+        let was = self.library.base_filter.replace(project.base.clone());
         self.recompute();
         if !self.library.select_path(path) {
+            // Something else — a template filter, a query — leaves it out
+            // too: the list is put back as it was, not left on a base nobody
+            // asked to see.
+            self.library.base_filter = was;
+            self.recompute();
             return false;
         }
         self.info(format!(

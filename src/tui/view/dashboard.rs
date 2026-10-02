@@ -253,7 +253,7 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
 
     let mut prefix = format!(" {} ", g.search);
-    if let Some(preset) = &app.library.preset {
+    if let Some(preset) = app.library.preset_filter() {
         // `fastf recent --tag draft`: the chip is a filter, and Esc takes it
         // off like any other.
         prefix.push_str(&format!("[{} {} Esc clears] ", preset.label(), g.sep));
@@ -473,7 +473,7 @@ pub fn status(app: &App, frame: &mut Frame, area: Rect) {
             // could.
             match (
                 app.library.template_filter.is_some(),
-                app.library.preset.is_some(),
+                app.library.preset_filter().is_some(),
                 app.search.input.is_empty(),
             ) {
                 (true, _, _) => format!(

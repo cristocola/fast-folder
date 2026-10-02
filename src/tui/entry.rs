@@ -12,9 +12,17 @@ pub struct Preset {
     /// A base, named by its label or its full path.
     pub base: Option<String>,
     pub limit: Option<usize>,
+    /// How many rows the list keeps when `--limit` was not given: the
+    /// configured default. **Cut in the app, after the bases' view**, never
+    /// before the rows are handed over, or an inactive base's newest projects
+    /// would take the places of active ones. Not a filter anybody typed, so
+    /// no chip names it and Esc does not take it off.
+    pub default_limit: Option<usize>,
 }
 
 impl Preset {
+    /// Whether no flag narrowed the list — the configured default limit is
+    /// not one.
     pub fn is_empty(&self) -> bool {
         self.template.is_none()
             && self.since.is_none()

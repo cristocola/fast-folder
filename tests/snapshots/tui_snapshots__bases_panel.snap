@@ -19,7 +19,7 @@ expression: frame
 "┌ ID0248 │   [x]   archive   3   /media/usb/archive                                       │────────┐"
 "│ 2026-08│                                                                                │        │"
 "│ music-v│ The default base: new projects go here, so it is always in the list.           │        │"
-"│ scannin│ ↑↓ choose   Space mark inactive   Enter menu   Esc close   B active only       │        │"
+"│ scannin│ ↑↓ choose   Space mark inactive   Esc close   Enter menu   B active only       │        │"
 "│ ── tags└────────────────────────────────────────────────────────────────────────────────┘─────── │"
 "│ ● draft                                                                                          │"
 "│ · add a tag                                                                                      │"

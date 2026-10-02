@@ -1022,9 +1022,15 @@ names is forgotten; both are settled when the summary's `Bases` part lands.
 `LibraryState.inactive`), because an unmounted base has no real path to give;
 rows carry the real path, mapped back through `LibraryState.spelled`, learned
 from each base's rows as they land and from the summary, with plain path
-equality for rows handed in whole. **The view is in place before the first
-frame** (`apply_session`, every entry), so an inactive base's rows are never
-drawn and taken away.
+equality for rows handed in whole. `state.toml` keeps an inactive base **by
+both names** where they differ (`App::inactive_to_remember`), so rows handed in
+whole by `fastf recent` match before any summary has said which path is which.
+**The view is in place before the first frame** (`apply_session`, every
+entry), so an inactive base's rows are never drawn and taken away. `fastf
+recent` hands over every match and its limit (`Preset::default_limit`, no chip
+and no Esc rung), and `recompute` cuts the list after the view — cut before,
+an inactive base's newest projects would take the places of active ones. With
+nothing left inactive, the view goes back to every base.
 
 **A base somebody named beats the view**: "show only this base" (`f` in the
 panel, the old `b`; still `base_filter`) and `fastf recent --base`
@@ -1045,8 +1051,9 @@ menu's renderer (`render_verb_menu`) over every `Search` verb declared on
 means one thing in the panel and the menu. Unticking a base while every base is
 shown switches to the active view, and ticking the last inactive one back shows
 every base, so the two views are never one list under two names. The panel
-draws its own key line with the way out third (`modals::bases::key_pairs`),
-since `key_line` cuts from the end; its sentences are `guide::BASE_NOTES`.
+draws its own key line (`modals::bases::key_pairs`), since `key_line` cuts
+from the end: Space, then the way out, then Enter, the arrows in front only
+where those three still fit. Its sentences are `guide::BASE_NOTES`.
 
 ## Settings, the counter, maintenance, the first run
 

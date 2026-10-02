@@ -439,6 +439,12 @@ impl ModalStack {
         self.0.last_mut()
     }
 
+    /// Every dialog, the top last — for a fact that changed under one that
+    /// is covered (the settings over the bases panel).
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Modal> {
+        self.0.iter_mut()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

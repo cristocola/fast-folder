@@ -198,7 +198,7 @@ fn project_candidates(
                     "go to · {} · {}{}",
                     p.template,
                     p.created.get(..10).unwrap_or(&p.created),
-                    if library.out_of_view(p) {
+                    if library.is_inactive(&p.base) {
                         " · inactive base"
                     } else {
                         ""

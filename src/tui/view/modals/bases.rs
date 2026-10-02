@@ -114,7 +114,7 @@ pub(super) fn render_bases(app: &App, panel: &BasesPanel, frame: &mut Frame, are
         &fit(&format!(" {sentence}"), footer.width as usize, g.ellipsis),
         theme.dim(),
     );
-    let pairs = key_pairs(app);
+    let pairs = key_pairs(app, keys.width as usize);
     frame.render_widget(
         Paragraph::new(key_line(theme, &pairs, keys.width as usize)),
         keys,
@@ -132,37 +132,47 @@ fn sentences(app: &App) -> [String; 4] {
     ]
 }
 
-/// **The panel's keys, the way out among the first.** A key line is cut at
-/// whole pairs from its end, and the registry's order would put Esc after
-/// every verb; here Space and Enter lead — Enter's menu lists the rest, each
-/// with its key — then Esc, then what the menu also offers. Labels and words
-/// are the registry's.
-fn key_pairs(app: &App) -> Vec<(String, String)> {
+/// **The panel's keys, the way out second.** A key line is cut at whole pairs
+/// from its end, and the registry's order would put Esc after every verb: here
+/// Space leads, then Esc, then Enter — whose menu lists every verb with its
+/// key — then the rest. The arrows go first only where the three after them
+/// still fit, since a list with a cursor already says how to move. Labels and
+/// words are the registry's.
+fn key_pairs(app: &App, width: usize) -> Vec<(String, String)> {
     const ORDER: [CommandId; 6] = [
         CommandId::BaseToggleActive,
-        CommandId::BasesOpenMenu,
         CommandId::Close,
+        CommandId::BasesOpenMenu,
         CommandId::BasesView,
         CommandId::BaseShowOnly,
         CommandId::Help,
     ];
     let g = &app.theme.glyphs;
-    let mut pairs: Vec<(String, String)> = command::movement_pair(Context::Bases, g)
-        .map(|(keys, what)| (keys, what.to_string()))
-        .into_iter()
-        .collect();
-    for id in ORDER {
-        let found = command::find(id);
-        if (found.available)(app) == Availability::Hidden {
-            continue;
-        }
-        if let Some(key) = command::keys_in(Context::Bases, found).first() {
-            pairs.push((
+    let verbs: Vec<(String, String)> = ORDER
+        .iter()
+        .filter_map(|&id| {
+            let found = command::find(id);
+            if (found.available)(app) == Availability::Hidden {
+                return None;
+            }
+            let key = command::keys_in(Context::Bases, found).first().copied()?;
+            Some((
                 key.label_in(g),
                 command::hint_title(id, found.title, app).to_string(),
-            ));
-        }
+            ))
+        })
+        .collect();
+    // What `key_line` spends on a pair: a space each side of the key, two
+    // after the words.
+    let cost = |(key, what): &(String, String)| key.width() + what.width() + 4;
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    if let Some(movement) =
+        command::movement_pair(Context::Bases, g).map(|(keys, what)| (keys, what.to_string()))
+        && cost(&movement) + verbs.iter().take(3).map(cost).sum::<usize>() <= width
+    {
+        pairs.push(movement);
     }
+    pairs.extend(verbs);
     pairs
 }
 

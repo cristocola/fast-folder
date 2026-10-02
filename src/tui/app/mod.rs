@@ -417,7 +417,7 @@ impl App {
         match entry {
             Entry::Menu => {}
             Entry::Recent { preset, initial } => {
-                if !preset.is_empty() {
+                if !preset.is_empty() || preset.default_limit.is_some() {
                     app.library.preset = Some(preset);
                 }
                 app.library.install_initial(initial);

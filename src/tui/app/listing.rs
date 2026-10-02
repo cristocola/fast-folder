@@ -89,6 +89,12 @@ impl App {
                 summary.newest = newest;
                 summary.probing = false;
                 self.library.learn_spellings(spellings);
+                // The panel's rows are these bases: one removed under it
+                // leaves its cursor on the last that is left.
+                let count = summary.bases.len();
+                if let Some(Modal::Bases(panel)) = self.modals.top_mut() {
+                    panel.selected = panel.selected.min(count.saturating_sub(1));
+                }
                 let before = self.library.inactive.len();
                 self.library
                     .inactive

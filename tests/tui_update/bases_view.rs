@@ -451,3 +451,37 @@ fn the_header_says_which_bases_are_active() {
     assert!(header[1].contains("archive 2"), "{header:?}");
     assert!(!header[1].contains("inactive"), "{header:?}");
 }
+
+/// A base removed while the panel is open — the summary read again after the
+/// settings changed the list — leaves the cursor on a base that is there.
+#[test]
+fn the_panel_cursor_stays_on_a_base_that_is_still_there() {
+    let mut app = two_bases();
+    press(&mut app, Key::ch('b'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    assert_eq!(
+        app.base_in_hand().map(|b| b.label.as_str()),
+        Some("archive")
+    );
+    let only_home = BaseInfo {
+        path: PathBuf::from(HOME),
+        configured: PathBuf::from(HOME),
+        label: "home".to_string(),
+        probe: Probe::Mounted,
+        indexed: Some(3),
+        is_default: true,
+    };
+    update(
+        &mut app,
+        Msg::SummaryPart {
+            generation: 2,
+            part: Box::new(SummaryPart::Bases {
+                bases: vec![only_home],
+                projects: 3,
+                max_id: Some("ID0003".to_string()),
+                newest: None,
+            }),
+        },
+    );
+    assert_eq!(app.base_in_hand().map(|b| b.label.as_str()), Some("home"));
+}

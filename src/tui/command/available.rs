@@ -234,19 +234,50 @@ pub(super) fn has_row_filter(app: &App) -> Availability {
     }
 }
 
-/// A base filter is worth offering only where there is more than one base to
-/// choose between — with one, every row answers it already.
-pub(super) fn many_bases(app: &App) -> Availability {
-    match app
-        .summary
-        .as_ref()
-        .and_then(crate::tui::app::data::Summary::bases_known)
-    {
-        Some(bases) if bases.len() > 1 => Availability::Enabled,
-        Some(_) => Availability::Hidden,
+/// The bases panel opens once the bases are known — with one base too, since
+/// it is also the way to the list of bases.
+pub(super) fn bases_known(app: &App) -> Availability {
+    match app.known_bases() {
+        Some(_) => Availability::Enabled,
         // The summary is still being read; the key is bound, and pressing it
         // before the bases are known says so rather than doing nothing.
         None => Availability::Disabled("still reading the bases"),
+    }
+}
+
+/// `B`: with one base there is no view to switch; with none inactive, the
+/// active view would be the same list under another name — except that a
+/// view already on may always be switched back.
+pub(super) fn can_switch_bases_view(app: &App) -> Availability {
+    use crate::tui::app::library::BasesView;
+    match app.known_bases() {
+        Some(bases) if bases.len() < 2 => Availability::Hidden,
+        _ if app.library.view == BasesView::Active || app.some_base_inactive() => {
+            Availability::Enabled
+        }
+        Some(_) => Availability::Disabled("every base is active — untick one in the bases panel"),
+        None => Availability::Disabled("still reading the bases"),
+    }
+}
+
+/// A verb about the base in hand: the panel's cursor, or the menu's own.
+pub(super) fn base_in_hand(app: &App) -> Availability {
+    if app.base_in_hand().is_some() {
+        Availability::Enabled
+    } else {
+        Availability::Hidden
+    }
+}
+
+/// The default base cannot be unticked: new projects land there, and one the
+/// list leaves out would hide every project made from now on.
+pub(super) fn base_can_toggle(app: &App) -> Availability {
+    match app.base_in_hand() {
+        Some(base) if base.is_default => {
+            Availability::Disabled("the default base stays active — new projects go there")
+        }
+        Some(_) => Availability::Enabled,
+        None => Availability::Hidden,
     }
 }
 

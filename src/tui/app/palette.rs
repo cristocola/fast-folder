@@ -192,10 +192,17 @@ fn project_candidates(
             entry: PaletteEntry {
                 target: PaletteTarget::Project(p.path.clone()),
                 title: format!("{}  {}", p.id, p.name),
+                // A project the view leaves out is still found here, by
+                // name; going to it shows its base alone.
                 detail: format!(
-                    "go to · {} · {}",
+                    "go to · {} · {}{}",
                     p.template,
-                    p.created.get(..10).unwrap_or(&p.created)
+                    p.created.get(..10).unwrap_or(&p.created),
+                    if library.is_inactive(&p.base) {
+                        " · inactive base"
+                    } else {
+                        ""
+                    }
                 ),
                 key: String::new(),
                 enabled: true,
@@ -314,7 +321,9 @@ impl App {
                     self.library.base_filter = None;
                     self.library.preset = None;
                     self.recompute();
-                    self.library.select_path(&path);
+                    if !self.library.select_path(&path) {
+                        self.show_its_base_alone(&path);
+                    }
                 }
                 self.after_selection_change()
             }

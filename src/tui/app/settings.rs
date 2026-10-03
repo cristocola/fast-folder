@@ -147,6 +147,9 @@ pub struct SettingsState {
     pub filter: LineEdit,
     /// A worker is reading the settings back.
     pub pending: bool,
+    /// The row the first read puts the cursor on, by its configuration key —
+    /// the screen opened to change one thing (`pending_at`).
+    land_on: Option<&'static str>,
 }
 
 impl SettingsState {
@@ -161,6 +164,7 @@ impl SettingsState {
             editing: None,
             filter: LineEdit::default(),
             pending: false,
+            land_on: None,
         }
     }
 
@@ -175,6 +179,16 @@ impl SettingsState {
             editing: None,
             filter: LineEdit::default(),
             pending: true,
+            land_on: None,
+        }
+    }
+
+    /// The screen before its first read, opened to change the row whose
+    /// configuration key is `key`: the cursor lands there when the rows do.
+    pub fn pending_at(key: &'static str) -> Self {
+        Self {
+            land_on: Some(key),
+            ..Self::pending()
         }
     }
 
@@ -234,7 +248,13 @@ impl SettingsState {
         let keep = self.selected;
         self.settings = settings;
         self.rows = rows(&self.settings);
-        self.selected = if first {
+        let landing = self
+            .land_on
+            .take()
+            .and_then(|key| self.rows.iter().position(|row| row.kind.key() == Some(key)));
+        self.selected = if let Some(row) = landing {
+            row
+        } else if first {
             self.rows.iter().position(Row::selectable).unwrap_or(0)
         } else {
             keep.min(self.rows.len().saturating_sub(1))

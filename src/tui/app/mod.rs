@@ -14,6 +14,7 @@
 pub mod actions;
 pub mod attention;
 pub mod background;
+pub mod bases;
 pub mod data;
 pub mod jobs;
 pub mod library;
@@ -416,7 +417,7 @@ impl App {
         match entry {
             Entry::Menu => {}
             Entry::Recent { preset, initial } => {
-                if !preset.is_empty() {
+                if !preset.is_empty() || preset.default_limit.is_some() {
                     app.library.preset = Some(preset);
                 }
                 app.library.install_initial(initial);
@@ -431,10 +432,11 @@ impl App {
         app
     }
 
-    /// Start where the last run left off: the sort order, the pane, the row.
-    /// `fastf recent`/`search` keep their own order and rows and take only
-    /// the pane's state. Called before `start`, so the first frame is already
-    /// the remembered one.
+    /// Start where the last run left off: the sort order, the pane, the row,
+    /// the bases' view. `fastf recent`/`search` keep their own order and rows
+    /// and take the pane's state and the view. Called before `start`, so the
+    /// first frame is already the remembered one — and no row of a base out of
+    /// view is ever drawn and then taken away.
     pub fn apply_session(&mut self, session: &crate::tui::session::Session) {
         if let Some(open) = session.detail_open {
             self.detail_open = open;
@@ -443,7 +445,15 @@ impl App {
             self.explain_open = open;
         }
         self.guide_seen = session.guide_seen.unwrap_or(false);
+        self.library.view = session.bases_view();
+        self.library.inactive = session
+            .inactive_bases
+            .iter()
+            .filter(|base| !base.trim().is_empty())
+            .map(PathBuf::from)
+            .collect();
         if !self.is_menu {
+            self.recompute();
             return;
         }
         if let Some(order) = session.sort_order() {

@@ -329,7 +329,7 @@ one library.
 Adding that folder as a base afterwards is the supported case, and it lists
 both rows. Discovery is a union over the bases and does not dedupe, which is
 what makes that work: the BASE column tells them apart, `s` sorts by base, and
-`b` filters to one. A query that matches both is reported as ambiguous, naming
+the bases panel (`b`) shows either one alone. A query that matches both is reported as ambiguous, naming
 the bases rather than telling you to be more specific about an ID that is
 already exact.
 

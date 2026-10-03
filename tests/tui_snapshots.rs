@@ -147,6 +147,86 @@ fn narrow_keeps_the_folder_name() {
     assert!(!frame.contains("TAGS"), "tags are the first column to go");
 }
 
+// --- the bases panel -------------------------------------------------------
+
+/// The fixture's library over both of its bases — every fourth project in
+/// the archive, which is mounted here.
+fn two_bases(width: u16, height: u16) -> App {
+    use fastf::util::paths::Probe;
+    let archive = std::path::PathBuf::from("/media/usb/archive");
+    let mut projects = sample_projects(12);
+    for project in projects.iter_mut().skip(1).step_by(4) {
+        project.base = archive.clone();
+        project.path = archive.join(&project.name);
+    }
+    let mut app = App::new(
+        Entry::Recent {
+            preset: Default::default(),
+            initial: projects,
+        },
+        Theme::mono(),
+        (width, height),
+    );
+    app.is_menu = true;
+    app.clock = || "10:00:00".to_string();
+    app.guide_seen = true;
+    let _ = app.start();
+    let mut summary = sample_summary(12);
+    summary.bases[0].indexed = Some(9);
+    summary.bases[1].probe = Probe::Mounted;
+    summary.bases[1].indexed = Some(3);
+    let _ = update(&mut app, Msg::Summary(Box::new(summary)));
+    app
+}
+
+#[test]
+fn bases_panel_open() {
+    let mut app = two_bases(100, 30);
+    press_key(&mut app, Key::ch('b'));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("showing every base"), "{frame}");
+    snap("bases_panel", frame);
+}
+
+/// The archive unticked: the panel says what is left out, and the list behind
+/// it has already lost the archive's rows.
+#[test]
+fn bases_panel_with_a_base_unticked() {
+    let mut app = two_bases(100, 30);
+    press_key(&mut app, Key::ch('b'));
+    press_key(&mut app, Key::plain(KeyCode::Down));
+    press_key(&mut app, Key::ch(' '));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("1 inactive left out"), "{frame}");
+    snap("bases_panel_unticked", frame);
+}
+
+#[test]
+fn base_menu_open() {
+    let mut app = two_bases(100, 30);
+    press_key(&mut app, Key::ch('b'));
+    press_key(&mut app, Key::plain(KeyCode::Down));
+    press_key(&mut app, Key::plain(KeyCode::Enter));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("archive · actions"), "{frame}");
+    snap("base_menu", frame);
+}
+
+/// The list showing the active bases: the header names them and counts the
+/// rest, and the search bar says which view it is counting.
+#[test]
+fn the_active_bases_80x24() {
+    let mut app = two_bases(80, 24);
+    press_key(&mut app, Key::ch('b'));
+    press_key(&mut app, Key::plain(KeyCode::Down));
+    press_key(&mut app, Key::ch(' '));
+    press_key(&mut app, Key::plain(KeyCode::Esc));
+    app.status = Default::default();
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("1 inactive"), "{frame}");
+    snap("active_bases_80x24", frame);
+}
+
 // --- single-project actions ----------------------------------------------
 
 #[test]
@@ -1683,6 +1763,25 @@ fn every_state_draws_at_every_size() {
         ("actions", || {
             let mut app = fixture(12, 120, 40);
             press_key(&mut app, Key::ch('a'));
+            app
+        }),
+        ("the bases panel", || {
+            let mut app = two_bases(120, 40);
+            press_key(&mut app, Key::ch('b'));
+            app
+        }),
+        ("a base's menu", || {
+            let mut app = two_bases(120, 40);
+            press_key(&mut app, Key::ch('b'));
+            press_key(&mut app, Key::plain(KeyCode::Enter));
+            app
+        }),
+        ("the active bases", || {
+            let mut app = two_bases(120, 40);
+            press_key(&mut app, Key::ch('b'));
+            press_key(&mut app, Key::plain(KeyCode::Down));
+            press_key(&mut app, Key::ch(' '));
+            press_key(&mut app, Key::plain(KeyCode::Esc));
             app
         }),
         ("palette", || {

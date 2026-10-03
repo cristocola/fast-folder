@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 14] = Context::ALL;
+const CONTEXTS: [Context; 16] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {

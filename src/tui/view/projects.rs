@@ -368,6 +368,11 @@ fn empty_sentence(app: &App, frame: &mut Frame, full_inner: Rect) {
             crate::tui::command::key_of(crate::tui::command::CommandId::NewProject),
             crate::tui::command::key_of(crate::tui::command::CommandId::Register)
         )
+    } else if app.library.beyond_view > 0 {
+        format!(
+            "nothing in the active bases — {} shows every base",
+            crate::tui::command::key_of(crate::tui::command::CommandId::ListBasesView)
+        )
     } else {
         "nothing matches".to_string()
     };

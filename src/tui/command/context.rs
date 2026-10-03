@@ -14,6 +14,10 @@ pub enum Context {
     Templates,
     /// The selected project's action menu is open.
     Actions,
+    /// The bases panel: which bases the list shows.
+    Bases,
+    /// One base's menu, its verbs listed with their keys.
+    BaseMenu,
     /// The template builder, on its section list or on the variables or
     /// files list — never while a form or a text area has the keys.
     Builder,
@@ -47,6 +51,8 @@ impl Context {
             Context::Detail => "detail pane",
             Context::Templates => "templates tab",
             Context::Actions => "project actions",
+            Context::Bases => "bases",
+            Context::BaseMenu => "a base's actions",
             Context::Builder => "template builder",
             Context::Settings => "settings",
             Context::SearchEdit => "search bar",
@@ -85,6 +91,8 @@ impl Context {
             self,
             Context::SearchEdit
                 | Context::Actions
+                | Context::Bases
+                | Context::BaseMenu
                 | Context::Builder
                 | Context::Settings
                 | Context::Palette
@@ -96,12 +104,14 @@ impl Context {
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 14] = [
+    pub const ALL: [Context; 16] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
         Context::Templates,
         Context::Actions,
+        Context::Bases,
+        Context::BaseMenu,
         Context::Builder,
         Context::Settings,
         Context::SearchEdit,

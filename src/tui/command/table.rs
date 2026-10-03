@@ -25,6 +25,8 @@ const SCROLLERS: &[Context] = &[
     Context::Detail,
     Context::Templates,
     Context::Actions,
+    Context::Bases,
+    Context::BaseMenu,
     Context::Builder,
     Context::Settings,
     Context::Guide,
@@ -38,6 +40,8 @@ const SCROLLERS: &[Context] = &[
 /// Every dialog that closes with Esc — the guide included.
 const DIALOGS: &[Context] = &[
     Context::Actions,
+    Context::Bases,
+    Context::BaseMenu,
     Context::Builder,
     Context::Settings,
     Context::Guide,
@@ -63,6 +67,8 @@ const OPENS_PALETTE: &[Context] = &[
     Context::Detail,
     Context::Templates,
     Context::Actions,
+    Context::Bases,
+    Context::BaseMenu,
     Context::Builder,
     Context::Settings,
     Context::SearchEdit,
@@ -72,6 +78,11 @@ const OPENS_PALETTE: &[Context] = &[
     Context::Modal,
 ];
 
+/// A verb about one base: in the panel, on the base under its cursor, and in
+/// that base's menu — the way `ACTIONS` puts a project's verbs on the list
+/// and in its menu, so one key means one thing in both.
+const BASE_VERBS: &[Context] = &[Context::Bases, Context::BaseMenu];
+const IN_BASES: &[Context] = &[Context::Bases];
 const BUILDER: &[Context] = &[Context::Builder];
 /// The key that opens the guide answers wherever templates are the subject:
 /// the tab and the editor. Deliberately not `Global` — the guide is about one
@@ -304,7 +315,7 @@ pub static COMMANDS: &[Command] = &[
         ActionsRun,
         "Run the highlighted action",
         "the verb under the cursor — or press its own key",
-        &[Context::Actions],
+        &[Context::Actions, Context::BaseMenu],
         [Key::plain(KeyCode::Enter)],
         Navigate,
         palette = false,
@@ -523,15 +534,26 @@ pub static COMMANDS: &[Command] = &[
         has_any_tags
     ),
     cmd!(
-        FilterBase,
-        "Filter by base",
-        "show only the projects in one base",
+        Bases,
+        "Bases",
+        "which bases the list shows — mark each active or not, show every base or the active ones, or one alone",
         LISTS,
         [Key::ch('b')],
         Search,
         palette = true,
         hint = false,
-        many_bases
+        bases_known
+    ),
+    cmd!(
+        ListBasesView,
+        "Every base or the active ones",
+        "switch the list between every base and only the bases marked active — remembered between runs",
+        LISTS,
+        [Key::ch('B')],
+        Search,
+        palette = true,
+        hint = false,
+        can_switch_bases_view
     ),
     cmd!(
         ClearFilters,
@@ -543,6 +565,64 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         has_row_filter
+    ),
+    // --- the bases panel and a base's menu ---------------------------------
+    // In the order a base's menu lists them: the menu is every `Search` verb
+    // declared over `BaseMenu`.
+    cmd!(
+        BaseToggleActive,
+        "Mark active or inactive",
+        "tick or untick this base — the active view leaves the unticked ones out of the list",
+        BASE_VERBS,
+        [Key::ch(' ')],
+        Search,
+        palette = false,
+        hint = true,
+        base_can_toggle
+    ),
+    cmd!(
+        BasesOpenMenu,
+        "This base's actions",
+        "everything there is to do with the base under the cursor, each with its key",
+        IN_BASES,
+        [Key::plain(KeyCode::Enter)],
+        Navigate,
+        palette = false,
+        hint = true,
+        base_in_hand
+    ),
+    cmd!(
+        BaseShowOnly,
+        "Show only this base",
+        "the list shows this base alone, active or not — once more, every base in view again",
+        BASE_VERBS,
+        [Key::ch('f')],
+        Search,
+        palette = false,
+        hint = true,
+        base_in_hand
+    ),
+    cmd!(
+        BasesView,
+        "Every base or the active ones",
+        "switch the list between every base and only the bases marked active — remembered between runs",
+        BASE_VERBS,
+        [Key::ch('B')],
+        Search,
+        palette = false,
+        hint = true,
+        can_switch_bases_view
+    ),
+    cmd!(
+        BasesEditList,
+        "Add or remove bases",
+        "the list of bases in the settings, one folder per line",
+        BASE_VERBS,
+        [],
+        Search,
+        palette = true,
+        hint = false,
+        not_busy
     ),
     // --- the selected project --------------------------------------------
     cmd!(

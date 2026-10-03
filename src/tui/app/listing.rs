@@ -11,7 +11,7 @@ impl App {
         // A create or a register asked for its new project to be selected;
         // it exists only once discovery has seen it.
         if let Some(path) = self.select_when_found.clone()
-            && self.library.select_path(&path)
+            && (self.library.select_path(&path) || self.show_its_base_alone(&path))
         {
             self.select_when_found = None;
         }
@@ -69,11 +69,49 @@ impl App {
                 max_id,
                 newest,
             } => {
+                let spellings: Vec<(PathBuf, PathBuf)> = bases
+                    .iter()
+                    .map(|base| (base.path.clone(), base.configured.clone()))
+                    .collect();
+                // What may stay marked inactive: a base still configured, and
+                // never the default — new projects land there, and one marked
+                // before it became the default would hide every project made
+                // from now on. A base dropped from the configuration is
+                // forgotten, and comes back active if it is added again.
+                let markable: Vec<PathBuf> = bases
+                    .iter()
+                    .filter(|base| !base.is_default)
+                    .flat_map(|base| [base.configured.clone(), base.path.clone()])
+                    .collect();
                 summary.bases = bases;
                 summary.projects = projects;
                 summary.max_id = max_id;
                 summary.newest = newest;
                 summary.probing = false;
+                self.library.learn_spellings(spellings);
+                // The panel's rows are these bases: one removed under it —
+                // the settings it opened, over it, changed the list — leaves
+                // its cursor on the last that is left.
+                let count = summary.bases.len();
+                for modal in self.modals.iter_mut() {
+                    if let Modal::Bases(panel) = modal {
+                        panel.selected = panel.selected.min(count.saturating_sub(1));
+                    }
+                }
+                let before = self.library.inactive.len();
+                self.library
+                    .inactive
+                    .retain(|marked| markable.contains(marked));
+                let unhid = self.library.inactive.len() != before;
+                // With nothing left inactive the two views are one list, and
+                // the one shown is the one that says nothing is left out.
+                if self.library.inactive.is_empty() {
+                    self.library.view = library::BasesView::Every;
+                }
+                if unhid || self.library.view_narrows() {
+                    self.recompute();
+                    return self.after_rows_changed();
+                }
                 Vec::new()
             }
             SummaryPart::Attention(attention) => {

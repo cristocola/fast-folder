@@ -135,6 +135,9 @@ struct Runtime {
     /// The bases a discovery's worker is still reading, as configured: a
     /// reload starts no second worker on a base the first still waits on.
     discovering: Discovering,
+    /// What the last run left in `state.toml`, which this run's capture
+    /// starts from (`Session::capture`).
+    remembered: Session,
 }
 
 impl Runtime {
@@ -176,6 +179,7 @@ impl Runtime {
             reading_jobs: Arc::new(AtomicBool::new(false)),
             summaries: 0,
             discovering: Arc::default(),
+            remembered: Session::default(),
         })
     }
 
@@ -205,14 +209,14 @@ impl Runtime {
         // Read before the first frame: a note about a file that could not be
         // read goes through the sink into the channel and lands as a status
         // line, like any other.
-        let remembered = Session::load();
+        self.remembered = Session::load();
         let mut app = App::new(entry, theme, self.size());
         app.motion = motion;
         app.data_dir = Some(crate::util::paths::display_path(
             &crate::util::paths::install_dir(),
         ));
         app.has_display = tty::has_display();
-        app.apply_session(&remembered);
+        app.apply_session(&self.remembered);
 
         if let Some(suggested) = onboarding {
             app.request_onboarding(suggested);
@@ -220,7 +224,7 @@ impl Runtime {
         let mut effects = app.start();
         loop {
             if let Some(exit) = self.perform(&mut app, std::mem::take(&mut effects))? {
-                return Ok((exit, Session::capture(&app, &remembered)));
+                return Ok((exit, Session::capture(&app, &self.remembered)));
             }
             // A painted canvas is also the colour a clear erases to: a resize
             // clears the screen before the frame that follows, and on the
@@ -574,6 +578,15 @@ impl Runtime {
                     }
                 }
                 Effect::MarkSeen(id) => crate::core::jobs::mark_seen(&id),
+                // **On this thread, in order**: one small file in the data
+                // dir, and a save on a worker could land after a later one —
+                // or after the save on the way out — and put an older choice
+                // back.
+                Effect::SaveSession => {
+                    if let Err(err) = Session::capture(app, &self.remembered).save() {
+                        diag::warn(format!("the session state was not saved: {err:#}"));
+                    }
+                }
                 Effect::LoadJobLog { request, id, title } => self.load_job_log(request, id, title),
                 Effect::Suspend(Suspended::Note(project)) => {
                     let resumed = self.run_note_editor(project)?;

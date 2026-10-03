@@ -159,7 +159,7 @@ tell you.
   for the pane `pane_edit` / `pane_add` / `pane_cursor`, and for the templates
   tab and its builder `templates_tab` / `builder`; and a module per
   flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
-  `settings`, `palette`, `pane`, `modal`, `data`), `view/` (renderers only, `&App`
+  `settings`, `palette`, `pane`, `modal`, `data`, `bases`), `view/` (renderers only, `&App`
   in; `modals/` is every dialog, by what it is for), `command/` (**the one registry** every key, palette entry, help line,
   key line and hint comes from: `table` declares, `read` and `help` read),
   `guide.rs` (**the one place** an explanation is

@@ -61,32 +61,36 @@ pub fn run(args: RecentArgs) -> Result<()> {
         return Ok(());
     }
 
-    let filtered = filter_projects(
+    let matching = filter_projects(
         &projects,
         &args.template,
         &args.since,
         &args.tag,
         &args.base,
-        limit,
+        usize::MAX,
     );
 
-    if filtered.is_empty() {
+    if matching.is_empty() {
         println!("{}", "No projects match those filters.".dimmed());
         return Ok(());
     }
+    let shown = &matching[..limit.min(matching.len())];
 
     // Two questions, both of which must say yes: stdout decides the *format*
     // (a pipe gets the plain list), and stderr decides whether the picker can
     // be drawn and answered at all. Without the second, `2>/dev/null` would
     // launch a picker nobody can see and wait for a key.
     if args.json {
-        return crate::cli::json::print_projects(&filtered);
+        return crate::cli::json::print_projects(shown);
     }
 
     let interactive =
         !args.plain && std::io::stdout().is_terminal() && crate::util::tty::prompt_available();
 
     if interactive {
+        // Every match, and the app cuts the list to the limit itself — after
+        // the bases' view, which only it knows, so an inactive base's newest
+        // projects never take the places of active ones.
         crate::tui::run(crate::tui::Entry::Recent {
             preset: crate::tui::Preset {
                 template: args.template.clone(),
@@ -94,11 +98,12 @@ pub fn run(args: RecentArgs) -> Result<()> {
                 tag: args.tag.clone(),
                 base: args.base.clone(),
                 limit: args.limit,
+                default_limit: Some(limit),
             },
-            initial: filtered.into_iter().cloned().collect(),
+            initial: matching.into_iter().cloned().collect(),
         })
     } else {
-        print_plain(&filtered);
+        print_plain(shown);
         Ok(())
     }
 }

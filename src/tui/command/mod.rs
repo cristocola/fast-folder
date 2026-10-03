@@ -143,9 +143,20 @@ pub enum CommandId {
     SortCycle,
     SortPick,
     FilterTemplate,
-    FilterBase,
+    /// `b`: the bases panel.
+    Bases,
+    /// `B` on the list: every base, or only the active ones.
+    ListBasesView,
     FilterTag,
     ClearFilters,
+    // The bases panel and a base's menu
+    BaseToggleActive,
+    BaseShowOnly,
+    BasesOpenMenu,
+    /// `B` in the panel and a base's menu: a hint there, where the list's bar
+    /// has no room for it.
+    BasesView,
+    BasesEditList,
     // The selected project
     Actions,
     OpenFolder,
@@ -224,7 +235,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 107] = [
+    pub const ALL: [CommandId; 113] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -273,9 +284,15 @@ impl CommandId {
         CommandId::SortCycle,
         CommandId::SortPick,
         CommandId::FilterTemplate,
-        CommandId::FilterBase,
+        CommandId::Bases,
+        CommandId::ListBasesView,
         CommandId::FilterTag,
         CommandId::ClearFilters,
+        CommandId::BaseToggleActive,
+        CommandId::BaseShowOnly,
+        CommandId::BasesOpenMenu,
+        CommandId::BasesView,
+        CommandId::BasesEditList,
         CommandId::Actions,
         CommandId::OpenFolder,
         CommandId::OpenTerminal,

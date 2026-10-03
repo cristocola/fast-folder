@@ -9,7 +9,11 @@ use crate::util::paths::Probe;
 /// One configured base, as the header shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BaseInfo {
+    /// Its real path, as its rows carry it — canonical once it has answered.
     pub path: PathBuf,
+    /// The base as the configuration spells it: the name the bases' view
+    /// keeps, since an unmounted base has no real path to give.
+    pub configured: PathBuf,
     pub label: String,
     pub probe: Probe,
     /// Projects according to the base's own index; `None` when it has none yet.

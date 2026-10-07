@@ -95,7 +95,8 @@ counts.
 in it; ↑/↓ walk the rows Enter can act on, and nothing changes until you press
 Enter on one. Enter on the **name** is the rename; on the **description** the
 line opens in place — change it and Enter, or empty it and Enter to remove
-it; on a **tag** the tag opens
+it, and `d` (or **Describe the project** in the palette and the action menu)
+opens it from anywhere; on a **tag** the tag opens
 on its own line — change it and Enter, or empty it and Enter to remove it; on a
 **variable** the value opens in place, or, for a `select` variable, a picker
 over its options and nothing else; on a **note** the note opens as a text area
@@ -195,6 +196,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
 | `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
+| `d` | describe the project: its one-line description opens in the pane, where Enter on its row opens it — or on a line of its own when the pane is off |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
 | `N`, Ctrl-N | a note in your `$EDITOR`; a note typed where you are — Enter saves, Alt-Enter breaks a line, a pasted paragraph lands whole |
 | `C` | copy the project to a folder outside your bases, keeping its ID |

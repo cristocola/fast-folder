@@ -83,6 +83,9 @@ pub enum TextThen {
     /// show the list; its first todo is asked for next, and the two are
     /// written together.
     AddPhase(PathBuf),
+    /// The description of the project at this path, where the pane cannot
+    /// show the line it is typed on.
+    Describe(PathBuf),
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
@@ -283,6 +286,7 @@ impl App {
             TextThen::AddPhase(path) => self.add_phase_named(path, text),
             TextThen::AddTodo { place, project } => self.add_typed_todo(place, project, text),
             TextThen::AddTag(targets) => self.add_typed_tag(targets, text),
+            TextThen::Describe(path) => self.describe_typed(path, text),
             TextThen::CopyTo(targets) => self.copy_to_typed(targets, text),
             TextThen::RaiseCounter => self.raise_counter_to(text),
             TextThen::DiscardAttention(path) => self.discard_when_typed(path, text),
@@ -306,6 +310,31 @@ impl App {
             Action::Rename {
                 project: Box::new(project),
                 name: text,
+            },
+        )
+    }
+
+    fn describe_typed(&mut self, path: PathBuf, text: String) -> Vec<Effect> {
+        let text = text.trim().to_string();
+        if let Err(error) = validators::description(&text) {
+            if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                prompt.error = Some(error);
+            }
+            return Vec::new();
+        }
+        self.modals.pop();
+        let Some(project) = self.project_at(&path) else {
+            return self.gone_from_the_library();
+        };
+        // Unchanged is a cancel, as it is in the pane.
+        if text == self.description_of(&project) {
+            return Vec::new();
+        }
+        self.run_action(
+            "describing…",
+            Action::SetDescription {
+                project: Box::new(project),
+                text,
             },
         )
     }

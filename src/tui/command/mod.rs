@@ -174,6 +174,8 @@ pub enum CommandId {
     AddTodo,
     /// A new `###` phase on the list, written with its first todo.
     AddPhase,
+    /// The one-line description, opened where it is shown.
+    Describe,
     Rename,
     /// Enter on the project list: the action menu, as `a` opens it. Its own
     /// id because the pane's Enter means something else.
@@ -235,7 +237,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 113] = [
+    pub const ALL: [CommandId; 114] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -306,6 +308,7 @@ impl CommandId {
         CommandId::NoteInline,
         CommandId::AddTodo,
         CommandId::AddPhase,
+        CommandId::Describe,
         CommandId::Rename,
         CommandId::ActionsEnter,
         CommandId::PaneEdit,

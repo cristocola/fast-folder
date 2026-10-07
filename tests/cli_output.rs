@@ -6,6 +6,8 @@ mod common;
 #[path = "cli_output/desc.rs"]
 mod desc;
 
+#[path = "cli_output/journal.rs"]
+mod journal;
 #[path = "cli_output/library.rs"]
 mod library;
 #[path = "cli_output/no_terminal.rs"]

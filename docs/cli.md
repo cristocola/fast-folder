@@ -26,6 +26,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf tag add/remove/list/reauto` | Manage project tags |
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
+| `fastf journal` | Every dated note across every project, newest first |
 | `fastf todo list/add/done/edit/remove <id>` | A project's task list |
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf desc <query> [text]` | Show or set a project's one-line description |
@@ -416,6 +417,31 @@ With no message, the editor (`config.editor`, else `$EDITOR`, else Notepad on
 Windows and `nano` elsewhere) opens on a scratch file, started in the project's
 folder; save, close it, and what you wrote is appended as one note. Lines
 starting with `#` are dropped, and an empty note writes nothing.
+
+## Journal
+
+```bash
+fastf journal                                  # the last 30 notes, every project
+fastf journal --since 2026-10-01               # this month
+fastf journal --grep lesson:                   # the notes written to be found
+fastf journal --template music-video --grep lesson:
+fastf journal --tag client/Acme -n 100
+fastf journal --base archive --json
+```
+
+`fastf notes` is one project's log; `fastf journal` is all of them as one
+timeline: every dated note of every project, newest first, one line each with
+the day and time, the project's id and the note's first line, the rest of the
+note under it. `--since` is about the note's own date, so a new note on an old
+project is in this month's journal; `--template`, `--tag` and `--base` choose
+the projects, and are refused by name when they name something the library
+does not have, as `recent`'s are; `--grep` keeps the notes whose text contains
+the word, case-insensitively, which is how a `lesson:` written months ago is
+read again. Undated notes — the free text above the first entry, and a line
+whose "timestamp" is not a date — have no place on a timeline and are left out.
+
+`--json` prints a bare array, one object per note: `id`, `name`, `path`,
+`timestamp` and `text`.
 
 ## Registering existing folders
 

@@ -65,6 +65,17 @@ pub struct TodoJson {
     pub phase: Option<String>,
 }
 
+/// One note of the journal across projects: what `fastf journal --json`
+/// prints, one per dated note, newest first.
+#[derive(Serialize)]
+pub struct JournalEntryJson {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub timestamp: String,
+    pub text: String,
+}
+
 /// One project, whole: what `fastf show --json` prints.
 #[derive(Serialize)]
 pub struct ProjectDetailJson {

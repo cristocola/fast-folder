@@ -66,6 +66,15 @@ impl Note {
             .as_deref()
             .map(|ts| ts.get(..10).unwrap_or(ts))
     }
+
+    /// Whether the timestamp is a date fastf can order: it begins
+    /// `YYYY-MM-DD`. The reader takes any word before a ` — ` as a timestamp,
+    /// so a hand-written `- Remember — this` has one, and sorted as text it
+    /// would sit above every real date; the journal and "the last note" keep
+    /// to the dated ones.
+    pub fn is_dated(&self) -> bool {
+        self.timestamp.as_deref().is_some_and(starts_with_a_day)
+    }
 }
 
 /// One task under `## Todo`.

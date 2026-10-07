@@ -230,6 +230,12 @@ pub fn base_matches(base: &std::path::Path, want: &str) -> bool {
 
 /// Plain (non-interactive) list output. Shared by `fastf recent` and
 /// `fastf search` — keep the two commands' output identical.
+///
+/// **The `•` row and the `→` row keep their shape**: whoever parses this
+/// output reads the id and the name off the one and the path off the other.
+/// Anything new is a cell on the first row, or a row of its own between
+/// them that starts with neither marker — the description, when there is
+/// one, shown on one line whatever the file holds.
 pub fn print_plain(filtered: &[&Project]) {
     let widths = RowWidths::measure(filtered.iter().copied());
 
@@ -237,12 +243,17 @@ pub fn print_plain(filtered: &[&Project]) {
         let path_str = crate::util::paths::display_path(&p.path);
         let missing = !p.path.exists();
         let marker = if missing { "✗".red() } else { "•".cyan() };
+        // Ten blanks when nothing could be stat'ed, so the columns never shift.
+        let touched = library::touched(p)
+            .map(|at| date_cell(&at).to_string())
+            .unwrap_or_else(|| " ".repeat(10));
         println!(
-            "  {} {:<id_w$}  {:<tmpl_w$}  {}  {:<base_w$}  {}",
+            "  {} {:<id_w$}  {:<tmpl_w$}  {}  {}  {:<base_w$}  {}",
             marker,
             p.id.green().bold(),
             p.template.dimmed(),
             date_cell(&p.created).dimmed(),
+            touched.dimmed(),
             library::base_label(&p.base).cyan(),
             if missing {
                 format!("{} {}", p.name, "(missing)".red())
@@ -253,6 +264,10 @@ pub fn print_plain(filtered: &[&Project]) {
             tmpl_w = widths.template,
             base_w = widths.base,
         );
+        let description = crate::core::validated::Description::one_line(&p.description);
+        if !description.is_empty() {
+            println!("      {description}");
+        }
         println!("      {} {}", "→".dimmed(), path_str.dimmed());
     }
 }

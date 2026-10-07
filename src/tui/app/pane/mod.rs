@@ -114,9 +114,16 @@ pub enum Fact {
     Template,
     Base,
     Created,
+    /// When the project was last written, as `loaders::detail` read it:
+    /// carried as text, since the fact comes from the detail and
+    /// `fact_width` sees only the project.
+    Touched(String),
     Size,
     Notes(usize),
-    Todos { done: usize, total: usize },
+    Todos {
+        done: usize,
+        total: usize,
+    },
 }
 
 /// What stands between two facts on a row: three spaces, the separator, three
@@ -149,6 +156,7 @@ fn fact_width(fact: &Fact, project: &Project) -> usize {
         Fact::Template => project.template.width(),
         Fact::Base => crate::core::library::base_label(&project.base).width(),
         Fact::Created => "created ".len() + crate::tui::rows::date_cell(&project.created).width(),
+        Fact::Touched(at) => "touched ".len() + crate::tui::rows::date_cell(at).width(),
         Fact::Size => crate::tui::rows::SIZE_CELL,
         Fact::Notes(notes) => notes_label(*notes).width(),
         Fact::Todos { done, total } => todos_label(*done, *total).width(),
@@ -377,6 +385,13 @@ pub enum PaneRow {
     Name(String),
     /// The rest of a name too wide for one row. Not a row the cursor rests on.
     NameLine(String),
+    /// The one line that says what the project is, or as much of it as fits
+    /// the row; empty when there is none, drawn as `(no description)`. Enter
+    /// edits it; emptied, it is removed.
+    Description(String),
+    /// The rest of a description too wide for one row. Not a row the cursor
+    /// rests on.
+    DescriptionLine(String),
     /// One row of the header's facts (`Fact`).
     Facts(Vec<Fact>),
     /// A section heading: `── label ───`. Never a row the cursor rests on:
@@ -457,6 +472,7 @@ impl PaneRow {
         matches!(
             self,
             PaneRow::Name(_)
+                | PaneRow::Description(_)
                 | PaneRow::Tag(_)
                 | PaneRow::AddTag
                 | PaneRow::Variable { .. }
@@ -527,7 +543,23 @@ fn header_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) 
     let mut name = wrap_name(&project.name, width).into_iter();
     rows.push(PaneRow::Name(name.next().unwrap_or_default()));
     rows.extend(name.map(PaneRow::NameLine));
-    let identity = vec![Fact::Template, Fact::Base, Fact::Created];
+    // The file's line once it has been read, the index's until then: the
+    // index is what an older fastf may have rewritten without it.
+    let description = detail
+        .and_then(|detail| detail.meta.as_ref())
+        .map(|meta| crate::core::validated::Description::one_line(&meta.description))
+        .unwrap_or_else(|| project.description.clone());
+    let mut description = wrap_columns(&description, width).into_iter();
+    rows.push(PaneRow::Description(description.next().unwrap_or_default()));
+    rows.extend(
+        description
+            .filter(|line| !line.is_empty())
+            .map(PaneRow::DescriptionLine),
+    );
+    let mut identity = vec![Fact::Template, Fact::Base, Fact::Created];
+    if let Some(at) = detail.and_then(|detail| detail.touched.clone()) {
+        identity.push(Fact::Touched(at));
+    }
     rows.extend(
         flow_facts(identity, project, width)
             .into_iter()
@@ -728,6 +760,8 @@ fn wrap_columns(text: &str, width: usize) -> Vec<String> {
 pub enum EditTarget {
     /// A template variable, by slug.
     Variable(String),
+    /// The one-line description; emptied, it is removed.
+    Description,
     /// A tag, by the text it had; emptied, it is removed.
     Tag(String),
     /// A todo's text: `ordinal` in the file's todos, whose text was `was`
@@ -861,6 +895,7 @@ impl PaneEdit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaneTarget {
     Name,
+    Description,
     /// A tag by its text; gone, the cursor settles on the row that adds one.
     Tag(String),
     AddTag,
@@ -882,6 +917,7 @@ pub enum PaneTarget {
 pub fn target_at(rows: &[PaneRow], at: usize) -> Option<PaneTarget> {
     Some(match rows.get(at)? {
         PaneRow::Name(_) => PaneTarget::Name,
+        PaneRow::Description(_) => PaneTarget::Description,
         PaneRow::Tag(tag) => PaneTarget::Tag(tag.clone()),
         PaneRow::AddTag => PaneTarget::AddTag,
         PaneRow::Variable { slug, .. } => PaneTarget::Variable(slug.clone()),
@@ -905,6 +941,10 @@ impl PaneEdit {
                 target: EditTarget::Variable(slug),
                 ..
             } => PaneTarget::Variable(slug.clone()),
+            PaneEdit::Line {
+                target: EditTarget::Description,
+                ..
+            } => PaneTarget::Description,
             PaneEdit::Line {
                 target: EditTarget::Tag(_),
                 input,
@@ -959,6 +999,10 @@ impl PaneEdit {
                 ..
             } => PaneTarget::Variable(slug.clone()),
             PaneEdit::Line {
+                target: EditTarget::Description,
+                ..
+            } => PaneTarget::Description,
+            PaneEdit::Line {
                 target: EditTarget::Tag(from),
                 ..
             } => PaneTarget::Tag(from.clone()),
@@ -993,6 +1037,7 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
                 .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo)))
         }
         PaneTarget::Name => find(&|row| matches!(row, PaneRow::Name(_))),
+        PaneTarget::Description => find(&|row| matches!(row, PaneRow::Description(_))),
         PaneTarget::AddTag => find(&|row| matches!(row, PaneRow::AddTag)),
         PaneTarget::EarlierNotes => find(&|row| matches!(row, PaneRow::EarlierNotes(_)))
             .or_else(|| find(&|row| matches!(row, PaneRow::Note { .. }))),

@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,11 +8,11 @@ expression: frame
 " ⌕ / to search                                                                 11/11 · newest · 1 ✓ "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0245 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-25_Test_Run_ID0245       │"
-"│✓ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ created 2026-08-25               │"
+"│✓ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ (no description)                 │"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ music-video   ·   projects       │"
 "│▸ ID0245 2026-┌ unregister report ─────────────────────────────────────────────────┐              │"
-"│  ID0244 2026-│ 1 failed:                                                          │───────────── │"
-"│  ID0243 2026-│   ID0248: injected fault at 'unregister:mid-copy'                  │              │"
+"│  ID0244 2026-│ 1 failed:                                                          │              │"
+"│  ID0243 2026-│   ID0248: injected fault at 'unregister:mid-copy'                  │───────────── │"
 "│  ID0242 2026-│                                                                    │              │"
 "│  ID0241 2026-│                                                                    │              │"
 "│  ID0240 2026-│                                                                    │              │"

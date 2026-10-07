@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-28_Lullaby_Remix_ID0248  │"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│  ID0247 2026-08-2┌ moving ────────────────────────────────────────────────────┐-28               │"
-"│  ID0246 2026-08-2│ 1 of 2  2026-08-28_Lullaby_Remix_ID0248                    │                  │"
-"│  ID0245 2026-08-2│ ✓ scanned                      41 entries                  │───────────────── │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ A Fiverr music video: treatment  │"
+"│  ID0247 2026-08-2┌ moving ────────────────────────────────────────────────────┐ booked           │"
+"│  ID0246 2026-08-2│ 1 of 2  2026-08-28_Lullaby_Remix_ID0248                    │   projects       │"
+"│  ID0245 2026-08-2│ ✓ scanned                      41 entries                  │-28               │"
 "│  ID0244 2026-08-2│ ✓ checked the original's base                              │                  │"
-"│  ID0243 2026-08-2│ ▸ copying                      12 of 34 files              │                  │"
+"│  ID0243 2026-08-2│ ▸ copying                      12 of 34 files              │───────────────── │"
 "│  ID0242 2026-08-2│   ███████████░░░░░░░░░░░░░░░░░░░░░░  34%  1.1 MB of 3.3 MB │                  │"
 "│  ID0241 2026-08-2│   03_Assets/raw/footage_A001.mov                           │                  │"
 "│  ID0240 2026-08-2│   verifying                                                │                  │"

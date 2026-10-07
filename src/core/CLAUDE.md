@@ -131,9 +131,9 @@ in `template::validate_structure`, which every load and save passes through.
 ## `PROJECT_INFO.md`
 
 **YAML frontmatter** is the typed `Metadata`: `id`, `template`, `template_name`,
-`created`, `folder`, `path`, `tags`, `auto_tags` (the derived subset), and
-`variables: BTreeMap` holding **every** template variable (sorted, for stable
-diffs). The **body** holds a variables table, a `## Notes` section and, after the
+`description`, `created`, `folder`, `path`, `tags`, `auto_tags` (the derived
+subset), and `variables: BTreeMap` holding **every** template variable (sorted,
+for stable diffs). The **body** holds a variables table, a `## Notes` section and, after the
 first `add_todo`, a `## Todo` list; its grammar is `core::body`, and outside
 those helpers fastf never touches the file after creation.
 
@@ -170,6 +170,32 @@ and the project drops out of discovery — by design
 success message. Never substitute a placeholder for identity-defining content.
 `Metadata::from_plan_at` / `write_at` / `render_at` take the timestamp, so register
 writes the file once.
+
+**The description is identity-adjacent and never identity.** One optional line
+(`validated::Description`: trimmed, no newline, at most 200 characters; empty
+clears), `serde(default)` and skipped when empty, so a project written before it
+existed and one nobody described serialize the same bytes, and a bad value can
+only ever be a bad description. It rides in the index like `tags` — an additive
+`CacheEntry` key, no `CACHE_VERSION` bump — so a list never opens a file for it;
+the price is that a hand edit, a write from another machine, or an index an
+older fastf rewrote (it drops the key) shows in the list only once the project is
+opened (`on_detail` heals the row and refreshes the cache) or the base is
+reindexed. **`show`, `desc` and the pane read it from the file.** A reader shows
+`Description::one_line` of whatever it finds: a hand-written block scalar
+deserializes with its newlines, and a plain list that printed them would hand a
+`→` row to whoever parses the list. `description_flag` in `cli::new` decides what
+`--description=X` means on a template that declares a variable by that name: the
+variable, as it always did.
+
+**`touched` is computed and never stored** (`library::touched`): the newer of
+`PROJECT_INFO.md`'s and the folder's mtime, as the stamp `created` uses. A
+`touched:` key bumped on every write would make every todo tick a frontmatter
+rewrite, and the docs promise a tick changes one character. Every fastf write
+moves it — a move's bookkeeping, a rename, a reindex backfill included — and an
+edit deeper in the folder does not; a note is still how work is said to have
+happened. `body::Note::is_dated` is what `last_note` and the journal count: the
+reader takes any word before ` — ` as a timestamp, and `Remember` sorts above
+every date.
 
 **The filename is fixed** (`RESERVED_FILENAME`). `path_is_reserved` is root-only
 (a case-insensitive leaf with no `/`), so `docs/PROJECT_INFO.md` is fine; template
@@ -902,7 +928,7 @@ the middle is literal.
 Fields resolve from `Metadata`, then `meta.variables.<slug>`; an unknown key is
 `false` rather than an error, for forward compatibility. `Predicate::Free` is the
 fallthrough (anything below it is unreachable): a case-insensitive substring over
-tags, variable values, folder, template, template name and id. **`path` is
+tags, variable values, the description, folder, template, template name and id. **`path` is
 excluded**, with a regression test, so home-directory text never matches.
 
 **`library::resolve_matches(cfg, query) -> Resolution` is the shared resolver**;

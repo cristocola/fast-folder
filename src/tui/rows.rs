@@ -192,6 +192,7 @@ mod tests {
             path: PathBuf::from("/base").join(name),
             base: PathBuf::from("/base"),
             created: "2026-08-18T00:00:00Z".to_string(),
+            description: String::new(),
             tags: Vec::new(),
             exists: true,
         }

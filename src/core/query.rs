@@ -5,8 +5,8 @@
 //! | Syntax       | Meaning                                         |
 //! |---|---|
 //! | `<term>`     | bare term — case-insensitive substring across   |
-//! |              | tags, all variable values, folder, template,    |
-//! |              | template_name, and id                           |
+//! |              | tags, all variable values, the description,     |
+//! |              | folder, template, template_name, and id         |
 //! | `key=value`  | exact match on frontmatter field or variable    |
 //! | `key=pat*`   | wildcard match: `pre*`, `*post`, `*mid*`        |
 //! | `key>date`   | ISO-date comparison: field is after date        |
@@ -37,8 +37,9 @@ pub enum Predicate {
     /// `tag:value` or `tag:prefix*`
     Tag(Pattern),
     /// Bare term (no operator) — case-insensitive substring match across
-    /// all variable values, all tags, the folder name, the template slug,
-    /// the template display name, and the project ID.  `path` is excluded.
+    /// all variable values, all tags, the description, the folder name, the
+    /// template slug, the template display name, and the project ID.  `path`
+    /// is excluded.
     Free(String),
 }
 
@@ -219,7 +220,7 @@ fn to_pattern(s: &str) -> Pattern {
 ///
 /// Fields are resolved in this order:
 /// 1. Top-level `Metadata` scalar fields (`id`, `template`, `template_name`,
-///    `created`, `folder`, `path`).
+///    `description`, `created`, `folder`, `path`).
 /// 2. `variables.<slug>` — looked up in `meta.variables`.
 ///
 /// Unknown field keys never match (returns false for that predicate).
@@ -264,9 +265,10 @@ fn eval_one(pred: &Predicate, meta: &Metadata) -> bool {
             {
                 return true;
             }
-            // Folder/name, template slug, template display name, ID.
-            // `path` is intentionally excluded — leaks home-dir noise.
+            // Description, folder/name, template slug, template display
+            // name, ID. `path` is intentionally excluded — leaks home-dir noise.
             for field in [
+                meta.description.as_str(),
                 meta.folder.as_str(),
                 meta.template.as_str(),
                 meta.template_name.as_str(),
@@ -287,6 +289,7 @@ fn resolve_field(key: &str, meta: &Metadata) -> Option<String> {
         "id" => Some(meta.id.clone()),
         "template" => Some(meta.template.clone()),
         "template_name" => Some(meta.template_name.clone()),
+        "description" => Some(meta.description.clone()),
         "created" => Some(meta.created.clone()),
         "folder" | "name" => Some(meta.folder.clone()),
         "path" => Some(meta.path.clone()),
@@ -333,6 +336,7 @@ mod tests {
             id_number: None,
             template: template.to_string(),
             template_name: template.to_string(),
+            description: String::new(),
             created: "2026-01-15T10:00:00Z".to_string(),
             folder: "ID0001_My_Project".to_string(),
             path: "/projects/ID0001_My_Project".to_string(),
@@ -465,6 +469,7 @@ mod tests {
             id_number: None,
             template: template.to_string(),
             template_name: template_name.to_string(),
+            description: String::new(),
             created: "2026-01-15T10:00:00Z".to_string(),
             folder: folder.to_string(),
             path: path.to_string(),

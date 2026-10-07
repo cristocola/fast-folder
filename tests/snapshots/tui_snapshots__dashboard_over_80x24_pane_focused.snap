@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                     highest ID0248 "
@@ -8,6 +7,7 @@ expression: frame
 " ⌕ / to search                                                   12/12 · newest "
 "┌ ID0247 ──────────────────────────────────────────────────────────────────────┐"
 "│ 2026-08-27_Client_Onboarding_Acme_ID0247                                     █"
+"│ (no description)                                                             █"
 "│ general   ·   projects   ·   created 2026-08-27                              █"
 "│ scanning…   ·   2 notes   ·   2/4 todos done                                 █"
 "│ ── tags ──────────────────────────────────────────────────────────────────── █"
@@ -20,10 +20,9 @@ expression: frame
 "│   [x] rough cut                                                              █"
 "│ Deliver                                                                  0/2 █"
 "│   [ ] colour and sound mix                                                   █"
-"│   [ ] deliver the 16:9 and 9:16 masters                                      █"
+"│   [ ] deliver the 16:9 and 9:16 masters                                      ║"
 "│ · add a todo                                                                 ║"
 "│ · add a phase                                                                ║"
-"│ ── notes ─────────────────────────────────────────────────────────────────── ║"
 "└──────────────────────────────────────────────────────────────────────────────┘"
 "                                                                                "
 " ← list  / search  a actions  Enter edit  + add  ? help                         "

@@ -3,6 +3,8 @@
 //! Driven as a **real process** — see `common::mod`'s preamble for why.
 
 mod common;
+#[path = "cli_output/desc.rs"]
+mod desc;
 
 #[path = "cli_output/library.rs"]
 mod library;

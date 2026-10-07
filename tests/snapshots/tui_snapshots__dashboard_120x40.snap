@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                                             highest ID0248 "
@@ -9,15 +8,15 @@ expression: frame
 " ⌕ / to search                                                                                           12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────────────────┐"
 "│  ID     PROJECT                                                 SIZE ││ 2026-08-28_Lullaby_Remix_ID0248              │"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248                       3.2 MB ││ music-video   ·   projects                   │"
-"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247           scanning… ││ created 2026-08-28                           │"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                        scanning… ││ 3.2 MB                                       │"
-"│  ID0245 2026-08-25_Test_Run_ID0245                         scanning… ││ ── tags ──────────────────────────────────── │"
-"│  ID0244 2026-08-24_Spring_Campaign_ID0244                  scanning… ││ ● draft                                      │"
-"│  ID0243 2026-08-23_Live_Session_ID0243                     scanning… ││ · add a tag                                  │"
-"│  ID0242 2026-08-22_Lullaby_Remix_ID0242                    scanning… ││ reading…                                     │"
-"│  ID0241 2026-08-21_Client_Onboarding_Acme_ID0241           scanning… ││                                              │"
-"│  ID0240 2026-08-20_Old_Shoot_ID0240                        scanning… ││                                              │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248                       3.2 MB ││ A Fiverr music video: treatment approved,    │"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247           scanning… ││ shoot booked                                 │"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                        scanning… ││ music-video   ·   projects                   │"
+"│  ID0245 2026-08-25_Test_Run_ID0245                         scanning… ││ created 2026-08-28                           │"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244                  scanning… ││ 3.2 MB                                       │"
+"│  ID0243 2026-08-23_Live_Session_ID0243                     scanning… ││ ── tags ──────────────────────────────────── │"
+"│  ID0242 2026-08-22_Lullaby_Remix_ID0242                    scanning… ││ ● draft                                      │"
+"│  ID0241 2026-08-21_Client_Onboarding_Acme_ID0241           scanning… ││ · add a tag                                  │"
+"│  ID0240 2026-08-20_Old_Shoot_ID0240                        scanning… ││ reading…                                     │"
 "│  ID0239 2026-08-19_Test_Run_ID0239                         scanning… ││                                              │"
 "│  ID0238 2026-08-18_Spring_Campaign_ID0238                  scanning… ││                                              │"
 "│  ID0237 2026-08-17_Live_Session_ID0237                     scanning… ││                                              │"

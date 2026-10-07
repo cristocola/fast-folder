@@ -498,6 +498,16 @@ fn json_output_is_an_array_and_show_is_one_project_whole() {
     );
     assert_eq!(rows[0]["id"], "ID0001");
     assert!(rows[0]["path"].is_string() && rows[0]["base_label"].is_string());
+    // `touched` is when anything last wrote the project — the note above did
+    // — as the same fixed-width stamp `created` uses, so the two compare.
+    let touched = rows[0]["touched"].as_str().expect("touched is a stamp");
+    let created = rows[0]["created"].as_str().unwrap();
+    assert_eq!(touched.len(), created.len(), "{touched} vs {created}");
+    assert!(touched >= created, "{touched} < {created}");
+    assert_eq!(
+        rows[0]["description"], "",
+        "no description is an empty string"
+    );
 
     let searched = sb.ok(&["search", "proj", "--json"]);
     let found: serde_json::Value = serde_json::from_str(&searched).expect("search --json is JSON");
@@ -512,6 +522,18 @@ fn json_output_is_an_array_and_show_is_one_project_whole() {
         "a todo carries its phase into the JSON: {shown}"
     );
     assert_eq!(one["notes"][0]["text"], "began the edit");
+    // `last_note` is when somebody last *said* something happened: the newest
+    // dated note. A hand-written `- Remember — this` has a "timestamp" too,
+    // and sorted as text it would win; it is not a date, so it is not it.
+    let dated = one["notes"][0]["timestamp"].as_str().unwrap().to_string();
+    assert_eq!(one["last_note"], dated.as_str());
+    let path = sb.base.join("proj").join("PROJECT_INFO.md");
+    let mut file = fs::read_to_string(&path).unwrap();
+    file.push_str("- Remember — the label wants the chorus held\n");
+    fs::write(&path, file).unwrap();
+    let shown = sb.ok(&["show", "ID0001", "--json"]);
+    let one: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(one["last_note"], dated.as_str(), "{shown}");
 
     // The summary names the project and counts what it has.
     let summary = sb.ok(&["show", "ID0001"]);

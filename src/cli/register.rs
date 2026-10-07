@@ -71,6 +71,7 @@ pub struct RegisterFlags {
     pub use_today: bool,
     pub created: Option<String>,
     pub yes: bool,
+    pub description: Option<String>,
 }
 
 impl RegisterFlags {
@@ -87,6 +88,7 @@ impl RegisterFlags {
                 "use-today" => self.use_today = true,
                 "created" => self.created = flag.value,
                 "yes" => self.yes = true,
+                "description" => self.description = flag.value,
                 other => bail!("flag `--{other}` is declared but not handled after the path"),
             }
         }
@@ -107,6 +109,12 @@ impl RegisterFlags {
         }
         if self.use_today && self.created.is_some() {
             bail!("--use-today and --created are mutually exclusive");
+        }
+        if self.recursive && self.description.is_some() {
+            bail!(
+                "--description cannot be used with --recursive: one description cannot describe \
+                 every folder in a base — describe each with `fastf desc` afterwards"
+            );
         }
         if self.recursive {
             for (set, flag) in [
@@ -138,6 +146,7 @@ pub struct RegisterArgs {
     pub use_today: bool,
     pub created_override: Option<String>,
     pub yes: bool,
+    pub description: String,
 }
 
 /// Compatibility options for [`register_core`]. New noninteractive callers use
@@ -153,6 +162,8 @@ pub struct RegisterOptions {
     pub created_override: Option<String>,
     /// What to do if `PROJECT_INFO.md` already exists at the target.
     pub on_pinfo_conflict: PinfoConflict,
+    /// The project's one line; empty for none.
+    pub description: String,
 }
 
 /// What actually happened during [`register_core`].
@@ -195,6 +206,7 @@ pub fn register_core(opts: RegisterOptions) -> Result<RegisterOutcome> {
             PinfoConflict::Skip => crate::core::operations::PinfoConflict::Skip,
             PinfoConflict::Abort => crate::core::operations::PinfoConflict::Abort,
         },
+        description: opts.description,
     })?;
     if let Some(error) = &outcome.rename_error {
         eprintln!(
@@ -340,9 +352,12 @@ pub fn run(args: RegisterArgs) -> Result<()> {
 
     // The template and its variables are asked for here, before the engine
     // runs: it never prompts. Without a template, the registered stub.
+    let mut args = args;
     let (tmpl, collected_vars) = match &args.template_slug {
         Some(slug) => {
             let t = template::find_by_slug(slug)?;
+            let flag = Some(std::mem::take(&mut args.description)).filter(|f| !f.is_empty());
+            args.description = crate::cli::new::description_flag(&t, &mut args.vars, flag);
             warn_unknown_vars(&t, &args);
             let Some(v) = collect_vars(&t, &args.vars)? else {
                 crate::tui::prompt::report_cancelled("nothing was registered");
@@ -362,10 +377,12 @@ pub fn run(args: RegisterArgs) -> Result<()> {
     }
 
     let asked = (args.rename, args.apply_structure);
+    let description = args.description;
     let outcome = register_core(RegisterOptions {
         path: args.path,
         template_slug: args.template_slug,
         vars: collected_vars,
+        description,
         apply_structure: args.apply_structure,
         rename,
         use_today: args.use_today,
@@ -591,6 +608,7 @@ pub fn run_recursive(args: RecursiveArgs) -> Result<()> {
         match register_core(RegisterOptions {
             path: path.clone(),
             template_slug: args.template_slug.clone(),
+            description: String::new(),
             vars: args.vars.clone(),
             apply_structure: false,
             rename: false,

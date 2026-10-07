@@ -172,6 +172,64 @@ impl Tag {
     }
 }
 
+/// A project's one-line description.
+///
+/// One line, because every list prints it on one and the frontmatter holds it
+/// as a plain scalar; trimmed; at most [`Description::MAX_LEN`] characters,
+/// since it is the sentence under a name and not the brief. Empty is a valid
+/// answer and means there is none — `parse("")` is how a description is
+/// cleared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Description(String);
+
+impl Description {
+    /// Room for a sentence with a client and a deliverable in it, not for a
+    /// paragraph; the pane wraps it, a plain row shows it whole.
+    pub const MAX_LEN: usize = 200;
+
+    pub fn parse(raw: &str) -> Result<Self> {
+        if raw.contains(['\n', '\r']) {
+            bail!("a description is one line — put the rest in a note");
+        }
+        let text = raw.trim();
+        if text.chars().count() > Self::MAX_LEN {
+            bail!(
+                "a description is at most {} characters (got {}) — put the rest in a note",
+                Self::MAX_LEN,
+                text.chars().count()
+            );
+        }
+        Ok(Self(text.to_string()))
+    }
+
+    /// What a reader shows of a description it did not write: the first line,
+    /// control characters dropped. A hand-edited block scalar deserializes
+    /// with its newlines, and a list that printed them would hand a second
+    /// line to whoever parses the list.
+    pub fn one_line(raw: &str) -> String {
+        raw.lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 impl fmt::Display for Tag {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)

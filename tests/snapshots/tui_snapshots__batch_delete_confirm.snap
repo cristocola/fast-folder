@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,11 +8,11 @@ expression: frame
 " ⌕ / to search                                                                 12/12 · newest · 3 ✓ "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0245 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-25_Test_Run_ID0245       │"
-"│✓ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│✓ ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ created 2026-08-25               │"
-"│✓ ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ scanning…                        │"
-"│▸ ID0245 2026-08-25_Test_Run_ID0245                 scanning… ││ ── tags ──────────────────────── │"
-"│  ID0244 2026-08-2┌ delete ────────────────────────────────────────────────────┐                  │"
+"│✓ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ (no description)                 │"
+"│✓ ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ music-video   ·   projects       │"
+"│✓ ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ created 2026-08-25               │"
+"│▸ ID0245 2026-08-25_Test_Run_ID0245                 scanning… ││ scanning…                        │"
+"│  ID0244 2026-08-2┌ delete ────────────────────────────────────────────────────┐───────────────── │"
 "│  ID0243 2026-08-2│ Type delete to confirm — these 3 projects and everything   │                  │"
 "│  ID0242 2026-08-2│ inside them will be gone: 2026-08-28_Lullaby_Remix_ID0248, │                  │"
 "│  ID0241 2026-08-2│ 2026-08-27_Client_Onboarding_Acme_ID0247,                  │                  │"

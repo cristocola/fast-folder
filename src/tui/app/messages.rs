@@ -230,6 +230,12 @@ impl App {
                 row.created = meta.created.clone();
                 changed = true;
             }
+            // The one field an older fastf drops from the index when it
+            // rewrites it: opening the project is what puts it back.
+            if row.description != meta.description {
+                row.description = meta.description.clone();
+                changed = true;
+            }
             if changed && self.library.patch(&path, row) {
                 self.recompute();
                 let rows = self.rows_on_screen();

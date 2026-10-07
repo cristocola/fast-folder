@@ -71,6 +71,7 @@ pub fn row_meta(project: &Project) -> Metadata {
         id_number: project.id_number,
         template: project.template.clone(),
         template_name: project.template_name.clone(),
+        description: project.description.clone(),
         created: project.created.clone(),
         folder: project.name.clone(),
         path: project.path.display().to_string(),
@@ -84,10 +85,11 @@ pub fn row_meta(project: &Project) -> Metadata {
 }
 
 /// The fields a row carries; anything else is a template variable.
-const ROW_FIELDS: [&str; 8] = [
+const ROW_FIELDS: [&str; 9] = [
     "id",
     "template",
     "template_name",
+    "description",
     "created",
     "folder",
     "name",

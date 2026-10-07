@@ -290,6 +290,11 @@ fn unknown_frontmatter_keys_survive_every_mutation() {
         fastf::core::operations::remove_tags(&project, &["urgent".to_string()]).unwrap();
         expect_intact("after tag remove");
 
+        fastf::core::operations::set_description(&project, "one line").unwrap();
+        expect_intact("after desc");
+        fastf::core::operations::set_description(&project, "").unwrap();
+        expect_intact("after desc --clear");
+
         let renamed = fastf::core::operations::rename(&project, "renamed_by_test").unwrap();
         let pinfo = project_info::pinfo_path(&renamed.path);
         let content = fs::read_to_string(&pinfo).unwrap();
@@ -336,6 +341,28 @@ fn write_frontmatter_bytes_preserved_on_no_op() {
             String::from_utf8_lossy(&before),
             String::from_utf8_lossy(&after),
             "a no-op mutation must not rewrite a single byte"
+        );
+
+        // A description set and then written back unchanged: the same
+        // guarantee, with the one key a hand edit would most likely sit next
+        // to. And cleared, the file is the one the create wrote.
+        project_info::write_frontmatter(&pinfo, |meta| {
+            meta.description = "one line".to_string();
+        })
+        .unwrap();
+        let described = fs::read(&pinfo).unwrap();
+        assert!(
+            String::from_utf8_lossy(&described).contains("\ndescription: one line\n"),
+            "{}",
+            String::from_utf8_lossy(&described)
+        );
+        project_info::write_frontmatter(&pinfo, |_| {}).unwrap();
+        assert_eq!(fs::read(&pinfo).unwrap(), described);
+        project_info::write_frontmatter(&pinfo, |meta| meta.description.clear()).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&fs::read(&pinfo).unwrap()),
+            String::from_utf8_lossy(&before),
+            "cleared, the key is gone and nothing else moved"
         );
     });
 }

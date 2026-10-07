@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-28_Lullaby_Remix_ID0248  │"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ created 2026-08-28               │"
-"│  ID0246 2026-┌ needs a look ──────────────────────────────────────────────────────┐              │"
-"│  ID0245 2026-│ 1 project was never finished being created and cannot be rebuilt   │───────────── │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ A Fiverr music video: treatment  │"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ approved, shoot booked           │"
+"│  ID0246 2026-┌ needs a look ──────────────────────────────────────────────────────┐rojects       │"
+"│  ID0245 2026-│ 1 project was never finished being created and cannot be rebuilt   │              │"
 "│  ID0244 2026-│ automatically: 2026-09-01_Half_Made_ID0250                         │              │"
-"│  ID0243 2026-│                                                                    │              │"
+"│  ID0243 2026-│                                                                    │───────────── │"
 "│  ID0242 2026-│                                                                    │              │"
 "│  ID0241 2026-│                                                                    │              │"
 "│  ID0240 2026-│                                                                    │              │"

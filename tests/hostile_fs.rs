@@ -815,6 +815,7 @@ fn opening_a_project_checks_the_path_before_spawning_anything() {
             path: real.clone(),
             base: base.to_path_buf(),
             created: "2026-01-01T00:00:00Z".to_string(),
+            description: String::new(),
             tags: vec![],
             exists: true,
         };
@@ -880,6 +881,7 @@ fn a_project_directory_replaced_by_a_link_is_not_opened() {
             path: linked,
             base: base.to_path_buf(),
             created: "2026-01-01T00:00:00Z".to_string(),
+            description: String::new(),
             tags: vec![],
             exists: true,
         };

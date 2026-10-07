@@ -39,6 +39,7 @@ fn register_args(path: &Path) -> RegisterArgs {
         rename: false,
         use_today: false,
         created_override: None,
+        description: String::new(),
         yes: true,
     }
 }
@@ -268,6 +269,7 @@ fn register_existing_metadata_aborts_under_abort_policy() {
             rename: false,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: PinfoConflict::Abort,
         })
         .expect_err("existing metadata should abort");
@@ -497,6 +499,7 @@ fn register_rejects_nested_targets_outside_a_configured_base_child() {
             rename: false,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: PinfoConflict::Abort,
         })
         .expect_err("nested target must be rejected");
@@ -537,6 +540,7 @@ fn register_refuses_options_that_exclude_each_other_before_it_skips() {
             rename: false,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: fastf::core::operations::PinfoConflict::Skip,
         })
         .expect_err("--apply without a template is refused");
@@ -562,6 +566,7 @@ fn register_skip_is_an_immediate_no_op() {
             rename: true,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: fastf::core::operations::PinfoConflict::Skip,
         })
         .unwrap();
@@ -590,6 +595,7 @@ fn register_reports_rename_failure_after_committing_registration() {
             rename: true,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: fastf::core::operations::PinfoConflict::Abort,
         })
         .unwrap();
@@ -633,6 +639,7 @@ structure:
             rename: false,
             use_today: false,
             created_override: None,
+            description: String::new(),
             on_pinfo_conflict: fastf::core::operations::PinfoConflict::Abort,
         })
         .unwrap();

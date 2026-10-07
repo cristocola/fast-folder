@@ -28,6 +28,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf notes <id>` | Show a project's notes |
 | `fastf todo list/add/done/edit/remove <id>` | A project's task list |
 | `fastf show <query>` | Everything fastf knows about one project |
+| `fastf desc <query> [text]` | Show or set a project's one-line description |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
 | `fastf reindex` | Force a full rescan of every base |
 | `fastf reconcile` / `--list` / `--resolve` | Finish what moves, copies, deletes and creates left; list what is unfinished; settle what needs you |
@@ -271,13 +272,14 @@ Deleted a project folder manually? The next `fastf recent` simply won't list it.
 ## Search
 
 ```bash
-fastf search ariana                              # free text across variables, tags, folder, template, ID
+fastf search ariana                              # free text across variables, tags, description, folder, template, ID
 fastf search ariana lullaby                      # both terms must match
 fastf search tag:draft                           # exact tag
 fastf search tag:client/*                        # tag wildcard
 fastf search template=music-video tag:draft      # clauses AND together
 fastf search artist=Aria* created>2026-01-01     # field wildcard + date comparison
 fastf search artist=*Grande                      # and it may lead, or do both: *ria*
+fastf search 'description=*fiverr*'              # the one-line description is a field too
 fastf search tag:draft --plain                   # pipe friendly
 ```
 
@@ -301,8 +303,14 @@ obvious thing, and it never opens the picker whatever the terminal is. It
 cannot be combined with `--plain`: they are two answers to the same question.
 
 Each row carries `id`, `number`, `name`, `path`, `base`, `base_label`,
-`template`, `template_name`, `created`, `tags` and `exists`. `fastf show` adds
-what only the file knows — `variables`, `notes`, and `todos` with the `phase`
+`template`, `template_name`, `created`, `touched`, `description`, `tags` and
+`exists`. `description` is the project's one line, or `""`. `touched` is when
+anything last wrote the project — the newer of its `PROJECT_INFO.md` and its
+folder, the same fixed-width stamp as `created`, so the two compare as text —
+or `null` where neither could be read; see [the project
+model](projects.md#description-and-touched) for what it does and does not see.
+`fastf show` adds what only the file knows — `last_note`, the timestamp of the
+newest dated note or `null`; `variables`; `notes`; and `todos` with the `phase`
 each one sits under:
 
 ```json
@@ -318,6 +326,34 @@ each one sits under:
 
 Paths are printed the way every other command prints them. The shape is a
 promise: fields are added, not renamed or removed.
+
+The plain list (`fastf recent --plain`, `fastf search … --plain`) has the same
+stability: each project is a `•` row — id, template, created, touched, base,
+name — then, when there is one, the description on a row of its own, then the
+`→` row with the path. A script reading it keys on the two markers.
+
+## Description
+
+```bash
+fastf desc ID0047                                    # print it
+fastf desc ID0047 "Music video for Lullaby, Indie, due in May"
+fastf desc ID0047 --clear                            # remove it
+fastf new music-video --description="…" --artist=…   # write it at creation
+fastf register ~/old/shoot --description="…"         # or when adopting a folder
+```
+
+One line under the project's name saying what it is: for whom, what for,
+where it stands. Every list prints it, `fastf show` and the app's pane show
+it, free-text search matches it, and `description=*…*` addresses it by name.
+It is one line and at most 200 characters; a refusal names the rule, on the
+command line and in the pane alike. `--description` is refused with
+`--recursive`, since one line cannot describe every folder in a base.
+
+A template may declare a variable called `description`. On such a template
+`--description=…` fills that variable, as it did before projects had a line
+of their own — a script written then keeps working — and says so; the
+project's line is then set with `fastf desc`. In the app the two are separate
+fields.
 
 ## Tags
 

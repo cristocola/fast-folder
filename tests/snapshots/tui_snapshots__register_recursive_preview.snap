@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-28_Lullaby_Remix_ID0248  │"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ created 2026-08-28               │"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ scanning…                        │"
-"│  ID0245 20┌ register a folder · preview ─────────────────────────────────────────────┐────────── │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ A Fiverr music video: treatment  │"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ approved, shoot booked           │"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ music-video   ·   projects       │"
+"│  ID0245 20┌ register a folder · preview ─────────────────────────────────────────────┐           │"
 "│  ID0244 20│ → /mnt/archive                                                           │           │"
-"│  ID0243 20│                                                                          │           │"
+"│  ID0243 20│                                                                          │────────── │"
 "│  ID0242 20│ + Old_Shoot   mint new ID                                                │           │"
 "│  ID0241 20│ + 2024-02-02_Wedding_ID0042   recover ID0042                             │           │"
 "│  ID0240 20│                                                                          │           │"

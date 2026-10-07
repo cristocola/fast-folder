@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
 "│  ID     PROJECT                                         SIZE ││ 2026-08-28_Lullaby_Remix_ID0248  │"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ music-video   ·   projects       │"
-"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ created 2026-08-28               │"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ scanning…                        │"
-"│  ID0245 2026-08-25_Test_Run_ID0245                 scanning… ││ ── tags ──────────────────────── │"
-"│  ID0244 2026-08-24_Spring_Campaign_ID0244          scanning… ││ ● draft                          │"
-"│  ID0243 2026-08-2┌ reconciling ───────────────────────────────────────────────┐                  │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ A Fiverr music video: treatment  │"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ approved, shoot booked           │"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                scanning… ││ music-video   ·   projects       │"
+"│  ID0245 2026-08-25_Test_Run_ID0245                 scanning… ││ created 2026-08-28               │"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244          scanning… ││ scanning…                        │"
+"│  ID0243 2026-08-2┌ reconciling ───────────────────────────────────────────────┐───────────────── │"
 "│  ID0242 2026-08-2│ 1 of 2  ID0012_Lullaby                                     │                  │"
 "│  ID0241 2026-08-2│ ▸ removing the old copy  312 of 1473 entries               │                  │"
 "│  ID0240 2026-08-2│   ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  21% │                  │"

@@ -333,6 +333,7 @@ pub fn plan(
         vars,
         id_str,
         counter_value,
+        description: String::new(),
         ctx,
     })
 }
@@ -584,6 +585,7 @@ fn provision_project(
         path: abs_path.clone(),
         base: abs_path.parent().map(Path::to_path_buf).unwrap_or_default(),
         created: crate::util::time::now_iso8601(),
+        description: plan.description.clone(),
         tags,
         exists: true,
     };
@@ -1099,6 +1101,7 @@ mod tests {
                 .collect(),
             id_str: "ID0048".to_string(),
             counter_value: 48,
+            description: String::new(),
             ctx: RenderContext::now("%Y-%m-%d"),
         }
     }

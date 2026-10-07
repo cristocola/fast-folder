@@ -87,6 +87,31 @@ impl App {
                 });
                 Vec::new()
             }
+            PaneRow::Description(_) => {
+                // The whole line as the file holds it — the row has only what
+                // fits its width — or the row's, until the file is read.
+                let text = self
+                    .library
+                    .selected()
+                    .map(|project| {
+                        self.details
+                            .get(&project.path)
+                            .and_then(|detail| detail.meta.as_ref())
+                            .map(|meta| {
+                                crate::core::validated::Description::one_line(&meta.description)
+                            })
+                            .unwrap_or_else(|| project.description.clone())
+                    })
+                    .unwrap_or_default();
+                self.pane_edit = Some(PaneEdit::Line {
+                    row: at,
+                    input: crate::tui::widgets::input::LineEdit::with_text(text),
+                    target: EditTarget::Description,
+                    error: None,
+                    pending: false,
+                });
+                Vec::new()
+            }
             PaneRow::Variable {
                 slug,
                 label,
@@ -181,6 +206,30 @@ impl App {
                 slug: slug.clone(),
                 value: text,
             },
+            EditTarget::Description => {
+                // Unchanged is a cancel; the rule the write applies is told
+                // under the line, so what was typed is still there to fix.
+                let current = self
+                    .details
+                    .get(&project.path)
+                    .and_then(|detail| detail.meta.as_ref())
+                    .map(|meta| crate::core::validated::Description::one_line(&meta.description))
+                    .unwrap_or_else(|| project.description.clone());
+                if text == current {
+                    self.close_pane_edit();
+                    return Vec::new();
+                }
+                if let Err(error) = validators::description(&text) {
+                    if let Some(edit) = &mut self.pane_edit {
+                        edit.fail(error);
+                    }
+                    return Vec::new();
+                }
+                Action::SetDescription {
+                    project: Box::new(project),
+                    text,
+                }
+            }
             EditTarget::Todo { ordinal, was } => {
                 // Unchanged is a cancel — except a todo with no words, where
                 // the empty line kept is how it is removed.
@@ -226,7 +275,8 @@ impl App {
 
     /// F2 on a pane row: its text, opened in place. On a todo that is the
     /// rewording Enter never does — Enter ticks it — and emptied, the todo
-    /// goes; on the name, a tag, a variable or a note it is what Enter opens.
+    /// goes; on the name, the description, a tag, a variable or a note it is
+    /// what Enter opens.
     pub(super) fn pane_edit_text(&mut self) -> Vec<Effect> {
         let rows = self.pane_rows();
         let Some(PaneRow::Todo { ordinal, .. }) = rows.get(self.pane_cursor) else {

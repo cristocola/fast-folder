@@ -954,8 +954,8 @@ impl LibraryState {
 
 /// A row's texts, each its own haystack: the name and the id first, because
 /// they are what the table shows and what a hit is highlighted in; then the
-/// template slug and name, every tag, and the variable values once metadata
-/// is loaded.
+/// template slug and name, the description, every tag, and the variable
+/// values once metadata is loaded.
 fn row_fields(project: &Project, meta: Option<&Option<Metadata>>) -> Fields {
     let mut fields: Fields = vec![
         (Field::Name, Fuzzy::haystack(&project.name)),
@@ -963,6 +963,9 @@ fn row_fields(project: &Project, meta: Option<&Option<Metadata>>) -> Fields {
         (Field::Other, Fuzzy::haystack(&project.template)),
         (Field::Other, Fuzzy::haystack(&project.template_name)),
     ];
+    if !project.description.is_empty() {
+        fields.push((Field::Other, Fuzzy::haystack(&project.description)));
+    }
     for tag in &project.tags {
         fields.push((Field::Other, Fuzzy::haystack(tag)));
     }

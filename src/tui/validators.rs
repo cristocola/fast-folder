@@ -127,6 +127,14 @@ pub fn folder_name(value: &str) -> Result<(), String> {
 
 /// The one rule for a tag, as `validated::Tag` states it, for the prompts
 /// that want to refuse under the line before a worker is asked.
+/// The description rule, as `operations::set_description` applies it, so the
+/// line under the pane row says the same sentence the write would.
+pub fn description(value: &str) -> Result<String, String> {
+    crate::core::validated::Description::parse(value)
+        .map(crate::core::validated::Description::into_string)
+        .map_err(|e| e.to_string())
+}
+
 pub fn tag(value: &str) -> Result<String, String> {
     Tag::parse(value)
         .map(Tag::into_string)

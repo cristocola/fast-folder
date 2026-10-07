@@ -51,7 +51,8 @@ Top to bottom:
   the template and the tags, as many as fit; see [Columns](#columns). The
   folder name is never cut. When the table is empty it says so inside the box.
 - **The detail pane** (`i` shows or hides it) — the selected project's name,
-  its template, base and date, its size and how many notes and todos it has;
+  its one-line description (or `(no description)`), its template, base, date
+  and when it was last touched, its size and how many notes and todos it has;
   then what you work with: its tags one per row, its todos, grouped under the
   `###` labels the file carries when it has any, and its latest notes, each
   with the day it was written and every line it has; and last what you look
@@ -92,7 +93,9 @@ counts.
 
 **The pane is an editor you enter on purpose.** `→` (or Tab) puts the cursor
 in it; ↑/↓ walk the rows Enter can act on, and nothing changes until you press
-Enter on one. Enter on the **name** is the rename; on a **tag** the tag opens
+Enter on one. Enter on the **name** is the rename; on the **description** the
+line opens in place — change it and Enter, or empty it and Enter to remove
+it; on a **tag** the tag opens
 on its own line — change it and Enter, or empty it and Enter to remove it; on a
 **variable** the value opens in place, or, for a `select` variable, a picker
 over its options and nothing else; on a **note** the note opens as a text area
@@ -100,8 +103,8 @@ over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved t
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
 every note, as `J` shows them. **F2 edits the text** of the row under the
 cursor in place — on a todo that is how you reword it, since Enter ticks it;
-emptied and Enter, the todo is removed — and on the name, a tag, a variable or
-a note it opens what Enter opens. Every section that can grow ends in a row that
+emptied and Enter, the todo is removed — and on the name, the description, a
+tag, a variable or a note it opens what Enter opens. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
 Alt-Enter breaks a line), **add a todo** and **add a phase**; and **`+` adds one more of whatever
 the cursor is among**, from anywhere in that section. Esc leaves the row as it
@@ -319,7 +322,10 @@ a folder (`E`) are one shape: **a form, then a preview, then Enter**.
 The form puts every question on one screen. Tab and the arrows move between the
 fields, typing edits the one that has the cursor, `←`/`→` change a choice and
 Space opens a fuzzy picker over its options — which is how you find one
-template among twenty. Enter submits the whole form; Esc abandons it and says
+template among twenty. The last question of a create, after the template's
+own, is the **description**: one optional line saying what the project is,
+which every list then shows. A register asks it too, for one folder; a whole
+base gets none. Enter submits the whole form; Esc abandons it and says
 so (`Cancelled — nothing was created.`), with no folder written and the ID
 counter untouched.
 

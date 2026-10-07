@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to │ Project basics                                                                   │ newest "
 "┌ projec│▸  Base directory              /mnt/projects                                      │───────┐"
 "│  ID   │   Default template            music-video                                        │D0248  │"
-"│▸ ID024│   Date format                 %Y-%m-%d   (today: 2026-09-03)                     │       │"
+"│▸ ID024│   Date format                 %Y-%m-%d   (today: 2026-09-03)                     │tment  │"
 "│  ID024│   Editor                      nvim                                               │       │"
 "│  ID024│   Terminal                    (probe the known ones)                             │       │"
-"│  ID024│   Register pattern            {date}_{name}_{id}                                 │────── │"
+"│  ID024│   Register pattern            {date}_{name}_{id}                                 │       │"
 "│  ID024│ Creating a project                                                               │       │"
-"│  ID024│   Confirm before creating     yes                                                │       │"
+"│  ID024│   Confirm before creating     yes                                                │────── │"
 "│  ID024│   Ask to open after creating  yes                                                │       │"
 "│  ID024│   Preview lines               20                                                 │       │"
 "│  ID024│   Name collision              suffix                                             │       │"

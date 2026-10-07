@@ -147,6 +147,10 @@ fn a_change_to_a_project_in_another_base_is_not_held_up() {
     let info = fs::read_to_string(library.project.join("PROJECT_INFO.md")).unwrap();
     assert!(info.contains("draft"), "{info}");
 
+    done(&library, &["desc", "ID0007", "the second shoot"]);
+    let info = fs::read_to_string(library.project.join("PROJECT_INFO.md")).unwrap();
+    assert!(info.contains("description: the second shoot"), "{info}");
+
     done(
         &library,
         &["rename", "ID0007", "2026-01-01_Shoot_Two_ID0007", "--yes"],

@@ -137,6 +137,8 @@ pub struct CreateRequest {
     pub vars: HashMap<String, String>,
     /// `None` uses the configured base.
     pub base_dir_override: Option<String>,
+    /// The project's one line; empty for none.
+    pub description: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -191,6 +193,11 @@ pub enum Action {
         project: Box<Project>,
         slug: String,
         value: String,
+    },
+    /// Set — or, emptied, clear — the one-line description, from the pane.
+    SetDescription {
+        project: Box<Project>,
+        text: String,
     },
     /// Rename one tag in place — or remove it, when `to` is `None`.
     ReplaceTag {

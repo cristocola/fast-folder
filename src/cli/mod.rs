@@ -10,6 +10,7 @@ pub mod id;
 #[doc(hidden)]
 pub mod job_worker;
 pub mod jobs;
+pub mod journal;
 pub mod json;
 pub mod log;
 pub mod move_project;

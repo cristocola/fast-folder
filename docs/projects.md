@@ -117,7 +117,9 @@ to; writing the kind at the front of a note is what makes it findable later:
   it belongs to whatever owns that login, not to the project that happened to
   create it.
 - `lesson: …` — something true about this *kind* of work, not this job: the
-  next project from the same template should start knowing it.
+  next project from the same template should start knowing it. `fastf journal
+  --template music-video --grep lesson:` reads every such note across every
+  project of the template.
 - A commitment with a date — it belongs to whatever keeps your calendar.
 
 Everything else stays in the leaf. When a project finishes, two edits close

@@ -137,10 +137,20 @@ fn validate_filters(cfg: &Config, args: &RecentArgs) -> Result<()> {
     if let Some(since) = &args.since {
         check_since(since)?;
     }
+    validate_scope(cfg, args.template.as_deref(), args.base.as_deref())
+}
 
-    if let Some(slug) = &args.template {
+/// The two filters that name something the library may not have — a
+/// template, a base — refused by name with the real answers listed. Shared
+/// by `recent` and `journal`, so the sentence is the same whichever asked.
+pub(crate) fn validate_scope(
+    cfg: &Config,
+    template: Option<&str>,
+    base: Option<&str>,
+) -> Result<()> {
+    if let Some(slug) = template {
         let known = crate::core::template::load_all().unwrap_or_default();
-        if !known.iter().any(|t| &t.slug == slug) {
+        if !known.iter().any(|t| t.slug == slug) {
             let names: Vec<&str> = known.iter().map(|t| t.slug.as_str()).collect();
             anyhow::bail!(
                 "--template '{slug}' is not a template{}",
@@ -153,7 +163,7 @@ fn validate_filters(cfg: &Config, args: &RecentArgs) -> Result<()> {
         }
     }
 
-    if let Some(want) = &args.base {
+    if let Some(want) = base {
         let bases = cfg.effective_bases();
         if !bases.iter().any(|base| base_matches(base, want)) {
             let labels: Vec<String> = bases.iter().map(|b| library::base_label(b)).collect();
@@ -171,7 +181,7 @@ fn validate_filters(cfg: &Config, args: &RecentArgs) -> Result<()> {
     Ok(())
 }
 
-fn filter_projects<'a>(
+pub(crate) fn filter_projects<'a>(
     projects: &'a [Project],
     template: &Option<String>,
     since: &Option<String>,

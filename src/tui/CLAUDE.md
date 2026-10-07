@@ -884,9 +884,14 @@ than a row) into `NameLine`s, and the facts — what the project is, then what i
 holds — flow whole (`flow_facts`) into `PaneRow::Facts` rows, the size measured
 at `rows::SIZE_CELL` whatever it reads, so a size landing can never add a row
 above the cursor. Until the record is read the figures are the size alone: a
-zero count there would be a claim. **The order is by use**: header, tags, todo,
-notes, then the reference — variables and the folder's top level — so a short
-pane shows the living sections unscrolled. A pane with more rows than it shows
+zero count there would be a claim. Under the name sits the **description**
+(`PaneRow::Description`, always there — `(no description)` when empty — then
+`DescriptionLine`s wrapped by `wrap_columns` as prose, not by `wrap_name`), read
+from the detail's metadata once it has landed and from the row before, and the
+identity facts gain `Fact::Touched(String)` from `ProjectDetail.touched`, which
+`loaders::detail` derives from the stamp it already takes. **The order is by
+use**: header, tags, todo, notes, then the reference — variables and the
+folder's top level — so a short pane shows the living sections unscrolled. A pane with more rows than it shows
 has the table's scrollbar (`view::scrollbar`, in the theme's alphabet).
 
 **A note is several rows, and so is a long line**: `App::pane_rows` hands
@@ -939,8 +944,9 @@ is being changed stays in view.
 
 **Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
 needs a key of its own: `PaneEditText` (F2) opens a row's text in place
-(`EditTarget::Todo { ordinal, was }` on a todo, what Enter opens elsewhere, and
-hidden where there is nothing to type); `PaneAdd` (`+`) adds to the section the
+(`EditTarget::Todo { ordinal, was }` on a todo, `EditTarget::Description` on the
+description — the file's whole line, since the row holds what fits — what Enter
+opens elsewhere, and hidden where there is nothing to type); `PaneAdd` (`+`) adds to the section the
 cursor is in. On the list the same keys are `ListRename` and `ListAddTodo`, off
 the hint bar — **the pane's bar is what the pane does**: `command::hints` leaves
 the verbs the pane shares with the list (open, terminal, copy, mark, new, the

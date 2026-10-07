@@ -9,6 +9,14 @@ pub fn now_iso8601() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// A file's time as the same fixed-width UTC stamp, so a `created` read from
+/// a folder's own date and a `touched` read from a file's mtime sort as text
+/// beside the stamps fastf wrote itself.
+pub fn iso8601_of(at: std::time::SystemTime) -> String {
+    let at: chrono::DateTime<chrono::Utc> = at.into();
+    at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 /// Current UTC timestamp with milliseconds, for a log line: fixed width, so a
 /// log still sorts as text, and fine enough to order the steps of one move.
 pub fn now_iso8601_millis() -> String {
@@ -52,5 +60,13 @@ mod tests {
         // Lexicographic order is chronological order, which is what the search
         // predicates and the journal both rely on.
         assert!("2026-01-01T00:00:00Z" < now.as_str());
+    }
+
+    #[test]
+    fn a_file_time_renders_as_the_same_stamp() {
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_767_225_600);
+        let stamp = super::iso8601_of(at);
+        assert_eq!(stamp, "2026-01-01T00:00:00Z");
+        assert_eq!(stamp.len(), now_iso8601().len());
     }
 }

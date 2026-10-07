@@ -14,6 +14,7 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
             slug,
             value,
         } => set_variable(project, slug, value),
+        Action::SetDescription { project, text } => set_description(project, text),
         Action::ReplaceTag { project, from, to } => replace_tag(project, from, to),
         Action::ReplaceNote {
             project,
@@ -174,6 +175,27 @@ fn remove_tags(project: Box<Project>, tags: Vec<String>) -> Result<ActionOutcome
     ))
 }
 
+fn set_description(project: Box<Project>, text: String) -> Result<ActionOutcome> {
+    let meta = crate::core::operations::set_description(&project, &text)?;
+    let mut patched = (*project).clone();
+    let path = patched.path.clone();
+    patched.description = meta.description;
+    let message = if patched.description.is_empty() {
+        format!("Cleared the description of {}", project.id)
+    } else {
+        format!("Set the description of {}", project.id)
+    };
+    Ok(ActionOutcome::new(
+        ListChange::Patched {
+            project: Box::new(patched),
+            was: path.clone(),
+            stale: vec![path],
+        },
+        message,
+    )
+    .session(format!("described {}", project.id)))
+}
+
 fn set_variable(project: Box<Project>, slug: String, value: String) -> Result<ActionOutcome> {
     let meta = crate::core::operations::set_variable(&project, &slug, &value)?;
     let mut patched = (*project).clone();
@@ -309,6 +331,7 @@ fn create_project(request: &CreateRequest) -> Result<ActionOutcome> {
         template_slug: request.template_slug.clone(),
         variables: request.vars.clone(),
         base_dir_override: request.base_dir_override.clone(),
+        description: request.description.clone(),
     })?;
     drop(created.take_mutation_lock());
     let root = crate::util::paths::canonical(&created.plan.root_path)
@@ -476,6 +499,7 @@ fn register_one(
         rename: request.rename && !request.recursive,
         use_today: request.use_today,
         created_override: request.created_override.clone(),
+        description: request.description.clone(),
         on_pinfo_conflict: if request.recursive {
             crate::cli::register::PinfoConflict::Skip
         } else {

@@ -20,6 +20,12 @@ pub struct ProjectJson {
     pub template: String,
     pub template_name: String,
     pub created: String,
+    /// When the project was last written (`library::touched`): the newer of
+    /// its file's and its folder's modification time, as `created` is
+    /// written. `null` where neither could be read.
+    pub touched: Option<String>,
+    /// The one line that says what the project is; empty when none.
+    pub description: String,
     pub tags: Vec<String>,
     /// Whether the folder is still there. A cached project whose folder went
     /// away is dropped before it reaches here, so this is normally `true`.
@@ -38,6 +44,8 @@ impl ProjectJson {
             template: project.template.clone(),
             template_name: project.template_name.clone(),
             created: project.created.clone(),
+            touched: library::touched(project),
+            description: crate::core::validated::Description::one_line(&project.description),
             tags: project.tags.clone(),
             exists: project.path.exists(),
         }
@@ -62,6 +70,10 @@ pub struct TodoJson {
 pub struct ProjectDetailJson {
     #[serde(flatten)]
     pub project: ProjectJson,
+    /// The timestamp of the newest dated note, or `null` with none: when
+    /// somebody last *said* something happened here, as distinct from
+    /// `touched`, which is when anything wrote the file.
+    pub last_note: Option<String>,
     pub variables: std::collections::BTreeMap<String, String>,
     pub notes: Vec<NoteJson>,
     pub todos: Vec<TodoJson>,

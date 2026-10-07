@@ -631,8 +631,12 @@ pub fn detail(path: &Path) -> ProjectDetail {
     paths::stall_if_marked(path);
     // The stamp before the reads: a write that lands between the two is
     // caught by the next check rather than hidden behind a newer stamp.
+    let stamp = stamp_of(path);
     let mut detail = ProjectDetail {
-        stamp: stamp_of(path),
+        stamp,
+        touched: stamp.and_then(|stamp| {
+            crate::core::library::touched_from(stamp.info_modified, stamp.dir_modified)
+        }),
         ..ProjectDetail::default()
     };
 

@@ -71,6 +71,10 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
+        /// One line saying what the project is, shown in every list (change it later with 'fastf desc')
+        #[arg(long, value_name = "TEXT")]
+        description: Option<String>,
+
         /// Variable values as --slug=value flags (e.g. --artist="Ariana Grande" --title=Lullaby).
         /// Run 'fastf template show <slug>' to see a template's variables.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -489,6 +493,10 @@ enum Commands {
         #[arg(short = 'y', long, conflicts_with = "recursive")]
         yes: bool,
 
+        /// One line saying what the project is, shown in every list (not with --recursive)
+        #[arg(long, value_name = "TEXT", conflicts_with = "recursive")]
+        description: Option<String>,
+
         /// Variable values as --slug=value flags when --template is set.
         /// Same parsing contract as `fastf new`: vars use =; flags may appear in any order.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -588,6 +596,29 @@ enum Commands {
         /// Print JSON instead of the summary
         #[arg(long)]
         json: bool,
+    },
+
+    /// Show or set a project's one-line description
+    #[command(
+        after_help = "The description is one line under the project's name: what it is,\n\
+        for whom, where it stands. Every list prints it, the app's pane edits\n\
+        it, and 'fastf new --description' writes it at creation.\n\n\
+        Examples:\n  \
+            fastf desc ID0047                              # print it\n  \
+            fastf desc ID0047 \"Music video for Lullaby, Indie, due in May\"\n  \
+            fastf desc ID0047 --clear                      # remove it"
+    )]
+    Desc {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+
+        /// The new description (one line, at most 200 characters); omit to print the current one
+        #[arg(conflicts_with = "clear")]
+        text: Option<String>,
+
+        /// Remove the description
+        #[arg(long)]
+        clear: bool,
     },
 
     /// Append a dated note to a project
@@ -1102,8 +1133,21 @@ fn run() -> Result<()> {
             no_preview,
             no_post,
             yes,
+            description,
             extra,
-        }) => run_new(template, dry_run, base_dir, no_preview, no_post, yes, extra),
+        }) => run_new(
+            cli::new::NewArgs {
+                template_slug: template,
+                vars: Default::default(),
+                dry_run,
+                base_dir_override: base_dir,
+                no_preview,
+                no_post,
+                yes,
+                description,
+            },
+            extra,
+        ),
 
         Some(Commands::Template { action }) => run_template(action),
 
@@ -1186,6 +1230,7 @@ fn run() -> Result<()> {
             use_today,
             created,
             yes,
+            description,
             extra,
         }) => run_register(
             path,
@@ -1198,6 +1243,7 @@ fn run() -> Result<()> {
                 use_today,
                 created,
                 yes,
+                description,
             },
             extra,
         ),
@@ -1217,6 +1263,10 @@ fn run() -> Result<()> {
         }
 
         Some(Commands::Show { query, json }) => cli::show::run(cli::show::ShowArgs { query, json }),
+
+        Some(Commands::Desc { query, text, clear }) => {
+            cli::desc::run(cli::desc::DescArgs { query, text, clear })
+        }
 
         Some(Commands::Note { action }) => run_note(action),
 
@@ -1278,25 +1328,11 @@ fn run_app() -> Result<()> {
     tui::run(tui::Entry::Menu)
 }
 
-fn run_new(
-    template: Option<String>,
-    dry_run: bool,
-    base_dir: Option<String>,
-    no_preview: bool,
-    no_post: bool,
-    yes: bool,
-    extra: Vec<String>,
-) -> Result<()> {
+/// `args` is what clap parsed before the first undeclared token; `extra` is
+/// everything after it, variables and the flags that landed there alike.
+fn run_new(mut args: cli::new::NewArgs, extra: Vec<String>) -> Result<()> {
     let classified = classify_for("new", extra)?;
-    let mut args = cli::new::NewArgs {
-        template_slug: template,
-        vars: classified.vars,
-        dry_run,
-        base_dir_override: base_dir,
-        no_preview,
-        no_post,
-        yes,
-    };
+    args.vars = classified.vars;
     cli::new::apply_extra(&mut args, classified.recognized)?;
     cli::new::run(args)
 }
@@ -1381,6 +1417,7 @@ fn run_register(
             use_today: flags.use_today,
             created_override: flags.created,
             yes: flags.yes,
+            description: flags.description.unwrap_or_default(),
         })
     }
 }
@@ -1539,6 +1576,7 @@ mod tests {
             no_preview: false,
             no_post: false,
             yes: false,
+            description: None,
         };
         fastf::cli::new::apply_extra(&mut new_args, every_declared_flag("new"))
             .expect("every `new` flag must be handled after the slug");

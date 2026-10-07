@@ -654,7 +654,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneEdit,
         "Edit",
-        "act on what is under the cursor: edit the name, a tag, a variable or a note, toggle a todo, or add one",
+        "act on what is under the cursor: edit the name, the description, a tag, a variable or a note, toggle a todo, or add one",
         &[Context::Detail],
         [Key::plain(KeyCode::Enter)],
         Project,
@@ -669,7 +669,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneEditText,
         "Edit the text",
-        "open the row under the cursor in place: reword a todo (Enter ticks it), a tag, a variable, a note, the name; emptied, a todo, a tag or a note is removed",
+        "open the row under the cursor in place: reword a todo (Enter ticks it), a tag, a variable, a note, the description, the name; emptied, a todo, a tag, a note or the description is removed",
         &[Context::Detail],
         [Key::plain(KeyCode::F(2))],
         Project,

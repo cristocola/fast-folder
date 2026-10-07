@@ -14,6 +14,7 @@ fn project(tags: &[&str], template: &str) -> Project {
         name: "ID0001_One".to_string(),
         base: PathBuf::from("/mnt/projects"),
         created: "2026-01-01T00:00:00Z".to_string(),
+        description: String::new(),
         tags: tags.iter().map(|t| t.to_string()).collect(),
         exists: true,
     }
@@ -37,6 +38,7 @@ fn metadata(variables: &[(&str, &str)]) -> Metadata {
         id_number: Some(1),
         template: "client".to_string(),
         template_name: "Client".to_string(),
+        description: String::new(),
         created: String::new(),
         folder: String::new(),
         path: String::new(),
@@ -57,6 +59,8 @@ fn rows_are_one_per_tag_then_add_tag_and_reading_until_the_detail_lands() {
         rows,
         vec![
             PaneRow::Name("ID0001_One".to_string()),
+            // The row is there to be filled even when nothing was written.
+            PaneRow::Description(String::new()),
             PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
             // Before the read the size is all the pane knows.
             PaneRow::Facts(vec![Fact::Size]),
@@ -336,6 +340,7 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
         selectable,
         vec![
             &PaneRow::Name("ID0001_One".to_string()),
+            &PaneRow::Description(String::new()),
             &PaneRow::Tag("draft".to_string()),
             &PaneRow::AddTag,
             &PaneRow::Todo {
@@ -489,20 +494,25 @@ fn a_registered_project_offers_every_variable_as_text() {
 #[test]
 fn the_cursor_walks_selectable_rows_and_stops() {
     let rows = pane_rows(&project(&["draft"], "client"), None, 0);
-    // Name(0) Facts Figures Rule Tag(4) AddTag(5) Reading
-    assert_eq!(step_cursor(&rows, 0, 1), 4, "over the facts and the rule");
-    assert_eq!(step_cursor(&rows, 4, 1), 5);
-    assert_eq!(step_cursor(&rows, 5, 1), 5, "the end is the end");
-    assert_eq!(step_cursor(&rows, 5, -1), 4);
-    assert_eq!(step_cursor(&rows, 0, -1), 0);
-    assert_eq!(step_cursor(&rows, 0, isize::MAX), 5);
-    assert_eq!(step_cursor(&rows, 5, isize::MIN), 0);
+    // Name(0) Description(1) Facts Figures Rule Tag(5) AddTag(6) Reading
     assert_eq!(
-        step_cursor(&rows, 2, 0),
-        4,
+        step_cursor(&rows, 0, 1),
+        1,
+        "down from the name is the description"
+    );
+    assert_eq!(step_cursor(&rows, 1, 1), 5, "over the facts and the rule");
+    assert_eq!(step_cursor(&rows, 5, 1), 6);
+    assert_eq!(step_cursor(&rows, 6, 1), 6, "the end is the end");
+    assert_eq!(step_cursor(&rows, 6, -1), 5);
+    assert_eq!(step_cursor(&rows, 0, -1), 0);
+    assert_eq!(step_cursor(&rows, 0, isize::MAX), 6);
+    assert_eq!(step_cursor(&rows, 6, isize::MIN), 0);
+    assert_eq!(
+        step_cursor(&rows, 3, 0),
+        5,
         "a cursor on a row it may not rest on settles below"
     );
-    assert_eq!(step_cursor(&rows, 99, 0), 5, "or on the last, past the end");
+    assert_eq!(step_cursor(&rows, 99, 0), 6, "or on the last, past the end");
 }
 
 #[test]
@@ -679,15 +689,15 @@ fn facts_flow_whole_and_wrap_between_them() {
     let project = project(&[], "client-project");
     let wide = pane_rows(&project, None, 200);
     assert_eq!(
-        wide[1],
+        wide[2],
         PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
         "a wide pane has what the project is on one row"
     );
     // "client-project" (14) + gap (7) + "projects" (8) = 29; the date's 18
     // more does not fit 40, so it starts the next row.
     let narrow = pane_rows(&project, None, 40);
-    assert_eq!(narrow[1], PaneRow::Facts(vec![Fact::Template, Fact::Base]));
-    assert_eq!(narrow[2], PaneRow::Facts(vec![Fact::Created]));
+    assert_eq!(narrow[2], PaneRow::Facts(vec![Fact::Template, Fact::Base]));
+    assert_eq!(narrow[3], PaneRow::Facts(vec![Fact::Created]));
     // Narrower than any two: one fact to a row.
     let tight = pane_rows(&project, None, 15);
     let facts: Vec<&PaneRow> = tight

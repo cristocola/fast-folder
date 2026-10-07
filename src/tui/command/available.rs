@@ -153,8 +153,8 @@ pub(super) fn pane_row_and_not_busy(app: &App) -> Availability {
     }
 }
 
-/// F2 opens text in place: on a row that holds some — the name, a tag, a
-/// variable, a note, a todo. Hidden on a rule, a heading, an add row, the
+/// F2 opens text in place: on a row that holds some — the name, the
+/// description, a tag, a variable, a note, a todo. Hidden on a rule, a heading, an add row, the
 /// folder listing: there is nothing there to type over.
 pub(super) fn pane_text_row(app: &App) -> Availability {
     use crate::tui::app::pane::PaneRow;
@@ -163,7 +163,8 @@ pub(super) fn pane_text_row(app: &App) -> Availability {
             // The name is the rename, with the rename's own rule about marks.
             Some(PaneRow::Name(_)) => single_and_not_busy(app),
             Some(
-                PaneRow::Tag(_)
+                PaneRow::Description(_)
+                | PaneRow::Tag(_)
                 | PaneRow::Variable { .. }
                 | PaneRow::Note { .. }
                 | PaneRow::Todo { .. },

@@ -158,6 +158,9 @@ pub fn print_success(plan: &ProjectPlan, template: &Template) {
     println!("\n{}  {}", "✓".green().bold(), "Project created".bold());
     println!("  {} {}", "Template:".dimmed(), template.name);
     println!("  {} {}", "ID:".dimmed(), plan.id_str);
+    if !plan.description.is_empty() {
+        println!("  {} {}", "About:".dimmed(), plan.description);
+    }
     println!();
     // Canonicalize now that the folder exists, for the real absolute path
     let resolved =

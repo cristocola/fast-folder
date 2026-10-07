@@ -396,6 +396,7 @@ pub(crate) fn project_from_meta(meta: Metadata, base: &Path, dir: &Path) -> Proj
         path: dir.to_path_buf(),
         base: base.to_path_buf(),
         created,
+        description: meta.description,
         tags: meta.tags,
         exists: true,
     }
@@ -407,6 +408,5 @@ pub(crate) fn folder_created_fallback(dir: &Path) -> String {
     let Some(mtime) = dir_mtime(dir) else {
         return String::new();
     };
-    let dt: chrono::DateTime<chrono::Utc> = mtime.into();
-    dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    crate::util::time::iso8601_of(mtime)
 }

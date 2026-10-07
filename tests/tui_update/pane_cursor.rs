@@ -30,8 +30,14 @@ fn the_cursor_walks_selectable_rows_and_stops_at_the_ends() {
     let rows = app.pane_rows();
     press(&mut app, Key::ch('j'));
     assert!(
+        matches!(rows[app.pane_cursor], PaneRow::Description(_)),
+        "down from the name is the description: {:?}",
+        rows[app.pane_cursor]
+    );
+    press(&mut app, Key::ch('j'));
+    assert!(
         matches!(rows[app.pane_cursor], PaneRow::Tag(_)),
-        "down from the name is the first tag, over the facts: {:?}",
+        "down from the description is the first tag, over the facts: {:?}",
         rows[app.pane_cursor]
     );
     press(&mut app, Key::ch('G'));

@@ -34,6 +34,12 @@ pub(crate) struct CacheEntry {
     pub(crate) template_name: String,
     pub(crate) name: String,
     pub(crate) created: String,
+    /// One line, or absent. `serde(default)` with no version bump, as
+    /// `id_number`: an older fastf that rewrites the index drops the key, and
+    /// a list then shows no description until the project is opened or the
+    /// base reindexed, which is untidy and nothing worse.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) description: String,
     #[serde(default)]
     pub(crate) tags: Vec<String>,
 }
@@ -72,6 +78,7 @@ impl CacheEntry {
             template_name: project.template_name.clone(),
             name: project.name.clone(),
             created: project.created.clone(),
+            description: project.description.clone(),
             tags: project.tags.clone(),
         }
     }
@@ -108,6 +115,7 @@ impl CacheEntry {
             path: base.join(dir),
             base: base.to_path_buf(),
             created: self.created,
+            description: self.description,
             tags: self.tags,
             exists: true,
         })

@@ -5,8 +5,8 @@
 //! reloads authoritative state beneath it, performs the mutation, and refreshes
 //! disposable caches before returning.
 
-use anyhow::{Context, Result, bail};
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,9 @@ pub struct CreateOptions {
     pub template_slug: String,
     pub variables: HashMap<String, String>,
     pub base_dir_override: Option<String>,
+    /// The project's one line; empty for none. Validated here, so every
+    /// surface that creates gets the same refusal.
+    pub description: String,
 }
 
 /// A create result carries the mutation lock so the caller can drop it before
@@ -67,9 +70,11 @@ pub fn create(options: CreateOptions) -> Result<CreateOutcome> {
         )?;
     }
     let template = template::find_by_slug(&options.template_slug)?;
+    let description = description_for(&options.description)?;
     crate::core::vars::validated_raw_values(&template, &options.variables)?;
     let mut counters = Counters::load()?;
-    let planned = project::plan(&template, &options.variables, &config, &counters)?;
+    let mut planned = project::plan(&template, &options.variables, &config, &counters)?;
+    planned.description = description;
     let plan = project::create(&planned, &template, &mut counters, &config, false)?;
     Ok(CreateOutcome {
         template,
@@ -77,6 +82,15 @@ pub fn create(options: CreateOptions) -> Result<CreateOutcome> {
         plan,
         mutation_lock: Some(mutation_lock),
     })
+}
+
+/// The description a create or a register writes: the one rule, applied
+/// before anything is claimed. A template variable that happens to be called
+/// `description` is a different thing — a value the template interpolates —
+/// and the two coexist here; which one `--description` on the command line
+/// means is `cli::new`'s question (`description_flag`).
+fn description_for(raw: &str) -> Result<String> {
+    Ok(crate::core::validated::Description::parse(raw)?.into_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +154,8 @@ pub struct RegisterOptions {
     pub use_today: bool,
     pub created_override: Option<String>,
     pub on_pinfo_conflict: PinfoConflict,
+    /// The project's one line; empty for none.
+    pub description: String,
 }
 
 #[derive(Debug)]
@@ -177,6 +193,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
 
         let counters = Counters::load()?;
         let (template, raw_values) = registration_template(&options)?;
+        let description = description_for(&options.description)?;
 
         let folder_name = canonical
             .file_name()
@@ -192,6 +209,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             vars: plan_vars,
             id_str: id.clone(),
             counter_value: id_value,
+            description,
             ctx: crate::core::naming::RenderContext::now(&config.date_format),
         };
         let created = resolve_created(
@@ -215,6 +233,7 @@ pub fn register(options: RegisterOptions) -> Result<RegisterOutcome> {
             path: canonical.clone(),
             base,
             created,
+            description: plan.description.clone(),
             tags,
             exists: true,
         };
@@ -522,10 +541,7 @@ pub fn resolve_created(
         )
     })?;
     match metadata.created().or_else(|_| metadata.modified()) {
-        Ok(value) => {
-            let date: DateTime<Utc> = value.into();
-            Ok(date.to_rfc3339_opts(SecondsFormat::Secs, true))
-        }
+        Ok(value) => Ok(crate::util::time::iso8601_of(value)),
         Err(_) => Ok(crate::util::time::now_iso8601()),
     }
 }
@@ -592,6 +608,26 @@ pub fn replace_tag(
         );
     }
     Ok(tags)
+}
+
+/// Set — or, with an empty `text`, clear — the project's one-line description.
+///
+/// Checked by `validated::Description` **before** the lock, like a tag, so the
+/// command line, the pane and the wizard refuse the same things with the same
+/// sentence. Empty removes the key: a project nobody described and a project
+/// whose description was cleared write the same bytes.
+pub fn set_description(project: &Project, text: &str) -> Result<project_info::Metadata> {
+    let description = crate::core::validated::Description::parse(text)?;
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    let pinfo = project_info::pinfo_path(&project.path);
+    project_info::write_frontmatter(&pinfo, |metadata| {
+        metadata.description = description.into_string();
+    })?;
+    library::refresh_cache(&project.path);
+    project_info::read_metadata(&project.path)?
+        .ok_or_else(|| anyhow!("{} has no readable metadata after the write", project.id))
 }
 
 pub fn remove_tags(project: &Project, tags: &[String]) -> Result<Vec<String>> {

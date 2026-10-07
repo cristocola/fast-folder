@@ -2,6 +2,7 @@ pub mod apply;
 pub mod config;
 pub mod copy;
 pub mod copy_to;
+pub mod desc;
 pub mod extra;
 pub mod folder_verbs;
 

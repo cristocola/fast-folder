@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases highest ID0248 "
@@ -20,6 +19,7 @@ expression: frame
 "└──────────────────────────────────────────────────────────┘"
 "┌ ID0248 ──────────────────────────────────────────────────┐"
 "│ 2026-08-28_Lullaby_Remix_ID0248                          │"
+"│ A Fiverr music video: treatment approved, shoot booked   │"
 "│ music-video   ·   projects   ·   created 2026-08-28      │"
 "│ scanning…   ·   2 notes   ·   2/4 todos done             │"
 "│ ── tags ──────────────────────────────────────────────── │"
@@ -39,7 +39,6 @@ expression: frame
 "│ 2026-01-16 first cut sent to Acme                        │"
 "│            hold the logo two seconds longer              │"
 "│ · add a note                                             │"
-"│                                                          │"
 "│                                                          │"
 "│                                                          │"
 "│                                                          │"

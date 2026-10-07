@@ -28,6 +28,8 @@ pub const FIELD_CREATED: &str = "created";
 pub const FIELD_CREATED_DATE: &str = "created_date";
 /// Fill in the template's missing folders and files.
 pub const FIELD_APPLY: &str = "apply";
+/// The project's one line. One folder only: a base of them shares none.
+pub const FIELD_DESCRIPTION: &str = "description";
 
 pub const SCOPE_ONE: &str = "one folder";
 pub const SCOPE_RECURSIVE: &str = "every unregistered folder in a base";
@@ -90,6 +92,12 @@ pub fn register_form(templates: &[String]) -> Form {
             false,
         )
         .hidden(true),
+        Field::text(
+            FIELD_DESCRIPTION,
+            "Description",
+            "— optional, one line: what the project is, shown in every list",
+            String::new(),
+        ),
     ])
 }
 
@@ -106,6 +114,7 @@ pub fn sync_visibility(flow: &mut Flow) {
     let has_template = flow.form.value(FIELD_TEMPLATE) != NO_TEMPLATE;
     let typed_date = flow.form.value(FIELD_CREATED) == CREATED_TYPED;
     flow.form.set_hidden(FIELD_RENAME, recursive);
+    flow.form.set_hidden(FIELD_DESCRIPTION, recursive);
     flow.form
         .set_hidden(FIELD_APPLY, recursive || !has_template);
     flow.form
@@ -134,6 +143,13 @@ pub fn request(flow: &Flow) -> Request {
             .then(|| flow.form.value(FIELD_CREATED_DATE).trim().to_string())
             .filter(|date| !date.is_empty()),
         recursive: is_recursive(&flow.form),
+        // A hidden field keeps what was typed into it before the scope
+        // changed, and one line cannot describe every folder in a base.
+        description: if is_recursive(&flow.form) {
+            String::new()
+        } else {
+            flow.form.value(FIELD_DESCRIPTION).trim().to_string()
+        },
     }
 }
 
@@ -151,6 +167,8 @@ pub struct Request {
     /// A date typed for the record, as `--created` gives one.
     pub created_override: Option<String>,
     pub recursive: bool,
+    /// The project's one line; empty for none, and ignored in bulk.
+    pub description: String,
 }
 
 impl App {

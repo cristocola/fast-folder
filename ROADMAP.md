@@ -49,6 +49,10 @@ Unscheduled; nothing here is promised.
 
 - Editing a template's starter todos in the guided builder: the manifest field
   round-trips untouched, but only `template.yaml` and an editor can change it.
+- A touched column in the list, and sorting by it: one stat per row, on a
+  worker, and a stale answer for a base that stopped answering.
+- A template pre-filling the description (`description: "{artist} — {title}"`
+  interpolated at create): part of template upgrades.
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.

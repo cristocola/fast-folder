@@ -21,6 +21,9 @@ pub struct ProjectPlan {
     pub id_str: String,
     /// Counter value used.
     pub counter_value: u64,
+    /// The one line that says what the project is, already validated
+    /// (`validated::Description`); empty when none was given.
+    pub description: String,
     /// The date tokens this create resolves to, sampled once when the plan was
     /// built.
     ///

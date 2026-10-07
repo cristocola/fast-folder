@@ -47,6 +47,13 @@ pub fn sample_projects(n: usize) -> Vec<Project> {
                 name: folder,
                 base: PathBuf::from(BASE),
                 created: format!("2026-08-{day:02}T10:00:00Z"),
+                description: match i % 4 {
+                    0 => "A Fiverr music video: treatment approved, shoot booked".to_string(),
+                    2 => {
+                        "Lookbook for the spring line, delivery at the end of the month".to_string()
+                    }
+                    _ => String::new(),
+                },
                 tags: match i % 3 {
                     0 => vec!["draft".to_string()],
                     1 => vec!["client/Acme".to_string(), "draft".to_string()],

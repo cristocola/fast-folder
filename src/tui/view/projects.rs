@@ -108,6 +108,10 @@ fn fact_spans(
             Span::styled("created ", theme.dim()),
             Span::styled(date_cell(&project.created).to_string(), theme.text()),
         ],
+        Fact::Touched(at) => vec![
+            Span::styled("touched ", theme.dim()),
+            Span::styled(date_cell(at).to_string(), theme.text()),
+        ],
         Fact::Size => vec![Span::styled(
             match app.size_cell(&project.path) {
                 SizeCell::Pending => theme.glyphs.pending.to_string(),
@@ -645,6 +649,17 @@ fn todo_in_editor(app: &App) -> Option<usize> {
     }
 }
 
+/// Whether the description is open in the editor.
+fn editing_description(app: &App) -> bool {
+    matches!(
+        &app.pane_edit,
+        Some(PaneEdit::Line {
+            target: EditTarget::Description,
+            ..
+        })
+    )
+}
+
 /// The width of the variables' label column: the widest label, at most
 /// `LABEL_MAX`.
 fn key_width(rows: &[PaneRow]) -> usize {
@@ -673,6 +688,24 @@ fn pane_line(
     match &rows[index] {
         PaneRow::Name(first) => Line::from(Span::styled(first.clone(), theme.bold())),
         PaneRow::NameLine(rest) => Line::from(Span::styled(rest.clone(), theme.bold())),
+        // The description's rows go blank while it is open in the editor,
+        // which holds the whole of it on one line.
+        PaneRow::Description(first) => {
+            if editing_description(app) {
+                Line::default()
+            } else if first.is_empty() {
+                Line::from(Span::styled("(no description)", theme.dim()))
+            } else {
+                Line::from(Span::styled(first.clone(), theme.text()))
+            }
+        }
+        PaneRow::DescriptionLine(rest) => {
+            if editing_description(app) {
+                Line::default()
+            } else {
+                Line::from(Span::styled(rest.clone(), theme.text()))
+            }
+        }
         PaneRow::Facts(facts) => facts_line(app, project, facts),
         PaneRow::Rule(section) => rule_line(theme, section.label(), width),
         PaneRow::Tag(tag) => Line::from(Span::styled(
@@ -1043,6 +1076,8 @@ fn line_editor_prefix(
             format!("{:<key_w$} ", fit(&label, key_w, g.ellipsis))
         }
         EditTarget::Tag(_) => format!("{} ", g.dot),
+        // The description is edited where it reads, with nothing in front.
+        EditTarget::Description => String::new(),
         // A todo is edited behind its own box, where it sits.
         EditTarget::Todo { .. } => match rows.get(edit_row) {
             Some(PaneRow::Todo { done, phased, .. }) => format!(

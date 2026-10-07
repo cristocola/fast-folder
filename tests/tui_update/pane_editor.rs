@@ -35,6 +35,7 @@ pub(crate) fn editing_fixture() -> App {
         id_number: project.id_number,
         template: project.template.clone(),
         template_name: project.template_name.clone(),
+        description: String::new(),
         created: project.created.clone(),
         folder: project.name.clone(),
         path: String::new(),
@@ -108,6 +109,136 @@ pub(crate) fn sent(effects: &[Effect]) -> Option<&Action> {
         Effect::Run(_, action) => Some(action.as_ref()),
         _ => None,
     })
+}
+
+/// Enter on the description opens the whole line in place — the file's,
+/// not the row's wrapped first part — and Enter again sends it; unchanged
+/// is a cancel, and a second line is refused under the row with the text
+/// still there to fix.
+#[test]
+fn enter_on_the_description_edits_the_whole_line_and_sends_it() {
+    let mut app = editing_fixture();
+    let project = app.library.selected().unwrap().clone();
+    // The file holds a longer line than the row shows.
+    let long = "A Fiverr music video for Ariana Grande: treatment approved, shoot on the 28th, \
+                the label wants the chorus held longer";
+    let mut detail = app.details.get(&project.path).cloned().unwrap();
+    detail.meta.as_mut().unwrap().description = long.to_string();
+    update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    // The row took the file's line as the detail landed (the index may lack
+    // it); the action carries the row as it now is.
+    let project = app.library.selected().unwrap().clone();
+    assert_eq!(project.description, long, "the row healed from the file");
+    go_to(&mut app, |row| matches!(row, PaneRow::Description(_)));
+    let rows = app.pane_rows();
+    assert!(
+        matches!(&rows[app.pane_cursor + 1], PaneRow::DescriptionLine(_)),
+        "the rest wraps onto the row below: {:?}",
+        rows[app.pane_cursor + 1]
+    );
+
+    // Unchanged: a cancel, nothing sent.
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(&app.pane_edit, Some(PaneEdit::Line { input, .. }) if input.text() == long),
+        "the whole line, not the first row of it: {:?}",
+        app.pane_edit
+    );
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none() && app.pane_edit.is_none());
+
+    // Changed: sent as the description, trimmed.
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, " Lookbook for the spring line ");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        sent(&effects),
+        Some(&Action::SetDescription {
+            project: Box::new(project.clone()),
+            text: "Lookbook for the spring line".to_string(),
+        })
+    );
+    assert!(app.pane_edit.as_ref().is_some_and(|edit| edit.pending()));
+
+    // The worker answers with the row patched: the edit closes and the
+    // cursor is still on the description.
+    let mut patched = project.clone();
+    patched.description = "Lookbook for the spring line".to_string();
+    let id = app.busy_id.expect("an action in flight");
+    update(
+        &mut app,
+        Msg::ActionDone {
+            id,
+            outcome: Ok(Box::new(fastf::tui::effect::ActionOutcome::new(
+                fastf::tui::effect::ListChange::Patched {
+                    project: Box::new(patched),
+                    was: project.path.clone(),
+                    stale: vec![project.path.clone()],
+                },
+                "Set the description",
+            ))),
+        },
+    );
+    assert!(app.pane_edit.is_none());
+    let rows = app.pane_rows();
+    assert_eq!(
+        rows[app.pane_cursor],
+        PaneRow::Description("Lookbook for the spring line".to_string()),
+        "the row shows the new line, from the patched row, before the re-read"
+    );
+}
+
+/// Emptied, the description is removed; over the length, it is refused by
+/// name under the row, and the text stays to be shortened.
+#[test]
+fn an_emptied_description_is_cleared_and_a_paragraph_is_refused() {
+    let mut app = editing_fixture();
+    let project = app.library.selected().unwrap().clone();
+    let mut detail = app.details.get(&project.path).cloned().unwrap();
+    detail.meta.as_mut().unwrap().description = "one line".to_string();
+    update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let project = app.library.selected().unwrap().clone();
+    go_to(&mut app, |row| matches!(row, PaneRow::Description(_)));
+
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, &"x".repeat(201));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none());
+    match &app.pane_edit {
+        Some(PaneEdit::Line { error, input, .. }) => {
+            assert!(
+                error.as_deref().is_some_and(|e| e.contains("at most 200")),
+                "{error:?}"
+            );
+            assert_eq!(input.text().len(), 201, "the text stays to be shortened");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    press(&mut app, Key::ctrl('u'));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        sent(&effects),
+        Some(&Action::SetDescription {
+            project: Box::new(project),
+            text: String::new(),
+        }),
+        "emptied is cleared, not cancelled"
+    );
 }
 
 #[test]
@@ -217,6 +348,7 @@ fn enter_on_a_text_variable_edits_in_place_and_enter_again_sends_it() {
             id_number: project.id_number,
             template: project.template.clone(),
             template_name: project.template_name.clone(),
+            description: String::new(),
             created: project.created.clone(),
             folder: project.name.clone(),
             path: String::new(),

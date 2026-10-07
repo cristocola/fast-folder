@@ -29,6 +29,8 @@ use crate::tui::widgets::form::{Field, Form, FormEvent};
 pub const FIELD_TEMPLATE: &str = "template";
 /// The base a new project is created in; present only with a choice to make.
 pub const FIELD_BASE: &str = "base";
+/// The project's one line, asked once the template and the base are settled.
+pub const FIELD_DESCRIPTION: &str = "description";
 /// The folder `apply` fills in.
 pub const FIELD_TARGET: &str = "target";
 /// A variable field's key is this plus the variable's slug.
@@ -244,6 +246,17 @@ impl Flow {
                 self.form.fields.push(field);
             }
         }
+        // The description is the last question: the template's own come
+        // first, and one line about the whole comes once they are answered.
+        if let Some(at) = self
+            .form
+            .fields
+            .iter()
+            .position(|field| field.key == FIELD_DESCRIPTION)
+        {
+            let field = self.form.fields.remove(at);
+            self.form.fields.push(field);
+        }
         self.template = template;
         if self.form.focused().is_none() {
             self.form.selected = 0;
@@ -296,6 +309,12 @@ pub fn create_form(templates: &[String], template_at: usize, bases: &[String]) -
         )
         .hidden(bases.len() < 2),
     );
+    fields.push(Field::text(
+        FIELD_DESCRIPTION,
+        "Description",
+        "— optional, one line: what the project is, shown in every list",
+        String::new(),
+    ));
     Form::new(fields)
 }
 
@@ -658,6 +677,7 @@ impl App {
                 template_slug: flow.template_slug()?,
                 vars: flow.variables(),
                 base_dir_override: self.chosen_base(flow),
+                description: flow.form.value(FIELD_DESCRIPTION).trim().to_string(),
             })),
             FlowKind::Apply => Some(Request::Apply(ApplyRequest {
                 template_slug: flow.template_slug()?,

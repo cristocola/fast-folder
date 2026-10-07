@@ -42,6 +42,47 @@ fn cache_round_trips_base_relative() {
     assert_eq!(reconstructed.path, base.join("proj_a"));
 }
 
+/// The description rides in the index like the tags — so a list never opens
+/// a file for it — as an additive key: absent when empty, and no version
+/// bump, so an older fastf reads the index and a newer one reads an older
+/// index as "no description" rather than rescanning.
+#[test]
+fn the_index_carries_a_description_without_a_version_bump() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    let dir = base.join("proj_a");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("PROJECT_INFO.md"),
+        "---\nid: ID0001\ntemplate: gen\ntemplate_name: Gen\n\
+         description: one line about it\ncreated: 2026-01-01T00:00:00Z\n---\n",
+    )
+    .unwrap();
+    write_project(base, "proj_b", "ID0002", "gen", "2026-01-02T00:00:00Z");
+
+    let projects = scan_base(base);
+    write_cache(base, &projects).unwrap();
+    let raw: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(cache_path(base)).unwrap()).unwrap();
+    assert_eq!(raw["version"], 1, "additive: no version bump");
+    let entries = raw["entries"].as_array().unwrap();
+    let a = entries.iter().find(|e| e["id"] == "ID0001").unwrap();
+    let b = entries.iter().find(|e| e["id"] == "ID0002").unwrap();
+    assert_eq!(a["description"], "one line about it");
+    assert!(b.get("description").is_none(), "absent when empty: {b}");
+
+    let cache = load_cache(base).unwrap();
+    let from_cache: Vec<Project> = cache
+        .entries
+        .into_iter()
+        .filter_map(|entry| entry.into_project(base))
+        .collect();
+    let a = from_cache.iter().find(|p| p.id == "ID0001").unwrap();
+    let b = from_cache.iter().find(|p| p.id == "ID0002").unwrap();
+    assert_eq!(a.description, "one line about it");
+    assert_eq!(b.description, "");
+}
+
 /// A cache entry is a hint, and a hint may not name a path outside its base.
 ///
 /// `Path::join` *replaces* the base when given an absolute path, so an
@@ -69,6 +110,7 @@ fn a_cache_entry_that_leaves_its_base_is_dropped() {
             template_name: "General".to_string(),
             name: "forged".to_string(),
             created: "2026-01-01T00:00:00Z".to_string(),
+            description: String::new(),
             tags: vec![],
         };
         assert!(
@@ -86,6 +128,7 @@ fn a_cache_entry_that_leaves_its_base_is_dropped() {
         template_name: "General".to_string(),
         name: "proj_a".to_string(),
         created: "2026-01-01T00:00:00Z".to_string(),
+        description: String::new(),
         tags: vec![],
     };
     let project = entry.into_project(base).expect("a plain name is valid");
@@ -132,6 +175,7 @@ fn existence_check_drops_missing_folder() {
         path: base.join("proj_ghost"),
         base: base.to_path_buf(),
         created: "2026-03-01T00:00:00Z".to_string(),
+        description: String::new(),
         tags: vec![],
         exists: true,
     };

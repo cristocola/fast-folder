@@ -292,6 +292,92 @@ fn register_hides_what_bulk_registration_never_does() {
     }
 }
 
+/// The description is the wizard's last question, after the template's own,
+/// and what is typed there is what the create is asked to write.
+#[test]
+fn the_description_is_the_last_question_and_reaches_the_create() {
+    use fastf::tui::app::wizard::FIELD_DESCRIPTION;
+
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('n'));
+    land_template(&mut app, "general", &[("name", true)]);
+    match app.modals.top() {
+        Some(Modal::Flow(flow)) => {
+            let keys: Vec<&str> = flow
+                .form
+                .fields
+                .iter()
+                .filter(|field| !field.hidden)
+                .map(|field| field.key.as_str())
+                .collect();
+            assert_eq!(
+                keys.last().copied(),
+                Some(FIELD_DESCRIPTION),
+                "last, after the variables: {keys:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    press(&mut app, Key::plain(KeyCode::Tab)); // → name
+    type_text(&mut app, "Lullaby");
+    press(&mut app, Key::plain(KeyCode::Tab)); // → description
+    type_text(&mut app, "  A Fiverr music video  ");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    match &effects[..] {
+        [Effect::Preview(request)] => match request.as_ref() {
+            Request::Create(create) => {
+                assert_eq!(create.vars.get("name").map(String::as_str), Some("Lullaby"));
+                assert_eq!(create.description, "A Fiverr music video", "trimmed");
+                assert!(
+                    !create.vars.contains_key("description"),
+                    "the description is not a variable: {:?}",
+                    create.vars
+                );
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("expected a preview request, got {other:?}"),
+    }
+}
+
+/// A description typed for one folder, then the scope switched to a whole
+/// base: the hidden field keeps its text, and the request must not, or every
+/// folder in the base would be described with it.
+#[test]
+fn a_description_typed_before_switching_to_a_base_describes_nothing() {
+    use fastf::tui::app::register::{FIELD_DESCRIPTION, FIELD_SCOPE};
+
+    let mut app = fixture(6, 120, 40);
+    press(&mut app, Key::ch('e'));
+    while app.modals.top().is_some_and(|m| matches!(m, Modal::Flow(flow) if flow.form.focused().map(|f| f.key.as_str()) != Some(FIELD_DESCRIPTION))) {
+        press(&mut app, Key::plain(KeyCode::Tab));
+    }
+    type_text(&mut app, "An old shoot");
+    match app.modals.top() {
+        Some(Modal::Flow(flow)) => {
+            assert_eq!(
+                fastf::tui::app::register::request(flow).description,
+                "An old shoot"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    while app.modals.top().is_some_and(|m| matches!(m, Modal::Flow(flow) if flow.form.focused().map(|f| f.key.as_str()) != Some(FIELD_SCOPE))) {
+        press(&mut app, Key::plain(KeyCode::Tab));
+    }
+    press(&mut app, Key::plain(KeyCode::Right)); // scope → recursive
+    match app.modals.top() {
+        Some(Modal::Flow(flow)) => {
+            assert!(flow.form.field(FIELD_DESCRIPTION).unwrap().hidden);
+            assert_eq!(flow.form.value(FIELD_DESCRIPTION), "An old shoot", "kept");
+            let request = fastf::tui::app::register::request(flow);
+            assert!(request.recursive);
+            assert_eq!(request.description, "", "and not asked for");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn a_created_project_is_selected_once_discovery_has_seen_it() {
     let mut app = fixture(6, 120, 40);

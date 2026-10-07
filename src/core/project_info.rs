@@ -107,6 +107,13 @@ pub struct Metadata {
     /// they are what a project is.
     #[serde(default)]
     pub template_name: String,
+    /// The one line that says what the project is. Optional, so a project
+    /// written before it existed and one nobody described serialize the same
+    /// bytes; never identity, so a bad value can only be a bad description.
+    /// `validated::Description` is the rule a writer applies; a reader takes
+    /// what it finds and shows its first line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     #[serde(default)]
     pub created: String,
     #[serde(default)]
@@ -165,6 +172,7 @@ impl Metadata {
         "id_number",
         "template",
         "template_name",
+        "description",
         "created",
         "folder",
         "path",
@@ -230,6 +238,7 @@ impl Metadata {
             id_number: Some(plan.counter_value),
             template: tmpl.slug.clone(),
             template_name: tmpl.name.clone(),
+            description: plan.description.clone(),
             created,
             folder: plan.folder_name.clone(),
             // `display_path`, not `.display()`: register (and any caller that
@@ -635,6 +644,7 @@ mod tests {
             id_number: Some(1),
             template: "t".to_string(),
             template_name: "T".to_string(),
+            description: "one line".to_string(),
             created: "2026-01-01T00:00:00Z".to_string(),
             folder: "f".to_string(),
             path: "/p".to_string(),

@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                                                                                                                             highest ID0248 "
@@ -8,13 +7,13 @@ expression: frame
 " ⌕ / to search                                                                                                                                                                           12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────────────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────────────────────────────────────────────────┐"
 "│  ID     PROJECT                                            SIZE CREATED    BASE     TEMPLATE       TAGS              ││ 2026-08-28_Lullaby_Remix_ID0248                                              █"
-"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248               scanning… 2026-08-28 projects music-video    draft             █│ music-video   ·   projects   ·   created 2026-08-28                          █"
-"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247      scanning… 2026-08-27 projects general        client/Acme draft █│ scanning…   ·   2 notes   ·   2/4 todos done                                 █"
-"│  ID0246 2026-08-26_Old_Shoot_ID0246                   scanning… 2026-08-26 projects client-project                   █│ ── tags ──────────────────────────────────────────────────────────────────── ║"
-"│  ID0245 2026-08-25_Test_Run_ID0245                    scanning… 2026-08-25 projects music-video    draft             █│ ● draft                                                                      ║"
-"│  ID0244 2026-08-24_Spring_Campaign_ID0244             scanning… 2026-08-24 projects general        client/Acme draft ║│ · add a tag                                                                  ║"
-"│  ID0243 2026-08-23_Live_Session_ID0243                scanning… 2026-08-23 projects client-project                   ║│ ── todo ──────────────────────────────────────────────────────────────────── ║"
-"│  ID0242 2026-08-22_Lullaby_Remix_ID0242               scanning… 2026-08-22 projects music-video    draft             ║│ Shoot                                                                    2/2 ║"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248               scanning… 2026-08-28 projects music-video    draft             █│ A Fiverr music video: treatment approved, shoot booked                       █"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247      scanning… 2026-08-27 projects general        client/Acme draft █│ music-video   ·   projects   ·   created 2026-08-28                          █"
+"│  ID0246 2026-08-26_Old_Shoot_ID0246                   scanning… 2026-08-26 projects client-project                   █│ scanning…   ·   2 notes   ·   2/4 todos done                                 ║"
+"│  ID0245 2026-08-25_Test_Run_ID0245                    scanning… 2026-08-25 projects music-video    draft             █│ ── tags ──────────────────────────────────────────────────────────────────── ║"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244             scanning… 2026-08-24 projects general        client/Acme draft ║│ ● draft                                                                      ║"
+"│  ID0243 2026-08-23_Live_Session_ID0243                scanning… 2026-08-23 projects client-project                   ║│ · add a tag                                                                  ║"
+"│  ID0242 2026-08-22_Lullaby_Remix_ID0242               scanning… 2026-08-22 projects music-video    draft             ║│ ── todo ──────────────────────────────────────────────────────────────────── ║"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘"
 "                                                                                                                                                                                                        "
 " / search  a actions  o open  t terminal  y copy path  Space mark  n new  T templates  → pane  ? help  c commands                                                                                       "

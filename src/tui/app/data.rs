@@ -229,6 +229,10 @@ pub struct ProjectDetail {
     /// stat'ed, or in a fixture — so a later check can tell whether the file
     /// has changed under the pane.
     pub stamp: Option<Stamp>,
+    /// When the project was last written — the newer of the file's and the
+    /// folder's modification time, as `library::touched` reads it — or
+    /// `None` where neither could be stat'ed.
+    pub touched: Option<String>,
     /// The read that failed, if one did.
     pub error: Option<String>,
 }

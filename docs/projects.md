@@ -15,6 +15,7 @@ id: ID0047
 id_number: 47
 template: music-video
 template_name: Music Video
+description: Music video for Lullaby, an indie single, shoot on the 28th
 created: 2026-04-19T14:32:11Z
 folder: 2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
 path: /home/user/Projects/2026-04-19_Ariana_Grande_Lullaby_Indie_ID0047
@@ -52,6 +53,8 @@ auto_tags:
 - [ ] deliver the masters
 ```
 
+`description` is the project's one line: what it is, for whom, where it stands. It is written at creation (`fastf new --description`, the wizard's last question), changed any time (`fastf desc`, Enter on the row under the name in the app's pane), and absent until somebody writes it. See [Description and touched](#description-and-touched).
+
 A new project starts with an empty `## Notes` and no `## Todo`. The two notes and the list above are what a few weeks of work leave behind: `fastf note add` or the app's quick note writes a note, `fastf todo add` and the app's pane add and tick the todos, `fastf todo edit` and `fastf todo remove` reword and remove them, and you can type either in any editor.
 
 A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
@@ -73,6 +76,54 @@ This matters most when two machines share one library. A newer fastf can write a
 **If you break it, fastf says so.** Only `id` and `template` are required; `created`, `folder`, `path` and `template_name` can go missing and the project is still a project (`created` falls back to the folder's own date, and the other two are read from the folder itself anyway). But a `PROJECT_INFO.md` fastf genuinely cannot read — bytes that are not UTF-8, a missing `---` line, YAML that does not parse — means the folder drops out of `recent`, `search` and the app, and every command that walks the library prints a warning naming the folder and the file. Fix the file and it comes straight back; nothing else about the project has changed.
 
 The one to watch for on a shared drive is the encoding: a Windows editor saving as the system codepage rather than UTF-8 turns one accented character into bytes fastf cannot read.
+
+## Description and touched
+
+Two things every list says about a project that the file does not say in so
+many words: what it is, and whether it is alive.
+
+**The description** is one line, at most 200 characters, in the frontmatter.
+It is the sentence under the name in `fastf recent --plain`, `fastf show`, the
+app's pane and the JSON; free-text search matches it and `description=*…*`
+names it. It is not identity: a project without one is a project, and the key
+is absent until somebody writes it, so a file nobody described is byte for
+byte what it was. `fastf desc ID0047 "…"` sets it, `fastf desc ID0047` prints
+it, `--clear` removes it; in the app, Enter or F2 on the row under the name.
+Lists read it from the base's index like the tags, so a line typed into the
+file by hand, or written on another machine, shows in the list once the
+project is opened in the app, shown with `fastf show`, or the base is
+reindexed — `show`, `desc` and the pane always read the file.
+
+**`touched`** is when the project was last written: the newer of its
+`PROJECT_INFO.md`'s and its folder's modification time, printed beside
+`created` in the plain list, in `fastf show` and in the pane, and as the same
+fixed-width stamp in the JSON. It is never stored. Every write fastf makes
+moves it — a note, a todo ticked, a tag, a description, and also a move's
+bookkeeping, a rename and a reindex that fills in an `id_number`, so an
+archived project reads as touched on the day it was archived. A file dropped
+into or taken out of the folder's top level moves it too. An edit deeper in
+the folder does not, which is why a note is still how work is said to have
+happened. `fastf show --json` also carries `last_note`, the timestamp of the
+newest dated note: when somebody last *said* something happened, as distinct
+from when anything wrote the file.
+
+### A project as memory
+
+A project's file is where work leaves its trace, and most of that trace dies
+with the project. Three kinds outlive it, and each has a home it is promoted
+to; writing the kind at the front of a note is what makes it findable later:
+
+- `venture: …` — a fact about an account, a domain, a filing, a subscription:
+  it belongs to whatever owns that login, not to the project that happened to
+  create it.
+- `lesson: …` — something true about this *kind* of work, not this job: the
+  next project from the same template should start knowing it.
+- A commitment with a date — it belongs to whatever keeps your calendar.
+
+Everything else stays in the leaf. When a project finishes, two edits close
+it: rewrite the description to say what happened and how it ended, and
+promote the `lesson:` notes. `touched` is how you find the ones that are
+waiting for that.
 
 ## Discovery and bases
 

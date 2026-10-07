@@ -170,6 +170,7 @@ proptest! {
             id_number: None,
             template: "t".to_string(),
             template_name: "T".to_string(),
+            description: String::new(),
             created: "2026-01-01T00:00:00Z".to_string(),
             folder: "f".to_string(),
             path: "/p".to_string(),
@@ -222,6 +223,7 @@ proptest! {
             vars: vars.clone(),
             id_str: "ID0001".to_string(),
             counter_value: 1,
+            description: String::new(),
             ctx: fastf::core::naming::RenderContext::now("%Y-%m-%d"),
         };
 

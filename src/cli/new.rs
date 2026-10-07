@@ -20,9 +20,44 @@ pub struct NewArgs {
     pub no_preview: bool,
     pub no_post: bool,
     pub yes: bool,
+    /// `--description`: the project's one line, or none.
+    pub description: Option<String>,
 }
 
-pub fn run(args: NewArgs) -> Result<()> {
+/// Which thing `--description=X` means on this template.
+///
+/// Before the project had a description of its own, the flag was a template
+/// variable like any other, and a template that declares a variable called
+/// `description` has scripts that pass it this way. A declared flag now takes
+/// that spelling first, so for such a template the value goes where it always
+/// went — the variable — and the project's line stays empty, said once on
+/// stderr. Any other template gets the project description.
+pub(crate) fn description_flag(
+    template: &crate::core::template::Template,
+    vars: &mut HashMap<String, String>,
+    flag: Option<String>,
+) -> String {
+    let Some(value) = flag else {
+        return String::new();
+    };
+    let shadows = template
+        .variables
+        .iter()
+        .any(|variable| variable.slug == "description");
+    if !shadows {
+        return value;
+    }
+    vars.entry("description".to_string()).or_insert(value);
+    eprintln!(
+        "{} template '{}' has a variable named 'description', so --description filled it; \
+         the project's own line is set with `fastf desc`",
+        "note:".cyan().bold(),
+        template.slug
+    );
+    String::new()
+}
+
+pub fn run(mut args: NewArgs) -> Result<()> {
     let mut config = Config::load()?;
     if let Some(ref dir) = args.base_dir_override {
         config.base_dir = crate::util::paths::storable(
@@ -40,6 +75,8 @@ pub fn run(args: NewArgs) -> Result<()> {
         crate::tui::prompt::report_cancelled("nothing was created");
         return Ok(());
     };
+
+    let description = description_flag(&tmpl, &mut args.vars, args.description.take());
 
     // Warn about CLI var keys that don't match any template variable
     let known_slugs: std::collections::HashSet<&str> =
@@ -101,6 +138,7 @@ pub fn run(args: NewArgs) -> Result<()> {
         template_slug: tmpl.slug.clone(),
         variables: raw_vars,
         base_dir_override: args.base_dir_override.clone(),
+        description,
     })?;
     drop(created.take_mutation_lock());
     let plan = created.plan;
@@ -195,6 +233,7 @@ pub fn apply_extra(args: &mut NewArgs, recognized: Vec<Recognized>) -> Result<()
             "no-preview" => args.no_preview = true,
             "no-post" => args.no_post = true,
             "base-dir" => args.base_dir_override = flag.value,
+            "description" => args.description = flag.value,
             other => bail!("flag `--{other}` is declared but not handled after the slug"),
         }
     }

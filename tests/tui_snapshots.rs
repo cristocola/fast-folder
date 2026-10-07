@@ -1374,6 +1374,9 @@ fn detail_pane_editing_a_variable_120x40() {
             id_number: project.id_number,
             template: project.template.clone(),
             template_name: project.template_name.clone(),
+            description: "A Fiverr music video for Ariana Grande: treatment approved, shoot on \
+                          the 28th, the label wants the chorus held longer"
+                .to_string(),
             created: project.created.clone(),
             folder: project.name.clone(),
             path: String::new(),
@@ -1437,6 +1440,7 @@ fn detail_pane_editing_a_variable_120x40() {
                 phase: None,
             },
         ],
+        touched: Some("2026-09-02T18:40:00Z".to_string()),
         ..Default::default()
     };
     let _ = update(
@@ -1447,6 +1451,21 @@ fn detail_pane_editing_a_variable_120x40() {
         },
     );
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    // The description, wrapped under the name, with the touched fact below
+    // it; then the line editor over it, the wrapped rows blank beneath.
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    assert!(matches!(
+        app.pane_rows()[app.pane_cursor],
+        PaneRow::Description(_)
+    ));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::F(2))));
+    assert!(app.pane_edit.is_some());
+    snap(
+        "detail_pane_editing_the_description_120x40",
+        render_to_string(&app, 120, 40),
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Esc)));
+    assert!(app.pane_edit.is_none());
     let rows = app.pane_rows();
     let at = rows
         .iter()

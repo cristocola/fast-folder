@@ -741,6 +741,7 @@ fn a_detail_that_disagrees_with_its_row_patches_the_row_and_the_index() {
         id_number: project.id_number,
         template: project.template.clone(),
         template_name: project.template_name.clone(),
+        description: String::new(),
         created: project.created.clone(),
         folder: project.name.clone(),
         path: String::new(),

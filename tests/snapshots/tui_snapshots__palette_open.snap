@@ -1,6 +1,5 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
 " fast-folder   library │ templates   2 bases                                         highest ID0248 "
@@ -9,12 +8,12 @@ expression: frame
 " ⌕ / to search                                                                       12/12 · newest "
 "┌ projects ────────────────────────────────────────────────────┐┌ ID0248 ──────────────────────────┐"
 "│  ID     PROJE┌ commands ──────────────────────────────────────────────────────────┐Remix_ID0248  │"
-"│▸ ID0248 2026-│ ⌕ open                                                             │rojects       │"
-"│  ID0247 2026-│                                                                    │              │"
-"│  ID0246 2026-│ Open project folder  · reveal it in the file manager             o │              │"
-"│  ID0245 2026-│ Open terminal here  · a new terminal window in the project fol…  t │───────────── │"
+"│▸ ID0248 2026-│ ⌕ open                                                             │o: treatment  │"
+"│  ID0247 2026-│                                                                    │ked           │"
+"│  ID0246 2026-│ Open project folder  · reveal it in the file manager             o │rojects       │"
+"│  ID0245 2026-│ Open terminal here  · a new terminal window in the project fol…  t │              │"
 "│  ID0244 2026-│ Project actions  · open the action menu for the selected proje…  a │              │"
-"│  ID0243 2026-│                                                                    │              │"
+"│  ID0243 2026-│                                                                    │───────────── │"
 "│  ID0242 2026-│                                                                    │              │"
 "│  ID0241 2026-│                                                                    │              │"
 "│  ID0240 2026-│                                                                    │              │"

@@ -151,6 +151,12 @@ fn a_change_to_a_project_in_another_base_is_not_held_up() {
     let info = fs::read_to_string(library.project.join("PROJECT_INFO.md")).unwrap();
     assert!(info.contains("description: the second shoot"), "{info}");
 
+    // A read across every project skips the base that does not answer, as
+    // discovery does, and is not held up by it.
+    done(&library, &["note", "add", "ID0007", "the second note"]);
+    let out = done(&library, &["journal"]);
+    assert!(out.stdout.contains("the second note"), "{}", out.stdout);
+
     done(
         &library,
         &["rename", "ID0007", "2026-01-01_Shoot_Two_ID0007", "--yes"],

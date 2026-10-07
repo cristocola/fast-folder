@@ -655,6 +655,47 @@ enum Commands {
         action: TodoAction,
     },
 
+    /// Every dated note across every project, newest first
+    #[command(
+        after_help = "What happened lately, wherever it happened: the notes of every\n\
+        project, one line each with the day and the project, newest first.\n\n\
+        Examples:\n  \
+            fastf journal                                  # the last 30 notes\n  \
+            fastf journal --since 2026-10-01               # this month\n  \
+            fastf journal --grep lesson:                   # what was learned\n  \
+            fastf journal --template music-video --grep lesson:\n  \
+            fastf journal --tag client/Acme -n 100 --json"
+    )]
+    Journal {
+        /// How many notes to show (default 30)
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
+
+        /// Only notes written on or after this date (YYYY-MM-DD, or a prefix like 2026-05)
+        #[arg(long, value_name = "DATE")]
+        since: Option<String>,
+
+        /// Only notes of projects made from this template
+        #[arg(long, value_name = "SLUG")]
+        template: Option<String>,
+
+        /// Only notes of projects that have this tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Only notes of projects in this base, by its label or its full path
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Only notes whose text contains this, case-insensitively
+        #[arg(long, value_name = "TEXT")]
+        grep: Option<String>,
+
+        /// Print the notes as JSON: an array, one object per note
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show a project's notes
     #[command(
         name = "notes",
@@ -1271,6 +1312,24 @@ fn run() -> Result<()> {
         Some(Commands::Note { action }) => run_note(action),
 
         Some(Commands::Todo { action }) => run_todo(action),
+
+        Some(Commands::Journal {
+            limit,
+            since,
+            template,
+            tag,
+            base,
+            grep,
+            json,
+        }) => cli::journal::run(cli::journal::JournalArgs {
+            limit,
+            since,
+            template,
+            tag,
+            base,
+            grep,
+            json,
+        }),
 
         Some(Commands::Notes { query, since }) => {
             cli::note::notes(cli::note::NotesArgs { query, since })

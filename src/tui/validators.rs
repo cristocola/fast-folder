@@ -19,6 +19,8 @@ pub fn add_todo_in_prompt(phase: &str) -> String {
 }
 
 /// A new phase's name, where the pane cannot show the list.
+pub const DESCRIBE_PROMPT: &str =
+    "One line: what the project is, for whom, where it stands (empty removes it)";
 pub const ADD_PHASE_PROMPT: &str = "Name of the new phase (e.g. Main Edit)";
 
 /// A phase name that is all markdown and no name.

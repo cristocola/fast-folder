@@ -882,6 +882,17 @@ pub static COMMANDS: &[Command] = &[
         one_project
     ),
     cmd!(
+        Describe,
+        "Describe the project",
+        "one line saying what it is — for whom, what for, where it stands — shown in every list; emptied, it is removed",
+        ACTIONS,
+        [Key::ch('d')],
+        Project,
+        palette = true,
+        hint = false,
+        one_project
+    ),
+    cmd!(
         Rename,
         "Rename folder",
         "change the folder's name on disk",

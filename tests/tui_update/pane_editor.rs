@@ -5,6 +5,7 @@
 use crate::harness::*;
 use fastf::core::project_info::Metadata;
 use fastf::core::template::{Transform, VarType, Variable};
+use fastf::tui::app::actions::TextThen;
 use fastf::tui::app::data::ProjectDetail;
 use fastf::tui::app::pane::{PaneEdit, PaneRow};
 use fastf::tui::command::Context;
@@ -238,6 +239,87 @@ fn an_emptied_description_is_cleared_and_a_paragraph_is_refused() {
             text: String::new(),
         }),
         "emptied is cleared, not cancelled"
+    );
+}
+
+/// `d` — from the list, the palette or the action menu — opens the
+/// description's line in the pane with the focus there, the whole line in
+/// it, as Enter on its row does.
+#[test]
+fn describe_from_the_list_opens_the_description_in_the_pane() {
+    let mut app = editing_fixture();
+    press(&mut app, Key::plain(KeyCode::Left));
+    assert_eq!(app.focus, Focus::Projects);
+    let project = app.library.selected().unwrap().clone();
+
+    press(&mut app, Key::ch('d'));
+    assert_eq!(app.focus, Focus::Detail);
+    assert!(
+        matches!(app.pane_rows()[app.pane_cursor], PaneRow::Description(_)),
+        "the cursor is on the description"
+    );
+    assert!(
+        matches!(&app.pane_edit, Some(PaneEdit::Line { input, .. }) if input.text() == project.description),
+        "{:?}",
+        app.pane_edit
+    );
+    type_text(&mut app, "Lookbook for the spring line");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::SetDescription { text, .. })
+                if text == &format!("{}Lookbook for the spring line", project.description)
+        ),
+        "{effects:?}"
+    );
+}
+
+/// Where the pane cannot show the row, Describe asks on a prompt holding the
+/// current line; unchanged is a cancel, and a refusal names the rule.
+#[test]
+fn without_the_pane_describe_is_a_prompt() {
+    let mut app = fixture(6, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ch('d'));
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => {
+            assert!(matches!(prompt.then, TextThen::Describe(_)));
+            assert_eq!(prompt.input.text(), project.description);
+        }
+        other => panic!("no detail read: the line is asked for: {other:?}"),
+    }
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        sent(&effects).is_none() && app.modals.is_empty(),
+        "unchanged"
+    );
+
+    press(&mut app, Key::ch('d'));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, &"x".repeat(201));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none());
+    match app.modals.top() {
+        Some(Modal::TextPrompt(prompt)) => assert!(
+            prompt
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("at most 200")),
+            "{:?}",
+            prompt.error
+        ),
+        other => panic!("the prompt stays: {other:?}"),
+    }
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "Lookbook for the spring line");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::SetDescription { text, .. }) if text == "Lookbook for the spring line"
+        ),
+        "{effects:?}"
     );
 }
 

@@ -947,7 +947,10 @@ needs a key of its own: `PaneEditText` (F2) opens a row's text in place
 (`EditTarget::Todo { ordinal, was }` on a todo, `EditTarget::Description` on the
 description — the file's whole line, since the row holds what fits — what Enter
 opens elsewhere, and hidden where there is nothing to type); `PaneAdd` (`+`) adds to the section the
-cursor is in. On the list the same keys are `ListRename` and `ListAddTodo`, off
+cursor is in. `Describe` (`d`) is how the description is found from the list,
+the palette and the action menu: it moves the cursor onto the row and opens it
+there, as `AddTodo` opens the adding line, and asks on a `TextThen::Describe`
+prompt where the pane cannot show the row. On the list the same keys are `ListRename` and `ListAddTodo`, off
 the hint bar — **the pane's bar is what the pane does**: `command::hints` leaves
 the verbs the pane shares with the list (open, terminal, copy, mark, new, the
 tab) to the list's bar and the action menu, which is what left room for the way

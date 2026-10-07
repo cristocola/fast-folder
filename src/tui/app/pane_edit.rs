@@ -36,6 +36,41 @@ impl App {
         Vec::new()
     }
 
+    /// A project's description as its file holds it, or as its row does
+    /// until the file is read.
+    pub(super) fn description_of(&self, project: &crate::core::library::Project) -> String {
+        self.details
+            .get(&project.path)
+            .and_then(|detail| detail.meta.as_ref())
+            .map(|meta| crate::core::validated::Description::one_line(&meta.description))
+            .unwrap_or_else(|| project.description.clone())
+    }
+
+    /// Describe: the description's line opened in the pane, with the focus
+    /// there, as Enter on its row opens it. Falls back to a prompt when the
+    /// pane cannot show the row — switched off, or its record not read yet.
+    pub(super) fn start_describing(&mut self) -> Vec<Effect> {
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        let read = self.details.contains_key(&project.path);
+        if !read || !self.pane_live() || self.screen != super::Screen::Library {
+            let mut prompt = crate::tui::app::actions::TextPrompt::new(
+                validators::DESCRIBE_PROMPT,
+                crate::tui::app::actions::TextThen::Describe(project.path.clone()),
+            );
+            prompt.input =
+                crate::tui::widgets::input::LineEdit::with_text(self.description_of(&project));
+            self.modals.push(Modal::TextPrompt(prompt));
+            return Vec::new();
+        }
+        self.set_focus(super::Focus::Detail);
+        self.close_pane_edit();
+        self.pane_anchor = Some(PaneTarget::Description);
+        self.refind_pane();
+        self.pane_edit_start()
+    }
+
     /// Enter on a pane row: what the row is decides what opens — or, for a
     /// todo, what is written at once, since a toggle has nothing to type.
     pub(super) fn pane_edit_start(&mut self) -> Vec<Effect> {
@@ -88,20 +123,11 @@ impl App {
                 Vec::new()
             }
             PaneRow::Description(_) => {
-                // The whole line as the file holds it — the row has only what
-                // fits its width — or the row's, until the file is read.
+                // The whole line — the row has only what fits its width.
                 let text = self
                     .library
                     .selected()
-                    .map(|project| {
-                        self.details
-                            .get(&project.path)
-                            .and_then(|detail| detail.meta.as_ref())
-                            .map(|meta| {
-                                crate::core::validated::Description::one_line(&meta.description)
-                            })
-                            .unwrap_or_else(|| project.description.clone())
-                    })
+                    .map(|project| self.description_of(project))
                     .unwrap_or_default();
                 self.pane_edit = Some(PaneEdit::Line {
                     row: at,
@@ -209,13 +235,7 @@ impl App {
             EditTarget::Description => {
                 // Unchanged is a cancel; the rule the write applies is told
                 // under the line, so what was typed is still there to fix.
-                let current = self
-                    .details
-                    .get(&project.path)
-                    .and_then(|detail| detail.meta.as_ref())
-                    .map(|meta| crate::core::validated::Description::one_line(&meta.description))
-                    .unwrap_or_else(|| project.description.clone());
-                if text == current {
+                if text == self.description_of(&project) {
                     self.close_pane_edit();
                     return Vec::new();
                 }

@@ -262,6 +262,7 @@ impl App {
                 self.start_adding(crate::core::body::TodoPlace::End)
             }
             CommandId::AddPhase => self.start_phase(),
+            CommandId::Describe => self.start_describing(),
             CommandId::PaneAdd => self.pane_add(),
             CommandId::PaneEditText => self.pane_edit_text(),
             CommandId::ListRename => self.run(CommandId::Rename),

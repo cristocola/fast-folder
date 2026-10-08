@@ -27,6 +27,9 @@ curl -fsSL https://raw.githubusercontent.com/cristocola/fast-folder/main/packagi
 # Arch Linux
 paru -S fast-folder-bin
 
+# Windows installable
+https://github.com/cristocola/fast-folder/releases
+
 # Your first project
 fastf                        # pick a template, fill the form, done
 ```

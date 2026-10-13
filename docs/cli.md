@@ -133,8 +133,9 @@ on Windows — see [windows.md](windows.md).
 
 `fastf recent` and `fastf search` open the [guided app](app.md) on a
 terminal, with the filters as a chip in front of the search bar and the terms
-already in it. Both fall back to the plain list when stdout is not a terminal
-or `--plain` is passed.
+already in it, and [`fastf desk`](#the-desk) opens it on the desk tab. All
+three fall back to the plain list when stdout is not a terminal or `--plain`
+is passed.
 
 ```bash
 fastf recent                         # the guided app (default on a terminal)

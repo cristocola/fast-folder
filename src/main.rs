@@ -706,8 +706,11 @@ enum Commands {
         project has been quiet, `active` when a program is working in it — under\n\
         the court the ball is in: yours (the hat worn), an agent's, somebody you\n\
         wait on, nobody's, or nothing planned. Never every todo.\n\n\
+        On a terminal it opens the guided app on its desk tab, carrying the court,\n\
+        the order, the hat and --random; --plain and --json keep the list in the\n\
+        terminal, as do --quiet, --template, --tag and --base, and so does a pipe.\n\n\
         Examples:\n  \
-            fastf desk                              # every court, yours first\n  \
+            fastf desk                              # the app on its desk tab\n  \
             fastf desk --mine                       # the hat's court alone\n  \
             fastf desk --owner claude               # what @claude holds\n  \
             fastf desk --unowned                    # the pile to assign from\n  \
@@ -749,7 +752,7 @@ enum Commands {
         /// The order within a court: quiet (stalest first, the default), recent, name or id
         #[arg(long, value_name = "ORDER")]
         order: Option<String>,
-        /// The plain list, for a pipe
+        /// The plain list in the terminal, rather than the app
         #[arg(long)]
         plain: bool,
         /// Print the desk as JSON: an array, one object per project

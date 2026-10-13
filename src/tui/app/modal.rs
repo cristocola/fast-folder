@@ -396,7 +396,7 @@ pub enum Modal {
         level: MessageLevel,
         scroll: usize,
     },
-    /// `L`: messages, jobs and the log.
+    /// `L`: messages, the journal, jobs and the log.
     Activity(Box<Activity>),
 }
 

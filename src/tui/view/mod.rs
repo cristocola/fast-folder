@@ -67,7 +67,7 @@ fn draw(app: &App, frame: &mut Frame) {
     let regions = layout::regions(area, app.pane_live(), app.table_needs());
 
     dashboard::header(app, frame, regions.header);
-    // The two tabs share every band but the middle one, so the chrome — the
+    // The tabs share every band but the middle one, so the chrome — the
     // name, the tabs, the bases, the status line, the keys — stays where it is
     // when you switch, and only the work changes.
     let (search_caret, pane_caret) = match app.screen {

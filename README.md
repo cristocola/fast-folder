@@ -88,7 +88,7 @@ The long list. Every item is a thing you can do today, and each links to the gui
 - **Every verb is a command.** Create, find, open, tag, note, todo, describe, move, copy, rename, delete, register, apply, reindex, reconcile — the lists with `--json` for a script, `--plain` for a pipe, and prompts drawn at the cursor rather than on a full screen. From a desktop launcher a command opens a terminal for itself. Shell completions for bash, zsh, fish and PowerShell; man pages. [docs/cli.md](docs/cli.md)
 - **Remembers where you were.** The sort, the pane, the row, the bases' view, the tab — the desk included — come back the next time, from a small state file beside the configuration.
 - **Carries itself.** One binary of a few megabytes; configuration, templates and the counter in one data folder — `~/.config/fastf`, `%APPDATA%\fastf`, or the binary's own folder on a USB stick in portable mode. [docs/config.md](docs/config.md)
-- **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to. The Windows build carries its own C runtime and starts on a clean machine; rclone and WinFsp drives are handled as the mounts they are. Who is working in a folder is read from the process table on Linux; elsewhere that one fact is simply absent rather than guessed. [docs/windows.md](docs/windows.md)
+- **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to. The Windows build carries its own C runtime, which every Windows build in CI checks, so it starts on a clean machine without the Visual C++ Redistributable; rclone and WinFsp drives are handled as the mounts they are. Who is working in a folder is read from the process table on Linux; elsewhere that one fact is simply absent rather than guessed. [docs/windows.md](docs/windows.md)
 
 fast-folder is a tool for one person, working on ordinary files and directories on one computer. It reads and writes files on the machine it runs on. The terminal app and the command line share the same configuration, templates and counters, so the two stay in step.
 
@@ -149,6 +149,8 @@ fastf todo edit ID0047 3 "colour and grade"  # reword it, trailer kept
 fastf todo remove ID0047 3
 fastf jobs                                   # every move, copy, delete and reconcile, running or done
 fastf reconcile --list                       # what is unfinished, and who finishes it
+fastf id show                                # the counter: where the next ID comes from
+fastf completions fish > ~/.config/fish/completions/fastf.fish
 ```
 
 The whole tool is one binary of a few megabytes that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. The full command reference is [docs/cli.md](docs/cli.md).

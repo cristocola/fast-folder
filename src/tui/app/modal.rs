@@ -35,6 +35,8 @@ pub enum MessageLevel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Then {
     SortPick,
+    /// The picked value is the desk's order within each court.
+    DeskOrder,
     TemplateFilter,
     /// The picked value is a tag to add to these projects, or `NEW_TAG` to
     /// type one.
@@ -205,6 +207,9 @@ pub struct Activity {
     pub page: ActivityPage,
     /// Newest first, drawn as they stand.
     pub messages: Vec<String>,
+    /// The journal: every dated note and todo event across the projects,
+    /// newest first, with the rule where the desk was last open.
+    pub journal: Vec<String>,
     /// Newest first; an event of several lines is several.
     pub log: Vec<String>,
     /// One line per job, newest first, and the id of each.
@@ -213,7 +218,7 @@ pub struct Activity {
     /// The job Enter opens the log of.
     pub job_cursor: usize,
     /// Each page keeps its own place.
-    pub scroll: [usize; 3],
+    pub scroll: [usize; 4],
     /// Whether the files have been read yet; until then the messages page
     /// holds this session's, from memory.
     pub loaded: bool,
@@ -222,13 +227,15 @@ pub struct Activity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityPage {
     Messages = 0,
-    Jobs = 1,
-    Log = 2,
+    Journal = 1,
+    Jobs = 2,
+    Log = 3,
 }
 
 impl ActivityPage {
-    pub const ALL: [ActivityPage; 3] = [
+    pub const ALL: [ActivityPage; 4] = [
         ActivityPage::Messages,
+        ActivityPage::Journal,
         ActivityPage::Jobs,
         ActivityPage::Log,
     ];
@@ -236,6 +243,7 @@ impl ActivityPage {
     pub fn title(self) -> &'static str {
         match self {
             ActivityPage::Messages => "messages",
+            ActivityPage::Journal => "journal",
             ActivityPage::Jobs => "jobs",
             ActivityPage::Log => "log",
         }
@@ -247,6 +255,7 @@ impl Activity {
     pub fn lines(&self) -> &[String] {
         match self.page {
             ActivityPage::Messages => &self.messages,
+            ActivityPage::Journal => &self.journal,
             ActivityPage::Jobs => &self.jobs,
             ActivityPage::Log => &self.log,
         }
@@ -508,6 +517,12 @@ impl App {
         match pick.then {
             Then::SortPick => {
                 self.library.explicit_sort = Sort::from_label(&item.value);
+                self.reordered()
+            }
+            Then::DeskOrder => {
+                if let Some(order) = crate::core::desk::Order::parse(&item.value) {
+                    self.desk.order = order;
+                }
                 self.reordered()
             }
             Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),

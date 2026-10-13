@@ -20,6 +20,8 @@ mod bases;
 mod bases_view;
 #[path = "tui_update/batches.rs"]
 mod batches;
+#[path = "tui_update/desk.rs"]
+mod desk;
 #[path = "tui_update/edges.rs"]
 mod edges;
 #[path = "tui_update/flows.rs"]

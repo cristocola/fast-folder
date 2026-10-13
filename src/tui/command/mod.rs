@@ -212,6 +212,16 @@ pub enum CommandId {
     Attention,
     // The action menu
     ActionsRun,
+    // The desk tab
+    /// `w`: the desk, and `w` back to the library.
+    ShowDesk,
+    /// `f` on the desk: the cursor's court alone.
+    DeskCourt,
+    /// `s` / `S` on the desk: the order within each court.
+    DeskOrder,
+    DeskOrderPick,
+    /// `z`: the cursor on a card picked at random.
+    DeskRandom,
     // The templates tab
     StripFilter,
     StudioNew,
@@ -240,7 +250,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 117] = [
+    pub const ALL: [CommandId; 122] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -338,6 +348,11 @@ impl CommandId {
         CommandId::Settings,
         CommandId::Reconcile,
         CommandId::Attention,
+        CommandId::ShowDesk,
+        CommandId::DeskCourt,
+        CommandId::DeskOrder,
+        CommandId::DeskOrderPick,
+        CommandId::DeskRandom,
         CommandId::StripFilter,
         CommandId::ActionsRun,
         CommandId::StudioNew,

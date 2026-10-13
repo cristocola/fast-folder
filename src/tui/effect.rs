@@ -39,6 +39,17 @@ pub enum Effect {
     RefreshCache(PathBuf),
     /// Metadata for rows whose variables a query needs.
     LoadMeta(Vec<PathBuf>),
+    /// The records of many projects for the desk and the journal page, on a
+    /// worker of their own, in chunks (`Msg::Details`): one worker per base,
+    /// so a slow base holds up only its own cards.
+    LoadDetails(Vec<PathBuf>),
+    /// Read again every record whose file or folder changed since its stamp
+    /// — a stat each, a read only where the disk disagrees — for the desk's
+    /// refresh. Answered through `Msg::Details`, changed ones only.
+    CheckDetails(Vec<(PathBuf, Option<crate::tui::app::data::Stamp>)>),
+    /// Who is working in which project, one pass over the processes
+    /// (`Msg::Working`).
+    LoadWorking(Vec<PathBuf>),
     /// What the size scanner should measure next, most important first.
     RequestSizes(Vec<PathBuf>),
     /// Snapshots that are stale after a mutation.

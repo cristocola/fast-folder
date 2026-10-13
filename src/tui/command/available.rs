@@ -117,7 +117,12 @@ pub(super) fn needs_selection(app: &App) -> Availability {
 /// It is deliberately not part of `needs_selection`: `o`, `t` and `y` act on
 /// the row under the cursor and are none of a hidden mark's business.
 pub(super) fn batch_target(app: &App) -> Availability {
-    if !app.library.marks.is_empty() && app.library.targets().is_empty() {
+    // On the desk a verb acts on the row under the cursor alone: the marks
+    // are the library's, and the desk shows none of them.
+    if app.screen != crate::tui::app::Screen::Desk
+        && !app.library.marks.is_empty()
+        && app.library.targets().is_empty()
+    {
         return Availability::Disabled(
             "every marked row is hidden — F clears the filters, - clears the marks",
         );
@@ -259,10 +264,32 @@ pub(super) fn has_search(app: &App) -> Availability {
 }
 
 pub(super) fn has_row_filter(app: &App) -> Availability {
-    if app.library.template_filter.is_some() || app.library.base_filter.is_some() {
+    let court = app.screen == crate::tui::app::Screen::Desk && app.desk.filter.is_some();
+    if app.library.template_filter.is_some() || app.library.base_filter.is_some() || court {
         Availability::Enabled
     } else {
         Availability::Hidden
+    }
+}
+
+/// `f` on the desk needs a card under the cursor that has been read: a
+/// project not read yet is in no court to show alone.
+pub(super) fn desk_card_under_cursor(app: &App) -> Availability {
+    if app.desk.selected_is_read() {
+        Availability::Enabled
+    } else if app.desk.selected_card().is_some() {
+        Availability::Disabled("still reading this project")
+    } else {
+        Availability::Disabled("nothing on the desk")
+    }
+}
+
+/// `z` needs cards to pick from.
+pub(super) fn desk_has_cards(app: &App) -> Availability {
+    if app.desk.selected_card().is_some() {
+        Availability::Enabled
+    } else {
+        Availability::Disabled("nothing on the desk")
     }
 }
 

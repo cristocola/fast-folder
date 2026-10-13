@@ -2,7 +2,7 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fast-folder   library │ templates   2 bases                                         highest ID0248 "
+" fast-folder   library │ desk │ templates   2 bases                                  highest ID0248 "
 "◜ moving ID0248 · copying 12 of 34 files    → projects 12   archive not mounted    ⚠ 1 needs you  ! "
 "                                                                                                    "
 " ⌕ / to search                                                                       12/12 · newest "
@@ -11,7 +11,7 @@ expression: frame
 "│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248            scanning… ││ A Fiverr music video: treatment  │"
 "│  ID0247 2026-08-27_Client_Onboarding_Acme_ID0247   scanning… ││ approved, shoot booked           │"
 "│  ID0246 2026-┌ activity ──────────────────────────────────────────────────────────┐rojects       │"
-"│  ID0245 2026-│   messages   ▸ jobs     log   Tab turns the page · newest first    │              │"
+"│  ID0245 2026-│   messages     journal   ▸ jobs     log   Tab turns the page · new…│              │"
 "│  ID0244 2026-│                                                                    │              │"
 "│  ID0243 2026-│ ▸ 2026-09-25 16:03  running    move ID0248  copying 12 of 34 files │───────────── │"
 "│  ID0242 2026-│   2026-09-25 16:03  done       reconcile  Reconciled: 0 resumed, 1…│              │"

@@ -42,7 +42,12 @@ impl App {
                 } else {
                     -1
                 }),
-            CommandId::BackToLibrary => self.toggle_templates(),
+            CommandId::BackToLibrary => self.show_screen(Screen::Library),
+            CommandId::ShowDesk => self.toggle_desk(),
+            CommandId::DeskCourt => self.show_court_alone(),
+            CommandId::DeskOrder => self.cycle_desk_order(),
+            CommandId::DeskOrderPick => self.open_desk_order_picker(),
+            CommandId::DeskRandom => self.desk_random(),
             CommandId::ShowLog => self.open_log(),
             CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],
 
@@ -249,7 +254,7 @@ impl App {
             CommandId::AddNote => {
                 // The editor opens once; over marks the text it comes back
                 // with goes to every one of them (`Msg::Resumed`).
-                let Some(project) = self.library.targets().into_iter().next() else {
+                let Some(project) = self.verb_targets().into_iter().next() else {
                     return Vec::new();
                 };
                 self.editor_note_for = Some(self.targets_now());
@@ -316,6 +321,21 @@ impl App {
         if self.focus == Focus::Detail {
             self.set_focus(Focus::Projects);
             return Vec::new();
+        }
+        // On the desk the ladder is the query, the court shown alone, the
+        // library's own filters, and then the library: a tab is a level.
+        if self.screen == Screen::Desk {
+            if !self.search.input.is_empty() {
+                self.search.input.clear();
+                return self.after_query_change();
+            }
+            if self.desk.filter.is_some() {
+                return self.set_court_filter(None);
+            }
+            if self.library.template_filter.is_some() || self.library.base_filter.is_some() {
+                return self.clear_filters();
+            }
+            return self.show_screen(Screen::Library);
         }
         // On the templates tab, the first step back is to the library:
         // Esc is "one level out", and a tab is a level.
@@ -444,6 +464,13 @@ impl App {
         {
             effects.push(self.detail_effect(&project.path));
         }
+        // And the desk's records: every one checked against the disk, and
+        // a read that never answered asked for again.
+        if self.screen == Screen::Desk {
+            self.desk.pending.clear();
+            effects.extend(self.desk_refresh_effects());
+            effects.extend(self.desk_read_effects());
+        }
         effects
     }
 
@@ -466,6 +493,10 @@ impl App {
         }
         if self.screen == Screen::Templates {
             return self.step_templates_or_pane(delta);
+        }
+        if self.desk_list_focused() {
+            self.desk.step(delta);
+            return self.desk_moved();
         }
         match self.focus {
             Focus::Projects => {
@@ -499,6 +530,10 @@ impl App {
         if self.screen == Screen::Templates {
             return self.step_templates_or_pane(delta);
         }
+        if self.desk_list_focused() {
+            self.desk.step(delta);
+            return self.desk_moved();
+        }
         match self.focus {
             Focus::Detail => {
                 self.page_pane_cursor(delta);
@@ -522,6 +557,14 @@ impl App {
                 return Vec::new();
             }
             return self.jump_templates(first);
+        }
+        if self.desk_list_focused() {
+            if first {
+                self.desk.select_first();
+            } else {
+                self.desk.select_last();
+            }
+            return self.desk_moved();
         }
         match self.focus {
             Focus::Detail => {
@@ -687,7 +730,7 @@ impl App {
     fn pick_tags_to_remove(&mut self) -> Vec<Effect> {
         // Over marks the list is every tag any of them has; a project
         // that lacks one of the picked tags is simply left as it is.
-        let targets = self.library.targets();
+        let targets = self.verb_targets();
         let mut tags: Vec<String> = targets
             .iter()
             .flat_map(|project| project.tags.iter().cloned())
@@ -838,6 +881,16 @@ impl App {
     /// templates tab's always.
     pub fn pane_present(&self) -> bool {
         self.screen == Screen::Templates || self.pane_live()
+    }
+
+    /// What a verb acts on: on the desk the row under the cursor alone,
+    /// since the marks are the library's and the desk shows none; elsewhere
+    /// the marks in view, or the selection.
+    pub(super) fn verb_targets(&self) -> Vec<Project> {
+        if self.screen == Screen::Desk {
+            return self.library.selected().cloned().into_iter().collect();
+        }
+        self.library.targets()
     }
 
     /// The one way focus moves, so every mover leaves the same trace: the

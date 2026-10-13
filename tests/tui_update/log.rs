@@ -33,9 +33,15 @@ fn every_status_line_is_logged_and_l_reads_them_back_newest_first() {
 
     let effects = press(&mut app, Key::ch('L'));
     assert_eq!(
-        effects,
-        vec![Effect::LoadActivity, Effect::WatchJobs],
+        effects[..2],
+        [Effect::LoadActivity, Effect::WatchJobs],
         "and asks for every session's, and the jobs"
+    );
+    assert!(
+        effects[2..]
+            .iter()
+            .all(|e| matches!(e, Effect::LoadDetails(_) | Effect::LoadWorking(_))),
+        "and the records the journal page is built from: {effects:?}"
     );
     let Some(Modal::Activity(activity)) = app.modals.top() else {
         panic!("L opens the messages");
@@ -88,6 +94,8 @@ fn the_activity_screen_turns_its_page_and_fills_in_when_read() {
             log: (0..300).map(|n| format!("T INFO  - 1 event {n}")).collect(),
         },
     );
+    // messages, journal, jobs, log: three turns to the log.
+    let _ = press(&mut app, Key::plain(KeyCode::Tab));
     let _ = press(&mut app, Key::plain(KeyCode::Tab));
     let _ = press(&mut app, Key::plain(KeyCode::Tab));
     let _ = press(&mut app, Key::plain(KeyCode::PageDown));
@@ -96,7 +104,7 @@ fn the_activity_screen_turns_its_page_and_fills_in_when_read() {
     };
     assert_eq!(activity.page, ActivityPage::Log);
     assert!(activity.log[0].ends_with("event 299"), "newest first");
-    assert!(activity.scroll[2] > 0 && activity.scroll[0] == 0);
+    assert!(activity.scroll[3] > 0 && activity.scroll[0] == 0);
     assert!(
         activity.messages[0].contains("moved ID0001") && activity.messages[0].contains("(cli)")
     );

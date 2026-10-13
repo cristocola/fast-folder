@@ -1,9 +1,8 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
-" fast-folder   library │ templates          "
+" fast-folder   library │ desk │ templates   "
 " → projects 12   archive … ⚠ 1 needs you  ! "
 " ⌕ / to search the templates            3/3 "
 "┌ templates ───────────────────────────────┐"
@@ -16,4 +15,4 @@ expression: frame
 "│                                          │"
 "└──────────────────────────────────────────┘"
 "                                            "
-" → details  / search  T templates           "
+" → details  / search  T templates  w desk   "

@@ -56,7 +56,6 @@ Unscheduled; nothing here is promised.
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.
-- Project lifecycle states.
 - Declarative post-create workflows.
 - Scriptability, what is left of it: `search --limit/--template/--since/--tag`,
   `print_path` as a `new` flag rather than only a config toggle,

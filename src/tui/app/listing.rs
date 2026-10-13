@@ -135,6 +135,11 @@ impl App {
 
     /// After anything that changed which rows are shown.
     pub(super) fn after_rows_changed(&mut self) -> Vec<Effect> {
+        // The desk's rows are the library's, read by court: rebuilt first,
+        // so the selection the rest of this follows is the desk's.
+        if self.screen == Screen::Desk {
+            self.rebuild_desk();
+        }
         // Long names can close the pane (`layout::regions`); the focus cannot
         // stay on a pane that is not drawn.
         if self.focus == Focus::Detail && !self.pane_present() {
@@ -142,6 +147,9 @@ impl App {
         }
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
+        if self.screen == Screen::Desk {
+            self.desk.clamp_viewport(rows);
+        }
         // Another project under the cursor starts the pane afresh; the same
         // one keeps its place, found again among rows that may have changed.
         if !self.sync_pane() {
@@ -154,6 +162,9 @@ impl App {
             if !missing.is_empty() {
                 effects.push(Effect::LoadMeta(missing));
             }
+        }
+        if self.desk_watching() {
+            effects.extend(self.desk_read_effects());
         }
         effects
     }
@@ -218,6 +229,9 @@ impl App {
         self.pane_pulses.clear();
         let rows = self.rows_on_screen();
         self.library.clamp_viewport(rows);
+        if self.screen == Screen::Desk {
+            self.desk.clamp_viewport(rows);
+        }
         if self.screen == Screen::Templates {
             let rows = self.studio.rows(self.search.input.text());
             self.studio.clamp_viewport(&rows, self.template_rows());
@@ -231,7 +245,13 @@ impl App {
     /// project's detail if the pane will show it.
     fn selection_effects(&self) -> Vec<Effect> {
         let mut effects = Vec::new();
-        let wanted = self.library.visible_paths(self.rows_on_screen());
+        // The desk's rows are measured too: the walk's newest file is the
+        // honest "quiet for", and it lands the way a size does.
+        let wanted = if self.screen == Screen::Desk {
+            self.desk.visible_paths(self.rows_on_screen())
+        } else {
+            self.library.visible_paths(self.rows_on_screen())
+        };
         if !wanted.is_empty() {
             effects.push(Effect::RequestSizes(wanted));
         }
@@ -314,6 +334,10 @@ impl App {
     pub(super) fn clear_filters(&mut self) -> Vec<Effect> {
         self.library.template_filter = None;
         self.library.base_filter = None;
+        // On the desk the court shown alone is a filter like the other two.
+        if self.screen == Screen::Desk {
+            self.desk.filter = None;
+        }
         self.reordered()
     }
 
@@ -367,6 +391,7 @@ impl App {
                 self.library.remove(&path);
                 self.details.remove(&path);
                 self.rescanning.remove(&path);
+                self.desk.active.remove(&path);
                 effects.push(Effect::ForgetSizes(vec![path]));
             }
             // Nothing on the row changed, so nothing on the row lights up
@@ -377,6 +402,11 @@ impl App {
             ListChange::DetailOnly { path } => {
                 if self.pane_live() && self.library.selected().is_some_and(|p| p.path == path) {
                     effects.push(Effect::LoadDetail(path));
+                } else if self.desk_watching() {
+                    // The desk's card is the record: read it again rather
+                    // than drop it, or the card would go back to `reading`.
+                    self.desk.pending.insert(path.clone());
+                    effects.push(Effect::LoadDetails(vec![path]));
                 } else {
                     self.details.remove(&path);
                 }

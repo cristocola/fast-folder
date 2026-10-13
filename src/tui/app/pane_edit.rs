@@ -60,7 +60,7 @@ impl App {
             return Vec::new();
         };
         let read = self.details.contains_key(&project.path);
-        if !read || !self.pane_live() || self.screen != super::Screen::Library {
+        if !read || !self.pane_live() || !self.screen.lists_projects() {
             let mut prompt = crate::tui::app::actions::TextPrompt::new(
                 validators::DESCRIBE_PROMPT,
                 crate::tui::app::actions::TextThen::Describe(project.path.clone()),
@@ -350,11 +350,7 @@ impl App {
         let was = todo.text.clone();
         let current = todo.owner.clone();
         let mut names: Vec<String> = Vec::new();
-        if let Some(hat) = self
-            .summary
-            .as_ref()
-            .and_then(|summary| summary.prefs.hat.clone())
-        {
+        if let Some(hat) = self.hat() {
             names.push(hat);
         }
         for owner in detail.todos.iter().filter_map(|todo| todo.owner.as_deref()) {

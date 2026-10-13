@@ -16,7 +16,8 @@ use fastf::tui::command::Key;
 use fastf::tui::entry::Entry;
 use fastf::tui::msg::Msg;
 use fastf::tui::testing::{
-    empty_fixture, fixture, render_to_string, sample_projects, sample_summary,
+    desk_fixture, desk_records, empty_fixture, fixture, render_to_string, sample_projects,
+    sample_summary,
 };
 use fastf::tui::theme::Theme;
 use ratatui::crossterm::event::KeyCode;
@@ -500,6 +501,8 @@ fn activity_log_page() {
     );
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("moved ID0248"), "{frame}");
+    // messages, journal, jobs, log.
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let frame = render_to_string(&app, 100, 30);
@@ -532,12 +535,85 @@ fn activity_jobs_page() {
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Esc)));
     let _ = update(&mut app, Msg::Key(Key::ch('L')));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let frame = render_to_string(&app, 100, 30);
     assert!(
         frame.contains("running") && frame.contains("done"),
         "{frame}"
     );
     snap("activity_jobs_page", frame);
+}
+
+/// `L`, turned to the journal page: every dated note and todo event across
+/// the projects, newest first, the rule where the desk was last open.
+#[test]
+fn activity_journal_page() {
+    let mut app = fixture(6, 100, 30);
+    app.desk_seen_at = Some("2026-01-10T00:00:00Z".to_string());
+    let _ = update(&mut app, Msg::Details(desk_records(&sample_projects(6))));
+    let _ = update(&mut app, Msg::Key(Key::ch('L')));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(
+        frame.contains("journal") && frame.contains("the desk was last open"),
+        "{frame}"
+    );
+    snap("activity_journal_page", frame);
+}
+
+/// The desk at the standard size: every court heading with its count, one
+/// line per project — the ball, how long quiet, `active` or the warning — the
+/// unread project under `reading`, the pane in the list's place.
+#[test]
+fn desk_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let path = app.desk.rows[2].path().unwrap().to_path_buf();
+    app.desk.active.insert(path, vec!["claude".to_string()]);
+    let _ = update(&mut app, Msg::Tick);
+    let frame = render_to_string(&app, 80, 24);
+    assert!(
+        frame.contains("unowned") && frame.contains("with @claude"),
+        "{frame}"
+    );
+    snap("desk_80x24", frame);
+}
+
+/// The desk with room for the pane beside it.
+#[test]
+fn desk_120x40() {
+    let app = desk_fixture(12, 120, 40);
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("nothing planned") && frame.contains("reading"),
+        "{frame}"
+    );
+    snap("desk_120x40", frame);
+}
+
+/// One court shown alone: the heading, its cards, the bar naming the cut.
+#[test]
+fn desk_court_alone_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('f')));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(
+        frame.contains("with @claude") && !frame.contains("unowned"),
+        "{frame}"
+    );
+    snap("desk_court_alone_80x24", frame);
+}
+
+/// The desk's pane is the library's: `→` goes into it in the list's place.
+#[test]
+fn desk_pane_focused_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("gather the receipts"), "{frame}");
+    snap("desk_pane_focused_80x24", frame);
 }
 
 /// A small window: two header lines, the pane in the list's place.
@@ -1916,6 +1992,18 @@ fn every_state_draws_at_every_size() {
         ("the templates tab", || {
             let mut app = fixture(12, 120, 40);
             press_key(&mut app, Key::ch('T'));
+            app
+        }),
+        ("the desk", || desk_fixture(12, 120, 40)),
+        ("the desk's pane", || {
+            let mut app = desk_fixture(12, 120, 40);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            press_key(&mut app, Key::ch('G'));
+            app
+        }),
+        ("a court alone", || {
+            let mut app = desk_fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('f'));
             app
         }),
         ("the builder", || {

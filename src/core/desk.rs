@@ -66,6 +66,29 @@ impl Court {
             _ => None,
         }
     }
+
+    /// The one word a court is written down as — in the app's session file,
+    /// on its search bar: `@claude`, `unowned`, `nothing planned`.
+    pub fn key(&self) -> String {
+        match self {
+            Court::Owner(owner) => format!("@{owner}"),
+            Court::Unowned => "unowned".to_string(),
+            Court::NothingPlanned => "nothing planned".to_string(),
+        }
+    }
+
+    /// The court `key` names, or `None` for a word that names none.
+    pub fn parse_key(key: &str) -> Option<Court> {
+        let key = key.trim();
+        if let Some(owner) = key.strip_prefix('@') {
+            return (!owner.is_empty()).then(|| Court::Owner(owner.to_string()));
+        }
+        match key {
+            "unowned" => Some(Court::Unowned),
+            "nothing planned" | "nothing-planned" => Some(Court::NothingPlanned),
+            _ => None,
+        }
+    }
 }
 
 /// One project on the desk.
@@ -169,6 +192,16 @@ impl Order {
             .find(|order| order.label().eq_ignore_ascii_case(word.trim()))
     }
 
+    /// What the order means, for a picker's second column.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Order::Quiet => "the longest since anything wrote in the project first",
+            Order::Recent => "the most recently written first",
+            Order::Name => "by folder name",
+            Order::Id => "the highest ID first",
+        }
+    }
+
     /// The next order round, for a key that cycles them.
     pub fn next(self) -> Self {
         let at = Self::ALL.iter().position(|o| *o == self).unwrap_or(0);
@@ -268,6 +301,22 @@ pub fn quiet_for_days(since: Option<&str>, now: &str, days: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A court written down reads back as itself, and a word that names
+    /// none is nothing rather than a guess.
+    #[test]
+    fn a_court_round_trips_through_its_key() {
+        use super::Court;
+        for court in [
+            Court::Owner("claude".to_string()),
+            Court::Unowned,
+            Court::NothingPlanned,
+        ] {
+            assert_eq!(Court::parse_key(&court.key()), Some(court));
+        }
+        assert_eq!(Court::parse_key("@"), None);
+        assert_eq!(Court::parse_key("somewhere"), None);
+    }
+
     use super::*;
     use std::path::PathBuf;
 

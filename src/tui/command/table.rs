@@ -4,17 +4,38 @@
 use super::*;
 
 const G: &[Context] = &[Context::Global];
-/// The library's own screen: the table and its pane. The templates
-/// tab is **not** in it, so `n` means one thing per hint bar: "new project"
-/// here, "new template" on the tab.
-const LISTS: &[Context] = &[Context::Projects, Context::Detail];
+/// The screens that list projects: the library's table and its pane, and
+/// the desk, whose rows are projects too and whose pane is the library's.
+/// The templates tab is **not** in it, so `n` means one thing per hint bar:
+/// "new project" here, "new template" on the tab.
+const LISTS: &[Context] = &[Context::Projects, Context::Detail, Context::Desk];
+/// The library's own list and pane — where its sort, its filters and its
+/// marks live. The desk has an order and a cut of its own on the same keys.
 const PD: &[Context] = &[Context::Projects, Context::Detail];
-const ACTIONS: &[Context] = &[Context::Projects, Context::Detail, Context::Actions];
+/// A project under the cursor: the library's, the pane's, the desk's, and
+/// the action menu over any of them.
+const ACTIONS: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Desk,
+    Context::Actions,
+];
+/// The verb that opens the action menu, and Enter's own id for it.
+const MENU: &[Context] = &[Context::Projects, Context::Detail, Context::Desk];
+/// A list of projects with no pane focused: the library's table and the desk.
+const PROJECT_LISTS: &[Context] = &[Context::Projects, Context::Desk];
 const TEMPLATES: &[Context] = &[Context::Templates];
-/// Both tabs: the switch itself, the search bar, and the app-wide verbs that
-/// mean the same thing wherever you are.
-const TABS: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
+/// Every tab: the switches themselves, the search bar, and the app-wide
+/// verbs that mean the same thing wherever you are.
+const TABS: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Desk,
+    Context::Templates,
+];
 const BACKSTEP: &[Context] = TABS;
+/// The desk's list alone: its cut, its order, its pick.
+const DESK: &[Context] = &[Context::Desk];
 /// Every list and every scrollable dialog: where the arrow keys go — and,
 /// since one grammar is the whole point, where the page keys and the jumps to
 /// the ends go too. Declared over anything narrower, they skip some list, and
@@ -23,6 +44,7 @@ const BACKSTEP: &[Context] = TABS;
 const SCROLLERS: &[Context] = &[
     Context::Projects,
     Context::Detail,
+    Context::Desk,
     Context::Templates,
     Context::Actions,
     Context::Bases,
@@ -47,10 +69,15 @@ const DIALOGS: &[Context] = &[
     Context::Guide,
     Context::Modal,
 ];
-/// Where the horizontal axis moves focus: both tabs, each a list with a pane
+/// Where the horizontal axis moves focus: every tab, each a list with a pane
 /// of its own. Nowhere else — a dialog has no second pane, and a text field
 /// owns its own arrows.
-const PANED: &[Context] = &[Context::Projects, Context::Detail, Context::Templates];
+const PANED: &[Context] = &[
+    Context::Projects,
+    Context::Detail,
+    Context::Desk,
+    Context::Templates,
+];
 const STUDIO: &[Context] = &[Context::Templates];
 /// The guide overlay itself — the reader, not the key that opens it.
 const READER: &[Context] = &[Context::Guide];
@@ -65,6 +92,7 @@ const IN_PICK: &[Context] = &[Context::Pick];
 const OPENS_PALETTE: &[Context] = &[
     Context::Projects,
     Context::Detail,
+    Context::Desk,
     Context::Templates,
     Context::Actions,
     Context::Bases,
@@ -459,8 +487,8 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         BackToLibrary,
         "Back to the library",
-        "leave the templates tab for the projects you came from",
-        TEMPLATES,
+        "leave the desk or the templates tab for the projects you came from",
+        &[Context::Desk, Context::Templates],
         [],
         Navigate,
         palette = true,
@@ -532,6 +560,51 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = false,
         has_any_tags
+    ),
+    // --- the desk's own keys -------------------------------------------------
+    cmd!(
+        DeskCourt,
+        "Show this court alone",
+        "only the court the cursor's project sits in — F, or Esc, shows every court again",
+        DESK,
+        [Key::ch('f')],
+        Search,
+        palette = true,
+        hint = true,
+        desk_card_under_cursor
+    ),
+    cmd!(
+        DeskOrder,
+        "Desk order: next",
+        "in turn within each court: quiet (the stalest first), recent, name, id",
+        DESK,
+        [Key::ch('s')],
+        Search,
+        palette = true,
+        hint = false,
+        always
+    ),
+    cmd!(
+        DeskOrderPick,
+        "Desk order: pick one",
+        "pick the order within each court from a list",
+        DESK,
+        [Key::ch('S')],
+        Search,
+        palette = true,
+        hint = false,
+        always
+    ),
+    cmd!(
+        DeskRandom,
+        "Pick me one",
+        "put the cursor on a project picked at random from what the cuts leave — the one thing that beats a stalled eye",
+        DESK,
+        [Key::ch('z')],
+        Library,
+        palette = true,
+        hint = true,
+        desk_has_cards
     ),
     cmd!(
         Bases,
@@ -629,7 +702,7 @@ pub static COMMANDS: &[Command] = &[
         Actions,
         "Project actions",
         "open the action menu for the selected project",
-        PD,
+        MENU,
         [Key::ch('a')],
         Project,
         palette = true,
@@ -644,7 +717,7 @@ pub static COMMANDS: &[Command] = &[
         ActionsEnter,
         "Project actions",
         "the action menu — what Enter does on the list",
-        &[Context::Projects],
+        PROJECT_LISTS,
         [Key::plain(KeyCode::Enter)],
         Project,
         palette = false,
@@ -705,7 +778,7 @@ pub static COMMANDS: &[Command] = &[
         ListRename,
         "Rename folder",
         "F2 edits wherever it is pressed: on the list, the folder's name",
-        &[Context::Projects],
+        PROJECT_LISTS,
         [Key::plain(KeyCode::F(2))],
         Project,
         palette = false,
@@ -716,7 +789,7 @@ pub static COMMANDS: &[Command] = &[
         ListAddTodo,
         "Add a todo",
         "a todo for the project under the cursor, typed into its list in the pane",
-        &[Context::Projects],
+        PROJECT_LISTS,
         [Key::ch('+')],
         Project,
         palette = false,
@@ -1086,8 +1159,9 @@ pub static COMMANDS: &[Command] = &[
         hint = false,
         not_busy
     ),
-    // The tab switch, from either tab: `T` goes to the templates and `T`
-    // comes back. One key for one place, in both directions.
+    // The tab switches, from any tab: `T` goes to the templates and `T`
+    // comes back; `w` goes to the desk and `w` comes back. One key for one
+    // place, in both directions.
     cmd!(
         Templates,
         "Templates",
@@ -1095,6 +1169,17 @@ pub static COMMANDS: &[Command] = &[
         TABS,
         [Key::ch('T')],
         Templates,
+        palette = true,
+        hint = true,
+        not_busy
+    ),
+    cmd!(
+        ShowDesk,
+        "The desk",
+        "every project as one line under whose court its ball is in — your own, an agent's, somebody you wait on, nobody's, nothing planned — and how long it has been quiet",
+        TABS,
+        [Key::ch('w')],
+        Library,
         palette = true,
         hint = true,
         not_busy

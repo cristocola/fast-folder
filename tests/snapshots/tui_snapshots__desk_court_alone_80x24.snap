@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ desk │ templates   2 bases              highest ID0248 "
+" → projects 12   archive not mounted                           ⚠ 1 needs you  ! "
+" ⌕ / to search                         11/12 reading 1 ◜ · quiet · with @claude "
+"┌ desk ────────────────────────────────────────────────────────────────────────┐"
+"│  with @claude · 3 ────────────────────────────────────────────────────────── │"
+"│▸ ID0248 2026-08-28_Lullaby_Remix_ID0248          Main Edit ·…   19 d ⚠       │"
+"│  ID0240 2026-08-20_Old_Shoot_ID0240              Main Edit ·…   14 d ⚠       │"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244        Main Edit ·…    7 d ⚠       │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"                                                                                "
+" → details  / search  f this court  z pick one  a actions  o open  t terminal   "

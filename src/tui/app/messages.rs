@@ -10,7 +10,14 @@ impl App {
             Msg::Paste(text) => self.on_paste(&text),
             Msg::Resize(width, height) => self.on_resize(width, height),
             Msg::Tick => self.on_tick(),
-            Msg::Sizes(cells) => self.on_sizes(cells),
+            Msg::Sizes(cells) => {
+                let effects = self.on_sizes(cells);
+                // A walk's newest file is part of how quiet a card is.
+                if self.screen == Screen::Desk {
+                    self.after_records_changed();
+                }
+                effects
+            }
             Msg::Summary(summary) => {
                 self.summary = Some(*summary);
                 self.summary_error = None;
@@ -64,7 +71,13 @@ impl App {
                 effects
             }
             Msg::DiscoverFailed { generation, error } => self.on_discover_failed(generation, error),
-            Msg::Detail { path, detail } => self.on_detail(path, detail),
+            Msg::Detail { path, detail } => {
+                let effects = self.on_detail(path, detail);
+                self.after_records_changed();
+                effects
+            }
+            Msg::Details(read) => self.on_details(read),
+            Msg::Working(active) => self.on_working(active),
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
                 self.recompute();
@@ -228,10 +241,8 @@ impl App {
         Vec::new()
     }
 
-    fn on_detail(&mut self, path: PathBuf, detail: Box<ProjectDetail>) -> Vec<Effect> {
-        if self.details.len() >= DETAIL_CACHE {
-            self.details.clear();
-        }
+    pub(super) fn on_detail(&mut self, path: PathBuf, detail: Box<ProjectDetail>) -> Vec<Effect> {
+        self.prune_details();
         let mut effects = Vec::new();
         // The file is the truth, and the pane just read it: a row
         // whose tags or names disagree with the metadata — edited
@@ -280,6 +291,24 @@ impl App {
             self.land_pane_seek();
         }
         effects
+    }
+
+    /// Keep the record cache to the library: the desk reads a record for
+    /// every project, so the cache may hold as many as there are projects,
+    /// and `DETAIL_CACHE` beyond them for the rows a reload took away —
+    /// those go first, and only when even that is not enough does the
+    /// whole cache go.
+    fn prune_details(&mut self) {
+        let allowed = self.library.snapshot.len() + DETAIL_CACHE;
+        if self.details.len() < allowed {
+            return;
+        }
+        let listed: std::collections::HashSet<&PathBuf> =
+            self.library.snapshot.iter().map(|p| &p.path).collect();
+        self.details.retain(|path, _| listed.contains(path));
+        if self.details.len() >= allowed {
+            self.details.clear();
+        }
     }
 
     fn on_template_source_loaded(

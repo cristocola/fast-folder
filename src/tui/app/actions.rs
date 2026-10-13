@@ -680,7 +680,7 @@ impl App {
     /// marks the list is every known tag not already on all of them, and the
     /// answer is asked once.
     pub(super) fn open_add_tag(&mut self) -> Vec<Effect> {
-        let targets = self.library.targets();
+        let targets = self.verb_targets();
         if targets.is_empty() {
             return Vec::new();
         }

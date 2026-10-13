@@ -48,7 +48,7 @@ impl App {
         let Some(detail) = read else {
             return self.prompt_for_a_todo(place);
         };
-        if !self.pane_live() || self.screen != super::Screen::Library {
+        if !self.pane_live() || !self.screen.lists_projects() {
             return self.prompt_for_a_todo(place);
         }
         // Drawn in from a heading when the todo will sit under one — at the
@@ -113,7 +113,7 @@ impl App {
             .library
             .selected()
             .is_some_and(|p| self.details.contains_key(&p.path));
-        if !read || !self.pane_live() || self.screen != super::Screen::Library {
+        if !read || !self.pane_live() || !self.screen.lists_projects() {
             let Some(project) = self.library.selected().map(|p| p.path.clone()) else {
                 return Vec::new();
             };

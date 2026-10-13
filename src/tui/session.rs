@@ -51,6 +51,21 @@ pub struct Session {
     /// a base has whether or not it is mounted when the app starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inactive_bases: Vec<String>,
+    /// The tab the app was quit on, when it was the desk (`Screen::label`):
+    /// a bare `fastf` opens there again. Absent is the library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    /// The court the desk showed alone (`Court::key`), if one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desk_court: Option<String>,
+    /// The desk's order within a court (`Order::label`); absent is `quiet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desk_order: Option<String>,
+    /// When a run that had the desk on screen last ended: the journal page
+    /// draws its rule there, so what happened since you last looked reads
+    /// above it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desk_seen_at: Option<String>,
 }
 
 /// `state.toml` in the data directory.
@@ -122,8 +137,32 @@ impl Session {
         if app.is_menu {
             session.sort = app.library.explicit_sort.map(|sort| sort.label());
             session.selected = app.library.selected().map(|project| project.id.clone());
+            session.tab = (app.screen == crate::tui::app::Screen::Desk)
+                .then(|| crate::tui::app::Screen::Desk.label().to_string());
+        }
+        session.desk_court = app.desk.filter.as_ref().map(|court| court.key());
+        session.desk_order = (app.desk.order != crate::core::desk::Order::default())
+            .then(|| app.desk.order.label().to_string());
+        // The desk was looked at this run: the next run's journal rules at
+        // the moment this one ended.
+        if app.desk_visited {
+            session.desk_seen_at = Some(crate::util::time::now_iso8601());
         }
         session
+    }
+
+    /// The court the desk showed alone, if the session names one.
+    pub fn desk_court(&self) -> Option<crate::core::desk::Court> {
+        self.desk_court
+            .as_deref()
+            .and_then(crate::core::desk::Court::parse_key)
+    }
+
+    /// The desk's order, if the session names a real one.
+    pub fn desk_order(&self) -> Option<crate::core::desk::Order> {
+        self.desk_order
+            .as_deref()
+            .and_then(crate::core::desk::Order::parse)
     }
 
     /// The bases' view this session names; anything it cannot read is every
@@ -163,9 +202,18 @@ mod tests {
             explain_open: Some(false),
             bases_view: Some("active".to_string()),
             inactive_bases: vec!["/mnt/projects/archive".to_string()],
+            tab: Some("desk".to_string()),
+            desk_court: Some("@claude".to_string()),
+            desk_order: Some("name".to_string()),
+            desk_seen_at: Some("2026-10-12T18:30:00Z".to_string()),
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
+        assert_eq!(
+            session.desk_court(),
+            Some(crate::core::desk::Court::Owner("claude".to_string()))
+        );
+        assert_eq!(session.desk_order(), Some(crate::core::desk::Order::Name));
         assert_eq!(session.sort_order(), Some(Sort::new(Order::Name)));
         assert_eq!(Session::parse("").unwrap(), Session::default());
         // A key from a later version is not a reason to forget the rest.

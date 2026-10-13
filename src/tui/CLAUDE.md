@@ -74,8 +74,9 @@ Look at every screen you build with the screenshot tool
 # The guided app
 
 `tui::run(Entry)` is the door: `fastf` (`Entry::Menu`), `fastf recent`
-(`Entry::Recent`, its flags as a `Preset` chip) and `fastf search`
-(`Entry::Search`). `require_tty` runs **before** the screen is taken, so a
+(`Entry::Recent`, its flags as a `Preset` chip), `fastf search`
+(`Entry::Search`) and `fastf desk` (`Entry::Desk`, its cuts as the desk's
+court, order and hat). `require_tty` runs **before** the screen is taken, so a
 terminal nobody is holding is never switched to the alternate screen.
 
 ## The shape: model, message, effect, view
@@ -183,9 +184,12 @@ prints `aborted.` and exits 130 as a signal would. An external SIGINT is seen on
 the idle wake. **`diag` goes through the channel** as `Msg::Diag`, because a
 worker's `eprintln!` would land mid-frame on the alternate screen.
 
-**`session.rs`** keeps seven things in `state.toml` beside `config.toml`: the
+**`session.rs`** keeps eleven things in `state.toml` beside `config.toml`: the
 sort, whether the pane is open, the selected row's id, `guide_seen`,
-`explain_open`, and the bases' view — `bases_view` and `inactive_bases`. It is
+`explain_open`, the bases' view — `bases_view` and `inactive_bases` — and the
+desk's: the `tab` the app was quit on when it was the desk, `desk_court`,
+`desk_order` and `desk_seen_at`, stamped at capture by a run that had the
+desk on screen (`App.desk_visited`), since `update` reads no clock. It is
 read before the first frame and written after the screen is given back, and the
 bases' view also the moment it changes (`Effect::SaveSession`, on the main
 thread, so an earlier save can never land after a later one). The remembered
@@ -400,7 +404,7 @@ look around, and Enter in the pane means *edit this row*. `FocusList` and
 **hidden, not a no-op**, where it has nowhere to go (`pane_has_focus`,
 `pane_can_take_focus`). The axis never quits — leaving a tab is Esc's ladder and
 `T` — and `the_horizontal_axis_only_moves_focus_or_turns_a_page` holds it. **The
-pane is a rung of that ladder**, on both tabs: `Back` takes the focus to the list
+pane is a rung of that ladder**, on every tab: `Back` takes the focus to the list
 right after cancelling a job, because a ladder that ran out under a focused pane
 quit the app — leaving the pane the way every dialog is left closed fastf. Two
 surfaces own their left and right: a **field** (`LineEdit`, `TextArea`, a `Form`
@@ -648,8 +652,9 @@ count of the warnings that arrived under a dialog. Each also lands in
 `App.outbox`, which `Runtime::keep_messages` drains after every `update` onto
 `messages.log` on a worker — `update` writes nothing. **`L` is the activity
 screen** (`Modal::Activity`): the messages of every session and the log, a page
-each — and a jobs page between them, one line a job with a cursor, Enter
-opening that job's own log (`Effect::LoadJobLog`) — newest first. It goes up
+each — a journal page after the messages (see **The desk**) and a jobs page
+between them, one line a job with a cursor, Enter opening that job's own log
+(`Effect::LoadJobLog`) — newest first. It goes up
 with this session's messages at once
 (`Effect::LoadActivity` reads the files), and `Runtime::watch_activity` reads
 them again once a second while it is open. Tab turns the page — it is the
@@ -688,16 +693,19 @@ that `RegisterFlags::validate` refuses for bulk registration.
 `cli::register::{plan_rename, recursive_targets, recursive_id_note}` are the
 print-free halves both surfaces preview from.
 
-## Two tabs
+## Three tabs
 
-`App.screen` is `Screen::{Library, Templates}`, switched with `T`. **Templates are
-a tab, not a dialog**, because a tab keeps its place; `Studio` is state on the
-`App`. The tabs share every band but the middle one, and each owns its search: the
-library's is the query grammar, the templates tab's a plain substring over slug
-and name (`Studio::rows`), because fuzzy over tens of rows says yes to nearly all
-of them; switching clears it. `Context::Templates` carries the tab's verbs;
-`LISTS` is the library's screen, so `n` means one thing per hint bar. `f` filters
-the library by the selected template **and goes back to it**.
+`App.screen` is `Screen::{Library, Desk, Templates}`, switched with `T` (the
+templates, and back to the library) and `w` (the desk, and back), both through
+`App::show_screen`. **Templates are a tab, not a dialog**, because a tab keeps
+its place; `Studio` is state on the `App`. The tabs share every band but the
+middle one, and each owns its search: the library's is the query grammar, which
+the desk reads too, the templates tab's a plain substring over slug and name
+(`Studio::rows`), because fuzzy over tens of rows says yes to nearly all of
+them; switching clears it. `Context::Templates` carries the tab's verbs;
+`LISTS` is the screens that list projects — the library and the desk — so `n`
+means one thing per hint bar. `f` filters the library by the selected template
+**and goes back to it**.
 
 The tab lists real templates **alphabetically by display name** — a stable order,
 so creating a project never moves a row — then orphan slugs (named by projects,
@@ -708,6 +716,62 @@ slug **only once a real template has been listed**, since discovery lands before
 the summary and would park the cursor on `(registered)`. A template action reports
 **`ListChange::SummaryOnly`**, re-reading no base, and the landing summary
 refreshes the tab with its selection kept.
+
+## The desk
+
+**The desk is the library read by whose court each project's ball is in**
+(`app/desk.rs`, `app/desk_tab.rs`, `view/desk.rs`), never a second library: its
+cards are `library.row(i)` for the rows in view — the bases' view, the query,
+the template and base filters all apply — each with the record the pane's
+cache holds for it (`App.details`), grouped by `core::desk::group` under the
+hat `App::hat()` names (`hat_override` for a run, else `Prefs.hat`). A row
+with no record yet is a dim card under a `reading` heading (`DeskRow::Card {
+read: false }`); a court shown alone lists none of them, since an unread
+project is in no court. **The desk's cursor drives the library's selection**
+(`desk_moved` → `library.select_path`), so the pane, the action menu and every
+verb read the desk's row with no second notion of "selected"; `verb_targets`
+answers the cursor's row alone there, because the marks are the library's and
+the desk shows none. `Context::Desk` is the desk's list; its pane is
+`Context::Detail`, the library's pane, with `pane_edit` and `pane_add` taking
+the desk as the library (`Screen::lists_projects`). `table_needs` answers
+`desk_needs` there — the id and the name as the table measures them over the
+library in view, the ball's minimum, the age and the active cell — so one
+`layout::regions` places the desk's pane as it places the table's.
+
+**Every record is read once, on a worker per base, and checked afterwards.**
+`desk_read_effects` asks `Effect::LoadDetails` for the rows the cache lacks
+and `DeskState.pending` does not hold (a second discovery of the same rows
+asks for nothing again), grouped by base so a slow base holds up only its own
+cards, in chunks of 32 (`Msg::Details`), each landing through `on_detail` as
+the pane's own read does; and once, `Effect::LoadWorking` — one
+`holders::working_in_all` pass. While the desk or the journal page is on
+screen (`App::desk_watching`), `Runtime::watch_desk` carries out
+`App::desk_refresh_effects` every `DESK_WATCH_EVERY`: `Effect::CheckDetails`
+stats every cached record and reads only those whose stamp moved, and
+`LoadWorking` again. A `ListChange::DetailOnly` with the pane off re-reads the
+card rather than dropping it. The record cache is pruned to the library's
+size plus `DETAIL_CACHE` (`prune_details`), rows a reload took away first. The
+desk's `quiet_since` is the newer of the record's `touched` and the size
+walk's newest file, so `Msg::Sizes` rebuilds the desk too.
+
+**The desk's own keys** are `f` (`DeskCourt`: the cursor's court alone, which
+`F` and the Esc ladder take off with the library's filters), `s`/`S`
+(`DeskOrder`/`DeskOrderPick`, `Then::DeskOrder`) and `z` (`DeskRandom`, seeded
+by `elapsed_ms` and a press count, so a test can set it). The rows are
+`DeskRow::{Heading, Card}`; the cursor walks cards only (`DeskState::step`),
+is kept by path across a rebuild, and `clamp_viewport` keeps a court's heading
+with its first card. The bar reports `placed/in_view`, `reading n`, the order
+and the court (`view::desk::report`); the view draws `active` from the
+holders and `⚠` for a ball in an owner's court quiet for `STUCK_AFTER_DAYS`
+with nobody working — facts, never a status. The ages are read from
+`App.now`, a clock the runtime sets and a fixture pins, beside `App.clock`.
+
+**`L`'s journal page** (`ActivityPage::Journal`, `App::journal_rows`) is built
+from the same records, in `update`, with no read of its own: every dated note
+and every todo's `done:` and `added:` event across `library.snapshot`, newest
+first, with a rule at `desk_seen_at` — opening `L` asks `desk_read_effects`
+for what the cache lacks, and `after_records_changed` refreshes the page as
+records land.
 
 ## The builder
 

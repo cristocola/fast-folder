@@ -28,7 +28,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf journal` | Every dated note across every project, newest first |
-| `fastf desk` | The work across every project, one line each, by whose court the ball is in |
+| `fastf desk` | The guided app on its desk tab: every project, one line each, by whose court the ball is in (`--plain` for a list) |
 | `fastf peek <query>` | What is going on in a project, without opening it |
 | `fastf todo list/add/done/edit/remove/owner <id>` | A project's task list |
 | `fastf hat [name]` | The hat worn — the owner whose court is yours — or wear another |
@@ -550,6 +550,15 @@ nothing has written in for N days, and `--random`, which picks one line from
 what the cuts leave — the one thing that beats a stalled eye. `--template`,
 `--tag` and `--base` choose the projects as `recent`'s do. A hidden project is
 a project in a base you took out of `bases`; there is no state to set.
+
+**On a terminal, `fastf desk` opens the [guided app](app.md#the-desk) on its
+desk tab**, where the same lines are live — the pane beside them, every verb
+on them, the records re-read as agents tick things — carrying the court the
+flags cut to, the order, a hat worn with `--as`, and `--random` as the key
+`z`. The list stays in the terminal when stdout is a pipe, with `--plain` or
+`--json`, and with a cut the tab has no key for: `--quiet`, `--template`,
+`--tag` and `--base`. From a desktop launcher it opens a terminal window for
+itself, as the app does.
 
 What it reads: every project's `PROJECT_INFO.md`, several at once on a network
 base, so a library of a hundred is a hundred reads and no more. A file fastf

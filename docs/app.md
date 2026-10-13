@@ -7,7 +7,7 @@ has is also a command — see [cli.md](cli.md) — and the two share one
 configuration, one set of templates and one counter.
 
 ```
- fast-folder   library │ templates   3 bases                          highest ID0248
+ fast-folder   library │ desk │ templates   3 bases                   highest ID0248
  → projects 9   archive 3   usb not mounted                          ⚠ 1 needs you  !
 
  ⌕ tag:draft lulla                                              4/12 · relevance
@@ -23,9 +23,10 @@ configuration, one set of templates and one counter.
 
 Top to bottom:
 
-- **The header** — two lines. The two tabs, `library` and `templates`, with
-  the one you are on underlined, the hat you wear (`@sales`) when you wear
-  one, then how many bases there are and the highest ID; then each base with how many projects its index holds, or that
+- **The header** — two lines. The three tabs, `library`, `desk` and
+  `templates`, with the one you are on underlined, the hat you wear
+  (`@sales`) when you wear one, then how many bases there are and the
+  highest ID; then each base with how many projects its index holds, or that
   it is not mounted, or `unresponsive` when it has not answered within a
   second and a half — led, while a job runs, by what it is and its step
   (`moving ID0047 · copying 312 of 1473 files`) — and on the right
@@ -148,9 +149,11 @@ table fastf wrote.
 
 **Remembered between runs.** The sort order, whether the detail pane was open,
 the row the cursor was on, whether the template guide has been offered,
-whether the builder's explanation panel is shown, and which bases the list
-shows live in `state.toml` beside `config.toml` (`fastf paths` names the
-folder). The bases are saved the moment they change, the rest on the way out.
+whether the builder's explanation panel is shown, which bases the list
+shows, and the desk — whether you quit on it, the court it showed alone, its
+order, and when it was last open — live in `state.toml` beside `config.toml`
+(`fastf paths` names the folder). The bases are saved the moment they change,
+the rest on the way out.
 `fastf recent` and `fastf search` keep their own order and rows and take the
 pane's state and the bases. Delete the file to start fresh; a file that cannot
 be read is skipped with a note.
@@ -193,10 +196,12 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `O` | in the pane, on a todo: whose court it is in — an owner the list already names, the hat, nobody, or a name you type |
 | `+` | add one more: on the list or in the todos, a todo, typed on a line in the list with the next opening under it; among the tags, a tag; among the notes, a note |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
+| `w` | the desk, and `w` again (or Esc) back to the library — see [The desk](#the-desk) |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |
 | `/` | search; Enter keeps the query and leaves the bar, Esc clears it first and then leaves |
 | `s` / `S` | the next sort order / pick one: newest, oldest, name, id, template, base, size — and every one of those but the dates runs **both ways**, so `size reversed` is the smallest first and `id reversed` is the highest ID first |
-| `f` / `F` | show only the selected project's template / clear the filters — the template's, and a base shown alone. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is |
+| `f` / `F` | show only the selected project's template / clear the filters — the template's, and a base shown alone. *Filter by tag* is in the command palette; it writes `tag:x` into the search bar, which is what a tag filter is. On the desk, `f` is the cursor's court alone and `F` clears that too |
+| `s` / `S`, `z` | on the desk: the next order within a court / pick one — quiet (the stalest first), recent, name, id; and the cursor on a project picked at random |
 | `b` / `B` | the bases panel: which bases are active, and one shown alone / switch the list between every base and only the active ones — see [Which bases the list shows](#which-bases-the-list-shows) |
 | `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
@@ -213,7 +218,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | what is unfinished: what needs you first, each with its reason — Enter on one offers what settles it (discarding asks for the word) — then what fastf is finishing by itself, and a row that finishes it now |
-| `L` | messages, jobs and the log: every message fastf showed you, from every session; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
+| `L` | messages, the journal, jobs and the log: every message fastf showed you, from every session; every dated note and every todo added or ticked across every project, with a rule where the desk was last open, so what happened since you last looked reads above it; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
@@ -379,6 +384,68 @@ Real templates come first, then alphabetically; after them, dimmed, come the
 slugs your projects still name that no template on disk answers to — a template
 you deleted, or `registered` for folders onboarded without one. The number
 beside each is how many projects use it.
+
+## The desk
+
+`w` opens the **desk**: every project in view as one line, under whose court
+its **ball** is in. The ball is the project's first open todo in file order;
+the court is its owner — `your court` for the hat you wear, `with @claude`
+for an agent, `with @acme` for somebody you are waiting on — and a ball
+nobody was named for is `unowned`, the one on top's pile until it is handed
+off; a project with no open todo at all has `nothing planned`. The courts come
+in the order the one on top reads them: yours first when a hat is worn, then
+`unowned`, then the other owners by how many balls each holds, then nothing
+planned. Within a court the **stalest project comes first** — the longest
+since anything wrote in it, which is what makes a decision.
+
+```
+┌ desk ───────────────────────────────────────────────────────────────────────┐
+│  your court · 2 ─────────────────────────────────────────────────────────── │
+│▸ ID0247 2026-09-01_Client_Acme_ID0247      Post · send the invoice     4 d  │
+│  ID0231 2026-08-14_Spring_Campaign_ID0231  sign off the treatment      1 d  │
+│  with @claude · 2 ───────────────────────────────────────────────────────── │
+│  ID0248 2026-09-01_Lullaby_Remix_ID0248    Main Edit · cut the first…  2 h  active
+│  ID0240 2026-08-20_Api_Rewrite_ID0240      migrate the auth tables     3 d  ⚠
+│  unowned · 1 ────────────────────────────────────────────────────────────── │
+│  ID0212 2026-05-02_Tax_2026_ID0212         gather the receipts        31 d  │
+│  nothing planned · 4 ────────────────────────────────────────────────────── │
+```
+
+Each line is the id, the folder name whole (as the table keeps it), the ball
+with its phase before it, how long the project has been **quiet** — the newer
+of its `PROJECT_INFO.md`, its folder and the newest file under it, once the
+size scan has walked it — and, at the right, `active` when a program has its
+working folder in the project right now (Linux; read from the process table,
+a fact and not a guess) or `⚠` when a ball has sat in an owner's court for
+three days with nothing written and nobody working: the stuck agent, said in
+facts. Nothing is stored for any of it and nothing is inferred. A project
+whose record has not been read yet sits dim under `reading` until it has;
+the bar says how many are still to come.
+
+The desk is the library read another way: its rows are the projects in view
+— the bases' view, the query in the search bar and the template or base
+filter all apply, and the bar reports them — and its pane is the library's
+pane, with the same keys in it. Every project verb works on the row under the
+cursor: Enter or `a` for the action menu, `o`, `t`, `x`, `y`, `+` for a todo,
+F2 to rename, `i` for the pane, `→` into it and `<`/`>` to walk the projects
+from inside it. Marks are the library's — a verb on the desk acts on the
+cursor's row alone. The desk's own keys: `f` shows the cursor's court alone
+and `F` or Esc shows every court again; `s` and `S` change the order within a
+court (quiet, recent, name, id); `z` puts the cursor on a project picked at
+random from what the cuts leave — the one thing that beats a stalled eye. Esc
+steps back through the query, the court, the filters, and then to the
+library; `w` goes straight back. The desk's records are read once each, in
+the background, a base at a time, so a slow base holds up only its own cards;
+while the desk is on screen they are checked against the disk every ten
+seconds — a stat each, a read only where a file changed — so a todo ticked
+by an agent moves its project to the right court without a keypress, and so
+does who is working where. F5 asks at once.
+
+`fastf desk` on a terminal opens the app on this tab, carrying its cuts:
+`--mine`, `--owner`, `--unowned` or `--nothing-planned` as the court shown
+alone, `--order`, `--as` as the hat worn for the run, `--random` as `z`.
+A bare `fastf` opens on the desk when it was quit there.
+[cli.md](cli.md#the-desk) has the command line's desk.
 
 ## Settings
 
@@ -568,10 +635,11 @@ command is a key away.
 
 ## From the command line
 
-`fastf recent` and `fastf search` open the same app on a terminal. `recent`'s
-filters become a chip in front of the search bar —
+`fastf recent`, `fastf search` and `fastf desk` open the same app on a
+terminal. `recent`'s filters become a chip in front of the search bar —
 `[recent: template=music-video since=2026-01-01 limit=20]` — that the query is
-applied on top of; `search`'s terms are put straight into the bar. Both fall
-back to the plain list when stdout is not a terminal or `--plain` is passed,
-so a pipe never acquires a dashboard. `fastf template new` and `fastf template
+applied on top of; `search`'s terms are put straight into the bar; `desk`
+opens on the desk tab with its court, order and hat. All three fall back to
+the plain list when stdout is not a terminal or `--plain` is passed, so a
+pipe never acquires a dashboard. `fastf template new` and `fastf template
 edit` open the app straight into the builder.

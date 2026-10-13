@@ -9,6 +9,9 @@ pub enum Context {
     Projects,
     /// The detail pane has focus.
     Detail,
+    /// The desk tab's list has focus: every project as one line under the
+    /// court its ball is in. Its pane is the library's (`Detail`).
+    Desk,
     /// The templates tab: every template, with the selected one's details
     /// beside it and the verbs on it.
     Templates,
@@ -49,6 +52,7 @@ impl Context {
             Context::Global => "everywhere",
             Context::Projects => "project list",
             Context::Detail => "detail pane",
+            Context::Desk => "desk",
             Context::Templates => "templates tab",
             Context::Actions => "project actions",
             Context::Bases => "bases",
@@ -104,10 +108,11 @@ impl Context {
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 16] = [
+    pub const ALL: [Context; 17] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
+        Context::Desk,
         Context::Templates,
         Context::Actions,
         Context::Bases,

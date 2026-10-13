@@ -69,6 +69,10 @@ pub enum Msg {
     },
     /// Metadata read on demand, for a query that needs template variables.
     MetaLoaded(Vec<(PathBuf, Option<Metadata>)>),
+    /// Records read for the desk and the journal page, a chunk at a time.
+    Details(Vec<(PathBuf, ProjectDetail)>),
+    /// Who is working in which project, by name.
+    Working(std::collections::HashMap<PathBuf, Vec<String>>),
     /// A read of `jobs/`: every job, newest first.
     Jobs(Vec<crate::core::jobs::JobView>),
     /// A job's worker answered that it runs — or why it could not start.

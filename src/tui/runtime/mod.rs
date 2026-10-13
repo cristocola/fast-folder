@@ -61,6 +61,10 @@ use input::*;
 const IDLE_WAKE: Duration = Duration::from_millis(1000);
 /// How often the selected project's detail is checked against the disk.
 const WATCH_EVERY: Duration = Duration::from_millis(1000);
+/// How often the desk's records are checked against the disk while the desk
+/// or the journal is on screen: a stat per project, which on a network base
+/// is a round trip each, so not every second.
+const DESK_WATCH_EVERY: Duration = Duration::from_secs(10);
 /// Worker stack: a Windows thread gets 1 MiB by default, and the walks and
 /// discovery below run under `MAX_WALK_DEPTH` recursion.
 const WORKER_STACK: usize = 4 << 20;
@@ -127,6 +131,8 @@ struct Runtime {
     last_watch: Option<Instant>,
     /// When the activity screen was last read, while it is open.
     last_activity: Option<Instant>,
+    /// When the desk's records were last checked, while it is on screen.
+    last_desk: Option<Instant>,
     /// When `jobs/` was last read, and whether a read is on its way.
     last_jobs: Option<Instant>,
     reading_jobs: Arc<AtomicBool>,
@@ -175,6 +181,7 @@ impl Runtime {
             next_tick: None,
             last_watch: None,
             last_activity: None,
+            last_desk: None,
             last_jobs: None,
             reading_jobs: Arc::new(AtomicBool::new(false)),
             summaries: 0,
@@ -296,6 +303,74 @@ impl Runtime {
         self.load_activity();
     }
 
+    /// Every `DESK_WATCH_EVERY` while the desk or the journal is on screen,
+    /// check every record the desk holds against the disk and read who is
+    /// working where again. What to check is the app's answer
+    /// (`desk_refresh_effects`); carrying it out is the same as an effect's.
+    fn watch_desk(&mut self, app: &App) {
+        if !app.desk_watching() {
+            self.last_desk = None;
+            return;
+        }
+        // The first check is a watch later, not at once: the desk's own
+        // reads are on their way when it opens.
+        let due = match self.last_desk {
+            None => {
+                self.last_desk = Some(Instant::now());
+                return;
+            }
+            Some(at) => at.elapsed() >= DESK_WATCH_EVERY,
+        };
+        if !due {
+            return;
+        }
+        self.last_desk = Some(Instant::now());
+        for effect in app.desk_refresh_effects() {
+            self.read_for_the_desk(effect);
+        }
+    }
+
+    /// The desk's three reads, each on a worker of its own: the records of
+    /// many projects in chunks, the records whose stamp changed, and who is
+    /// working where. Any other effect is nothing here.
+    fn read_for_the_desk(&self, effect: Effect) {
+        let tx = self.tx.clone();
+        match effect {
+            Effect::LoadDetails(paths) => {
+                spawn_worker("fastf-desk", move || {
+                    // In chunks, so a large base shows its cards as they
+                    // answer rather than all at the end.
+                    for chunk in paths.chunks(32) {
+                        let read: Vec<(PathBuf, app::data::ProjectDetail)> = chunk
+                            .iter()
+                            .map(|path| (path.clone(), loaders::detail(path)))
+                            .collect();
+                        let _ = tx.send(Msg::Details(read));
+                    }
+                });
+            }
+            Effect::CheckDetails(stamps) => {
+                spawn_worker("fastf-desk-check", move || {
+                    let changed: Vec<(PathBuf, app::data::ProjectDetail)> = stamps
+                        .iter()
+                        .filter(|(path, stamp)| loaders::stamp_of(path) != *stamp)
+                        .map(|(path, _)| (path.clone(), loaders::detail(path)))
+                        .collect();
+                    if !changed.is_empty() {
+                        let _ = tx.send(Msg::Details(changed));
+                    }
+                });
+            }
+            Effect::LoadWorking(paths) => {
+                spawn_worker("fastf-working", move || {
+                    let active = crate::core::holders::working_in_all(&paths);
+                    let _ = tx.send(Msg::Working(active));
+                });
+            }
+            _ => {}
+        }
+    }
+
     fn load_activity(&self) {
         let tx = self.tx.clone();
         spawn_worker("fastf-activity", move || {
@@ -315,6 +390,7 @@ impl Runtime {
     fn wait(&mut self, app: &App) -> Option<Msg> {
         self.watch_detail(app);
         self.watch_activity(app);
+        self.watch_desk(app);
         self.watch_jobs(app);
         let Some(interval) = app.tick_interval() else {
             self.next_tick = None;
@@ -462,6 +538,9 @@ impl Runtime {
                         crate::core::library::refresh_cache(&path);
                     });
                 }
+                effect @ (Effect::LoadDetails(_)
+                | Effect::CheckDetails(_)
+                | Effect::LoadWorking(_)) => self.read_for_the_desk(effect),
                 Effect::LoadMeta(paths) => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-metadata", move || {

@@ -19,6 +19,11 @@
 //! fastf desk --json
 //! ```
 //!
+//! On a terminal, `fastf desk` opens the app on its desk tab, carrying the
+//! court, the order, the hat and the random pick; `--plain` and `--json`
+//! keep the list in the terminal, as do the cuts the tab has no key for
+//! (`--quiet`, `--template`, `--tag`, `--base`) and a pipe.
+//!
 //! What it reads: every project's `PROJECT_INFO.md` (the todos), the file's
 //! and the folder's times (`touched`), and on Linux `/proc` for who is
 //! working where. `core::desk` is the grouping, pure; this is the reading
@@ -131,6 +136,39 @@ pub fn run(args: DeskArgs) -> Result<()> {
         anyhow::bail!(
             "--mine, --owner, --unowned and --nothing-planned each show one court — pass one"
         );
+    }
+
+    // Two questions, both of which must say yes, as `recent` asks them:
+    // stdout decides the format (a pipe gets the list), and stderr whether
+    // the app can be drawn at all. A cut the tab has no key for keeps the
+    // list in the terminal too.
+    let printing = args.plain
+        || args.json
+        || args.quiet.is_some()
+        || args.template.is_some()
+        || args.tag.is_some()
+        || args.base.is_some();
+    let interactive = !printing
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && crate::util::tty::prompt_available();
+    if interactive {
+        let court = if args.mine {
+            hat.clone().map(Court::Owner)
+        } else if let Some(owner) = &owner_cut {
+            Some(Court::Owner(owner.clone()))
+        } else if args.unowned {
+            Some(Court::Unowned)
+        } else if args.nothing_planned {
+            Some(Court::NothingPlanned)
+        } else {
+            None
+        };
+        return crate::tui::run(crate::tui::Entry::Desk {
+            court,
+            order: args.order.as_deref().map(|_| order),
+            hat: args.as_hat.as_ref().and(hat),
+            random: args.random,
+        });
     }
 
     let projects = library::discover(&cfg);

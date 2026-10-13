@@ -125,8 +125,7 @@ impl App {
     pub(super) fn targets_now(&self) -> crate::tui::app::actions::Targets {
         crate::tui::app::actions::Targets {
             paths: self
-                .library
-                .targets()
+                .verb_targets()
                 .into_iter()
                 .map(|project| project.path)
                 .collect(),
@@ -167,13 +166,14 @@ impl App {
     /// `if targets.is_empty() { return Vec::new(); }` — no picker, no dialog,
     /// no message.
     pub(super) fn batching(&self) -> bool {
-        !self.library.targets().is_empty() && !self.library.marks.is_empty()
+        self.screen != Screen::Desk
+            && !self.library.targets().is_empty()
+            && !self.library.marks.is_empty()
     }
 
     /// The folder names a confirmation is about: the marks, or the selection.
     pub(super) fn target_names(&self) -> Vec<String> {
-        self.library
-            .targets()
+        self.verb_targets()
             .iter()
             .map(|project| project.name.clone())
             .collect()
@@ -183,8 +183,8 @@ impl App {
     /// own height, never the table's.
     pub(super) fn page_rows(&self) -> usize {
         let rows = match (self.screen, self.focus) {
-            (Screen::Library, Focus::Detail) => self.pane_rows_on_screen(),
-            (Screen::Library, Focus::Projects) => self.rows_on_screen(),
+            (Screen::Library | Screen::Desk, Focus::Detail) => self.pane_rows_on_screen(),
+            (Screen::Library | Screen::Desk, Focus::Projects) => self.rows_on_screen(),
             (Screen::Templates, Focus::Projects) => self.template_rows(),
             (Screen::Templates, Focus::Detail) => {
                 self.template_panes().1.height.saturating_sub(2) as usize

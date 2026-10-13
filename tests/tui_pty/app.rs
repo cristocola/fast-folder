@@ -594,7 +594,7 @@ fn the_register_naming_pattern_is_editable_and_refuses_a_pattern_without_id() {
     let script = pty::Script::new()
         .key(KEY_SETTINGS)
         .pause(800)
-        .down(5) // → Register pattern
+        .down(7) // → Register pattern, past Agent and Hat
         .enter()
         .key("\x15") // clear it
         .key("{date}_{name}") // no {id}

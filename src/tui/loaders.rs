@@ -630,8 +630,10 @@ pub fn stamp_of(path: &Path) -> Option<Stamp> {
     })
 }
 
-/// The detail pane's reads for one project.
+/// The detail pane's reads for one project — and the desk's, which reads
+/// every project through it once, and again only when its stamp moved.
 pub fn detail(path: &Path) -> ProjectDetail {
+    crate::util::trace::hit("detail");
     paths::stall_if_marked(path);
     // The stamp before the reads: a write that lands between the two is
     // caught by the next check rather than hidden behind a newer stamp.

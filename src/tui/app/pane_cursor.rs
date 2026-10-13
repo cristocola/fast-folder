@@ -93,12 +93,21 @@ impl App {
     /// change, so nothing pulses; at the ends of the list nothing moves.
     pub(super) fn step_project_from_pane(&mut self, delta: isize) -> Vec<Effect> {
         let section = section_at(&self.pane_rows(), self.pane_cursor);
-        let before = self.library.selected_index();
-        self.library.step(delta);
-        if self.library.selected_index() == before {
-            return Vec::new();
-        }
-        let effects = self.after_selection_change();
+        let effects = if self.screen == super::Screen::Desk {
+            let before = self.desk.selected;
+            self.desk.step(delta);
+            if self.desk.selected == before {
+                return Vec::new();
+            }
+            self.desk_moved()
+        } else {
+            let before = self.library.selected_index();
+            self.library.step(delta);
+            if self.library.selected_index() == before {
+                return Vec::new();
+            }
+            self.after_selection_change()
+        };
         self.pane_seek = Some(section);
         self.land_pane_seek();
         effects

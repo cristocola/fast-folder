@@ -4,6 +4,7 @@
 
 pub mod builder;
 pub mod dashboard;
+pub mod desk;
 pub mod modals;
 pub mod projects;
 pub mod templates;
@@ -70,8 +71,17 @@ fn draw(app: &App, frame: &mut Frame) {
     // name, the tabs, the bases, the status line, the keys — stays where it is
     // when you switch, and only the work changes.
     let (search_caret, pane_caret) = match app.screen {
-        crate::tui::app::Screen::Library => {
+        // The library and the desk share the body's shape: a list of
+        // projects with the library's pane beside, under or over it.
+        screen @ (crate::tui::app::Screen::Library | crate::tui::app::Screen::Desk) => {
             let caret = dashboard::search_bar(app, frame, regions.search);
+            let list = |frame: &mut Frame| {
+                if screen == crate::tui::app::Screen::Desk {
+                    desk::table(app, frame, regions.table);
+                } else {
+                    projects::table(app, frame, regions.table);
+                }
+            };
             // The pane in the list's place is drawn only while it has the
             // focus, and then instead of the table; beside or under the
             // table, it is drawn with it.
@@ -81,11 +91,11 @@ fn draw(app: &App, frame: &mut Frame) {
                     projects::detail(app, frame, pane)
                 }
                 Some(pane) if !over => {
-                    projects::table(app, frame, regions.table);
+                    list(frame);
                     projects::detail(app, frame, pane)
                 }
                 _ => {
-                    projects::table(app, frame, regions.table);
+                    list(frame);
                     None
                 }
             };

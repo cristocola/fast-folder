@@ -11,7 +11,8 @@ pub use fastf::tui::effect::{Action, Effect, Exit, ListChange, SpawnKind, Suspen
 pub use fastf::tui::entry::{Entry, Preset};
 pub use fastf::tui::msg::Msg;
 pub use fastf::tui::testing::{
-    empty_fixture, fixture, sample_projects, sample_summary, sample_summary_moveable,
+    desk_fixture, desk_records, empty_fixture, fixture, sample_projects, sample_summary,
+    sample_summary_moveable,
 };
 pub use fastf::tui::theme::Theme;
 pub use ratatui::crossterm::event::KeyCode;

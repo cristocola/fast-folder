@@ -382,9 +382,11 @@ impl App {
                 ));
                 rule_drawn = true;
             }
+            // Sixteen columns whatever the stamp holds: a day written by
+            // hand has no time, and its row's id stays under the others.
             rows.push(format!(
-                "{}  {:<id_w$}  {:<5}  {}",
-                when(&event.stamp),
+                "{:<16}  {:<id_w$}  {:<5}  {}",
+                when(&event.stamp).trim_end(),
                 event.id,
                 event.kind,
                 event.text

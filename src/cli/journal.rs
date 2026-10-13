@@ -254,8 +254,10 @@ fn print_plain(entries: &[Entry], with_kinds: bool) {
     for entry in entries {
         let when = crate::util::time::local_readable(&entry.timestamp);
         // `local_readable` gives `YYYY-MM-DD HH:MM:SS`; the minute is enough
-        // here, and a timestamp it could not parse is shown as written.
-        let when = when.get(..16).unwrap_or(&when).to_string();
+        // here, and a timestamp it could not parse is shown as written — in
+        // the same sixteen columns, or a day written by hand (`done:2026-10-05`)
+        // pulls its row's id out of line with the others.
+        let when = format!("{:<16}", when.get(..16).unwrap_or(&when));
         let kind = match (with_kinds, entry.kind) {
             (false, _) => String::new(),
             (true, Kind::Note) => format!("{:<kind_w$}", ""),

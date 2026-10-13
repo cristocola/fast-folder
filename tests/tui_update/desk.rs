@@ -335,4 +335,15 @@ fn the_journal_page_lists_what_happened_with_a_rule_where_you_last_looked() {
         "older entries read below the rule: {rows:?}"
     );
     assert!(rows[rule + 1].starts_with("2026-01-0"), "{rows:?}");
+
+    // A day written by hand has no time; its row keeps the columns.
+    let mut records = desk_records(&sample_projects(6));
+    records[0].1.todos[0].done_at = Some("2026-01-13".to_string());
+    let _ = update(&mut app, Msg::Details(records));
+    let Some(Modal::Activity(activity)) = app.modals.top() else {
+        panic!("still open");
+    };
+    let rows = &activity.journal;
+    assert!(rows[0].starts_with("2026-01-13  "), "{rows:?}");
+    assert_eq!(rows[0].find("ID0"), rows[1].find("ID0"), "{rows:?}");
 }

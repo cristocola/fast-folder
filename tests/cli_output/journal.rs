@@ -260,3 +260,29 @@ fn todos_join_the_timeline_by_their_dates() {
         "{since}"
     );
 }
+
+/// A date written by hand has a day and no time. Its row keeps the columns
+/// of a row stamped by fastf, so the ids and the texts stay in line.
+#[test]
+fn a_day_without_a_time_keeps_the_columns() {
+    let sb = Sandbox::new();
+    let alpha = sb.plant_project(&sb.base, "alpha", "ID0001");
+    let path = alpha.join("PROJECT_INFO.md");
+    let mut file = fs::read_to_string(&path).unwrap();
+    file.push_str(concat!(
+        "\n## Todo\n\n",
+        "- [x] stamped by fastf done:2026-10-03T08:00:00Z\n",
+        "- [x] dated by hand done:2026-10-05\n",
+    ));
+    fs::write(&path, file).unwrap();
+
+    let out = sb.ok(&["journal", "--todos"]);
+    let rows: Vec<&str> = out
+        .lines()
+        .filter(|line| line.trim_start().starts_with('•'))
+        .collect();
+    assert_eq!(rows.len(), 2, "{out}");
+    assert!(rows[0].contains("dated by hand"), "{out}");
+    let id_at = |row: &str| row.find("ID0001").unwrap_or_else(|| panic!("{out}"));
+    assert_eq!(id_at(rows[0]), id_at(rows[1]), "{out}");
+}

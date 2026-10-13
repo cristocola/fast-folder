@@ -8,8 +8,10 @@
 //! program is working in it. The id and the name are measured over the
 //! library in view as the table measures them, so a card never moves when a
 //! group is shown alone; the next todo takes what is left and is cut from
-//! the right. Projects not read yet sit dim under `reading`, with no claim
-//! made about them.
+//! the right. In a window narrower than the list asked for
+//! (`App::desk_needs`) the name gives way instead, so the next todo keeps
+//! its minimum (`name_and_todo`). Projects not read yet sit dim under
+//! `reading`, with no claim made about them.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -19,7 +21,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::desk::Assignee;
-use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, DeskRow};
+use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, DeskRow, NEXT_TODO_MIN, row_fixed};
 use crate::tui::app::{App, Focus};
 use crate::tui::view::{fit, fit_spans};
 
@@ -80,10 +82,8 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 
     let (id_w, name_w) = app.library.widths;
-    // The cursor cell, the id, the name, each followed by a space; the age
-    // and the active cell at the right; the next todo has the rest.
-    let fixed = 2 + 1 + id_w + 1 + name_w + 1 + 1 + AGE_CELL + 1 + ACTIVE_CELL;
-    let todo_w = width.saturating_sub(fixed);
+    // The name and the next todo share what the rest of the row leaves.
+    let (name_w, todo_w) = name_and_todo(width.saturating_sub(row_fixed(id_w)), name_w);
     let hat = app.hat();
     let now = (app.now)();
 
@@ -130,6 +130,16 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
             &mut scroll,
         );
     }
+}
+
+/// The name's column and the next todo's, out of the `room` the two share:
+/// the name whole while the next todo keeps its minimum. A window narrower
+/// than that takes the difference from the name, or a long folder name
+/// pushes the todo, the age and the warning past the border and the row no
+/// longer says what is next.
+fn name_and_todo(room: usize, name_w: usize) -> (usize, usize) {
+    let name_w = name_w.min(room.saturating_sub(NEXT_TODO_MIN));
+    (name_w, room - name_w)
 }
 
 /// `yours · 3 ────`: the group's name in the text colour, bold, its count
@@ -214,7 +224,10 @@ fn card_line(
     let mut spans = vec![
         Span::styled(format!("{cursor} "), theme.accent()),
         Span::styled(format!("{:<id_w$} ", card.project.id), id_style),
-        Span::styled(format!("{:<name_w$} ", card.project.name), text),
+        Span::styled(
+            format!("{:<name_w$} ", fit(&card.project.name, name_w, g.ellipsis)),
+            text,
+        ),
     ];
     spans.extend(fit_spans(
         vec![Span::styled(format!("{next:<todo_w$}"), next_style)],

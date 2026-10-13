@@ -23,11 +23,21 @@ use crate::tui::widgets::nav;
 
 /// The least the next-todo column may have before the desk claims no room
 /// beside its pane: a phase and a few words.
-pub const NEXT_TODO_MIN: usize = 18;
+pub const NEXT_TODO_MIN: usize = 16;
 /// The age cell: `12 d`, `3 mo`, right-aligned.
 pub const AGE_CELL: usize = 6;
 /// The cell after the age: `active`, or the warning glyph.
 pub const ACTIVE_CELL: usize = 6;
+
+/// What a card's row takes beside its name and its next todo: the cursor
+/// cell and the id, each followed by a space, the space after the name, the
+/// age between two spaces, the active cell, and a column to spare before
+/// the gutter. **The one sum** `App::desk_needs` asks by and the view draws
+/// by: when the two disagree the list is granted less than the next todo's
+/// minimum and nothing says so.
+pub fn row_fixed(id_w: usize) -> usize {
+    2 + id_w + 1 + 1 + 1 + AGE_CELL + 1 + ACTIVE_CELL + 1
+}
 
 /// One row of the desk: a group's heading, or a project's card under it.
 #[derive(Clone, Debug, PartialEq, Eq)]

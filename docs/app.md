@@ -420,7 +420,8 @@ the longest comes first.
 ```
 
 Each line is the id, the folder name whole (as the table keeps it), the next
-todo with its phase before it, how long the project has been **quiet** (the
+todo with its phase before it (in a window too narrow for both, the name is
+cut short so the todo stays readable), how long the project has been **quiet** (the
 newer of its `PROJECT_INFO.md`, its folder and the newest file under it,
 once the size scan has walked it), and, at the right, `active` when a
 program has its working folder in the project right now (Linux; read from

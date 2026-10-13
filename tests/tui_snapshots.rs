@@ -649,6 +649,23 @@ fn desk_120x40() {
     snap("desk_120x40", frame);
 }
 
+/// A window narrower than the folder names: the name gives way, cut with
+/// the ellipsis, and every row still says what is next, how long it has
+/// waited and whether it is stuck, with nothing cut by the border.
+#[test]
+fn a_desk_narrower_than_its_names_keeps_the_next_todo_and_the_age() {
+    let app = desk_fixture(12, 60, 24);
+    let frame = render_to_string(&app, 60, 24);
+    let row = frame
+        .lines()
+        .find(|line| line.contains("ID0247"))
+        .unwrap_or_else(|| panic!("{frame}"));
+    assert!(row.contains("2026-08-27_Clie…"), "{frame}");
+    assert!(row.contains("send the invoice"), "{frame}");
+    assert!(row.contains("16 d ⚠"), "{frame}");
+    assert!(!row.contains("ID0247 2026-08-27_Client"), "{frame}");
+}
+
 /// One group shown alone: the heading, its cards, the bar naming the filter.
 #[test]
 fn desk_group_alone_80x24() {

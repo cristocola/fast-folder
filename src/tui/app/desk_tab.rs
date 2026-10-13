@@ -19,7 +19,7 @@ use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
 use crate::tui::effect::Effect;
 use crate::tui::layout;
 
-use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, NEXT_TODO_MIN};
+use crate::tui::app::desk::{NEXT_TODO_MIN, row_fixed};
 
 /// How many journal entries the page holds at most.
 const JOURNAL_ROWS: usize = 500;
@@ -275,23 +275,14 @@ impl App {
 
     /// What the desk's list asks of the body: the id and the name whole,
     /// as the table measures them over the library in view, the next todo's
-    /// minimum, the age and the active cell, and how many rows there are.
+    /// minimum, the age and the active cell — a card's row inside the
+    /// borders and the right gutter the view reserves — and how many rows
+    /// there are.
     pub fn desk_needs(&self) -> layout::TableNeeds {
         let (id_w, name_w) = self.library.widths;
         layout::TableNeeds {
-            min_width: (2
-                + 1
-                + id_w
-                + 1
-                + name_w
-                + 1
-                + NEXT_TODO_MIN
-                + 1
-                + AGE_CELL
-                + 1
-                + ACTIVE_CELL
-                + 1)
-            .min(u16::MAX as usize) as u16,
+            min_width: (2 + row_fixed(id_w) + name_w + NEXT_TODO_MIN + 1).min(u16::MAX as usize)
+                as u16,
             rows: self.desk.rows.len(),
         }
     }

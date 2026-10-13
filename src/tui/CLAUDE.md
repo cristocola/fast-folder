@@ -738,6 +738,10 @@ the desk as the library (`Screen::lists_projects`). `table_needs` answers
 `desk_needs` there — the id and the name as the table measures them over the
 library in view, the next todo's minimum, the age and the active cell — so one
 `layout::regions` places the desk's pane as it places the table's.
+`app::desk::row_fixed` is the one sum the request and `view::desk` both use.
+**In a window narrower than the request the name gives way, not the todo**
+(`view::desk::name_and_todo`): a folder name wider than the list otherwise
+pushes the next todo, the age and the warning past the border.
 
 **Every record is read once, on a worker per base, and checked afterwards.**
 `desk_read_effects` asks `Effect::LoadDetails` for the rows the cache lacks

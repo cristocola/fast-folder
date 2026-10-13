@@ -154,9 +154,9 @@ Templates always use `/` as the path separator, on every platform. fastf transla
 
 Press `H` on the templates tab or anywhere in the builder and Fast Folder
 explains itself: seven pages on what a template is, the five parts of one, how
-projects get their names, the questions to ask, folders and files — and a
-walkthrough that builds a real template from nothing, with the exact values to
-type. `←` and `→` turn the page, Enter goes forward, Esc closes it.
+projects get their names, the questions to ask, folders and files (the starter
+todos included) — and a walkthrough that builds a real template from nothing,
+with the exact values to type. `←` and `→` turn the page, Enter goes forward, Esc closes it.
 
 Opened from inside the builder it lands on the page for the part under the
 cursor, so it answers the question you actually have rather than starting at the
@@ -265,7 +265,7 @@ todo:
   - phase: "Other"
 ```
 
-Each block is a phase. A block with no `phase` writes its tasks bare, which the list keeps above its first label; a block with no `tasks` writes the label alone, which is how you hand out an empty `### Other` for whatever comes up. Tasks are interpolated like everything else, so `{title}` and `{id}` resolve.
+Each block is a phase. A block with no `phase` writes its tasks bare, which the list keeps above its first label; a block with no `tasks` writes the label alone, which is how you hand out an empty `### Other` for whatever comes up. Tasks are interpolated like everything else, so `{title}` and `{id}` resolve. A task may end in `@owner`, for example `"scaffold the crate @claude"`, and every project made from the template then starts with that owner on that todo. A starter todo carries no `added:` stamp, since the project's `created` is its date.
 
 That produces, in the new project's `PROJECT_INFO.md`:
 

@@ -398,6 +398,14 @@ pub static PAGES: &[Page] = &[
                  copied byte for byte, untouched. PROJECT_INFO.md at the top of a project is \
                  fastf's own and cannot be declared.",
             ),
+            Block::Blank,
+            Block::Head("Starter todos"),
+            Block::Para(
+                "template.yaml may also hold a todo block: the checklist every project made from \
+                 the template starts with, in phases if you like, each task optionally ending in \
+                 @owner. The editor has no row for it; write it in the file, as the full \
+                 reference on the last page shows.",
+            ),
         ],
     },
     Page {

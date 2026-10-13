@@ -319,3 +319,89 @@ fn a_relaunched_picker_execs_the_shell_in_its_own_window() {
         "a relaunched fastf must never open a second window"
     );
 }
+
+/// `fastf agent` runs the configured line in the project's folder, in this
+/// terminal: the project is its working directory and `FASTF_PROJECT_PATH`,
+/// the line goes through the shell as a post-create command does, and the
+/// agent's exit status is the command's. The recorder stands in for the
+/// agent and writes what it was given.
+#[test]
+fn agent_runs_the_configured_line_in_the_project_folder() {
+    let sb = Sandbox::new();
+    let bin = sb.tmp.path().join("bin");
+    let rec = recorder(&bin, "fake-agent");
+    sb.ok(&[
+        "config",
+        "set",
+        "agent",
+        &format!("{} --resume {{path}}", rec.program.display()),
+    ]);
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let expected = shown_path(&dir);
+
+    let out = sb.command().args(["agent", "ID0001"]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let argv = rec.argv().expect("the agent should have been started");
+    assert_eq!(
+        argv,
+        ["--resume", &expected],
+        "the line's own arguments, with {{path}} as the project"
+    );
+    assert_eq!(rec.cwd().as_deref(), Some(expected.as_str()));
+    assert_eq!(
+        rec.env_var("FASTF_PROJECT_PATH").as_deref(),
+        Some(expected.as_str()),
+        "the project is in the environment too"
+    );
+
+    // The agent's status is the answer.
+    let failing = recorder(&bin, "failing-agent");
+    std::fs::write(&failing.program, "#!/bin/sh\nexit 3\n").unwrap();
+    sb.ok(&[
+        "config",
+        "set",
+        "agent",
+        &failing.program.display().to_string(),
+    ]);
+    let out = sb.command().args(["agent", "ID0001"]).output().unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("exited with"), "{err}");
+}
+
+/// Without an `agent` configured the command refuses by name and runs
+/// nothing.
+#[test]
+fn agent_refuses_by_name_when_none_is_configured() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "proj", "ID0001");
+    let err = sb.fails(&["agent", "ID0001"]);
+    assert!(
+        err.contains("no agent configured") && err.contains("config set agent"),
+        "{err}"
+    );
+}
+
+/// From a launcher there is no terminal for the agent to talk to, so the
+/// whole command is handed to a terminal, which runs it again.
+#[test]
+fn agent_from_a_launcher_hands_off_to_a_terminal() {
+    let sb = Sandbox::new();
+    let rec = recorder(&sb.tmp.path().join("bin"), "fake-terminal");
+    sb.ok(&[
+        "config",
+        "set",
+        "terminal",
+        &rec.program.display().to_string(),
+    ]);
+    sb.ok(&["config", "set", "agent", "true"]);
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    let run = sb.run_like_a_launcher(&["agent", "ID0001"], &[("DISPLAY", ":99")]);
+
+    assert_eq!(run.code, 0, "handing off is not a failure: {}", run.output);
+    assert_eq!(run.output, "", "nothing is printed where nobody reads");
+    let argv = rec.argv().expect("the terminal should have been started");
+    assert_eq!(argv[0], "-e");
+    assert_eq!(&argv[2..], ["--relaunched", "agent", "ID0001"]);
+}

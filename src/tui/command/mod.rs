@@ -124,6 +124,7 @@ pub enum CommandId {
     /// F2 in the pane: the text of the row under the cursor, opened in
     /// place — a todo reworded, a tag, a variable, a note, the name.
     PaneEditText,
+    PaneOwner,
     /// `+` in the pane: one more of what the cursor is among.
     PaneAdd,
     /// F2 on the list: the folder's name — rename, as everywhere F2 edits.
@@ -161,6 +162,8 @@ pub enum CommandId {
     Actions,
     OpenFolder,
     OpenTerminal,
+    Agent,
+    AgentHere,
     CopyPath,
     ShowPath,
     ToggleDetail,
@@ -209,6 +212,16 @@ pub enum CommandId {
     Attention,
     // The action menu
     ActionsRun,
+    // The desk tab
+    /// `w`: the desk, and `w` back to the library.
+    ShowDesk,
+    /// `f` on the desk: only the selected project's group.
+    DeskGroupOnly,
+    /// `s` / `S` on the desk: the order within each group.
+    DeskOrder,
+    DeskOrderPick,
+    /// `z`: the cursor on a card picked at random.
+    DeskRandom,
     // The templates tab
     StripFilter,
     StudioNew,
@@ -237,7 +250,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 114] = [
+    pub const ALL: [CommandId; 122] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -275,6 +288,7 @@ impl CommandId {
         CommandId::PanePreviousProject,
         CommandId::PaneNextProject,
         CommandId::PaneEditText,
+        CommandId::PaneOwner,
         CommandId::PaneAdd,
         CommandId::ListRename,
         CommandId::ListAddTodo,
@@ -298,6 +312,8 @@ impl CommandId {
         CommandId::Actions,
         CommandId::OpenFolder,
         CommandId::OpenTerminal,
+        CommandId::Agent,
+        CommandId::AgentHere,
         CommandId::CopyPath,
         CommandId::ShowPath,
         CommandId::ToggleDetail,
@@ -332,6 +348,11 @@ impl CommandId {
         CommandId::Settings,
         CommandId::Reconcile,
         CommandId::Attention,
+        CommandId::ShowDesk,
+        CommandId::DeskGroupOnly,
+        CommandId::DeskOrder,
+        CommandId::DeskOrderPick,
+        CommandId::DeskRandom,
         CommandId::StripFilter,
         CommandId::ActionsRun,
         CommandId::StudioNew,

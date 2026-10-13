@@ -39,6 +39,17 @@ pub enum Effect {
     RefreshCache(PathBuf),
     /// Metadata for rows whose variables a query needs.
     LoadMeta(Vec<PathBuf>),
+    /// The records of many projects for the desk and the journal page, on a
+    /// worker of their own, in chunks (`Msg::Details`): one worker per base,
+    /// so a slow base holds up only its own cards.
+    LoadDetails(Vec<PathBuf>),
+    /// Read again every record whose file or folder changed since its stamp
+    /// — a stat each, a read only where the disk disagrees — for the desk's
+    /// refresh. Answered through `Msg::Details`, changed ones only.
+    CheckDetails(Vec<(PathBuf, Option<crate::tui::app::data::Stamp>)>),
+    /// Who is working in which project, one pass over the processes
+    /// (`Msg::Working`).
+    LoadWorking(Vec<PathBuf>),
     /// What the size scanner should measure next, most important first.
     RequestSizes(Vec<PathBuf>),
     /// Snapshots that are stale after a mutation.
@@ -219,6 +230,14 @@ pub enum Action {
         ordinal: usize,
         was: String,
     },
+    /// Give one todo — `ordinal` in the file's todos, whose text was `was`
+    /// when the picker opened — to `owner`, or to nobody with `None`.
+    SetTodoOwner {
+        project: Box<Project>,
+        ordinal: usize,
+        was: String,
+        owner: Option<String>,
+    },
     /// Reword one todo — `ordinal` in the file's todos, whose text was `was`
     /// when the edit opened — or remove it when `text` is empty.
     ReplaceTodo {
@@ -266,6 +285,9 @@ pub enum SpawnKind {
     Reveal(Box<Project>),
     /// A terminal window in the folder.
     Terminal(Box<Project>),
+    /// A terminal window running the configured agent in the folder — a
+    /// window per agent, so the desk stays up.
+    Agent(Box<Project>),
     /// Put text on the clipboard.
     Clipboard(String),
 }
@@ -287,6 +309,10 @@ pub enum Suspended {
     /// Ctrl-Z: give the terminal back and stop, as any program does; `fg`
     /// brings the app back with its screen retaken. Unix only.
     Shell,
+    /// Start the configured agent in the selected project's folder, on the
+    /// main screen, and come back when it exits — the pane re-reads the
+    /// file, so what it ticked and noted is there.
+    Agent(Box<Project>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

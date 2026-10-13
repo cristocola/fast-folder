@@ -12,16 +12,22 @@ mod harness;
 
 #[path = "tui_update/actions.rs"]
 mod actions;
+#[path = "tui_update/agent.rs"]
+mod agent;
 #[path = "tui_update/bases.rs"]
 mod bases;
 #[path = "tui_update/bases_view.rs"]
 mod bases_view;
 #[path = "tui_update/batches.rs"]
 mod batches;
+#[path = "tui_update/desk.rs"]
+mod desk;
 #[path = "tui_update/edges.rs"]
 mod edges;
 #[path = "tui_update/flows.rs"]
 mod flows;
+#[path = "tui_update/glance.rs"]
+mod glance;
 #[path = "tui_update/guide.rs"]
 mod guide;
 #[path = "tui_update/key_lines.rs"]

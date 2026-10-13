@@ -58,6 +58,7 @@ pub enum PaneSection {
     Tags,
     Todo,
     Notes,
+    Glance,
     Variables,
     Inside,
 }
@@ -68,12 +69,24 @@ impl PaneSection {
         match self {
             PaneSection::Header => "",
             PaneSection::Tags => "tags",
+            PaneSection::Glance => "glance",
             PaneSection::Variables => "variables",
             PaneSection::Inside => "inside",
             PaneSection::Notes => "notes",
             PaneSection::Todo => "todo",
         }
     }
+}
+
+/// What a hand reaches for when it opens the folder, read beside the record
+/// by other workers and handed to `pane_rows`: the newest file under the
+/// folder from the size walk — its path relative to the project and the
+/// stamp — once the walk has run, and who is working in the folder, once
+/// the process table has been asked (`None` where it has not, or cannot be).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Glance {
+    pub newest: Option<(String, String)>,
+    pub working: Option<Vec<String>>,
 }
 
 /// The section row `at` belongs to: the nearest rule above it, or the header
@@ -405,6 +418,9 @@ pub enum PaneRow {
     Reading,
     /// A read that failed.
     Warning(String),
+    /// One fact of the glance: what last moved, the repository's head, who
+    /// is working in the folder. `key` is its label, read-only.
+    Glance { key: &'static str, value: String },
     /// One template variable. Enter edits its value.
     Variable {
         slug: String,
@@ -442,13 +458,17 @@ pub enum PaneRow {
         done: usize,
         total: usize,
     },
-    /// One todo's first row. Enter toggles it; F2 edits its text. `phased`
-    /// when it sits under a phase heading, and is drawn in from it.
+    /// One todo's first row. Enter toggles it; F2 edits its text; `O` gives
+    /// it an owner. `phased` when it sits under a phase heading, and is
+    /// drawn in from it. `owner` and `when` — its owner, and the day it
+    /// was added, or ticked once it is — sit at the row's right, dim.
     Todo {
         ordinal: usize,
         done: bool,
         text: String,
         phased: bool,
+        owner: Option<String>,
+        when: Option<String>,
     },
     /// The rest of a todo too wide for the pane. Not a row the cursor rests on.
     TodoLine {
@@ -516,7 +536,12 @@ impl PaneRow {
 /// `select` offers its options and nothing else; a variable the metadata
 /// holds that the template no longer declares — or every variable of a
 /// registered project, which has no template — is free text after them.
-pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
+pub fn pane_rows(
+    project: &Project,
+    detail: Option<&ProjectDetail>,
+    glance: &Glance,
+    width: usize,
+) -> Vec<PaneRow> {
     let mut rows = header_rows(project, detail, width);
 
     rows.push(PaneRow::Rule(PaneSection::Tags));
@@ -533,8 +558,55 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
 
     rows.extend(todo_rows(detail, width));
     rows.extend(note_rows(detail, width));
+    rows.extend(glance_rows(detail, glance));
     rows.extend(variable_rows(detail));
     rows.extend(listing_rows(detail));
+    rows
+}
+
+/// The glance: what last moved under the folder, the repository's head, who
+/// is working in it — each a row only once it is known, and the section only
+/// when it has a row. First among the reference sections, since it is the
+/// one a hand would open the folder for.
+fn glance_rows(detail: &ProjectDetail, glance: &Glance) -> Vec<PaneRow> {
+    let when = |stamp: &str| {
+        format!(
+            "{} {}",
+            stamp.get(..10).unwrap_or(stamp),
+            stamp.get(11..16).unwrap_or("")
+        )
+    };
+    let mut facts = Vec::new();
+    if let Some((stamp, path)) = &glance.newest {
+        facts.push(PaneRow::Glance {
+            key: "last moved",
+            value: format!("{path}  {}", when(stamp)),
+        });
+    }
+    if let Some(head) = &detail.head {
+        facts.push(PaneRow::Glance {
+            key: "head",
+            value: match &head.when {
+                Some(at) => format!("{}  {}", head.line(), when(at)),
+                None => head.line(),
+            },
+        });
+    }
+    if let Some(working) = &glance.working {
+        facts.push(PaneRow::Glance {
+            key: "working",
+            value: if working.is_empty() {
+                "nobody".to_string()
+            } else {
+                working.join(", ")
+            },
+        });
+    }
+    if facts.is_empty() {
+        return facts;
+    }
+    let mut rows = vec![PaneRow::Rule(PaneSection::Glance)];
+    rows.extend(facts);
     rows
 }
 
@@ -583,6 +655,27 @@ fn header_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) 
     rows
 }
 
+/// What sits at a todo row's right: `@owner · 2026-10-12`, either half
+/// alone, or nothing. One spelling for the rows and the view, so the room
+/// the text leaves is the room the aside takes.
+pub fn trailer_text(owner: Option<&str>, when: Option<&str>) -> String {
+    match (owner, when) {
+        (Some(owner), Some(when)) => format!("@{owner} {when}"),
+        (Some(owner), None) => format!("@{owner}"),
+        (None, Some(when)) => when.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+/// The columns [`trailer_text`] takes, with the gap before it — zero when
+/// there is nothing to show, so a plain todo keeps its whole row.
+fn trailer_width(owner: Option<&str>, when: Option<&str>) -> usize {
+    match trailer_text(owner, when).width() {
+        0 => 0,
+        w => w + 2,
+    }
+}
+
 fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
     let mut rows = Vec::new();
     rows.push(PaneRow::Rule(PaneSection::Todo));
@@ -607,14 +700,45 @@ fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
         push_labels(&mut rows, ordinal);
         let phased = todo.phase.is_some();
         let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
-        let mut lines = wrap_columns(&todo.text, width.saturating_sub(indent)).into_iter();
+        let owner = todo.owner.clone();
+        let when = if todo.done {
+            todo.done_day().or_else(|| todo.added_day())
+        } else {
+            todo.added_day()
+        }
+        .map(str::to_string);
+        // The first row keeps room for what sits at its right, so a long
+        // text wraps before it rather than under it; the rows after it have
+        // the whole width again. `wrap_columns` keeps every character but
+        // the spaces it breaks on, so its first line is a prefix of the text
+        // and the rest of the text starts where that line ends.
+        let aside = trailer_width(owner.as_deref(), when.as_deref());
+        let full = width.saturating_sub(indent);
+        let (first, rest) = if aside > 0 {
+            let head = wrap_columns(&todo.text, full.saturating_sub(aside).max(1))
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            let remainder = todo.text[head.len()..].trim_start_matches(' ');
+            let rest = if remainder.is_empty() {
+                Vec::new()
+            } else {
+                wrap_columns(remainder, full)
+            };
+            (head, rest)
+        } else {
+            let mut lines = wrap_columns(&todo.text, full).into_iter();
+            (lines.next().unwrap_or_default(), lines.collect())
+        };
         rows.push(PaneRow::Todo {
             ordinal,
             done: todo.done,
-            text: lines.next().unwrap_or_default(),
+            text: first,
             phased,
+            owner,
+            when,
         });
-        rows.extend(lines.map(|text| PaneRow::TodoLine {
+        rows.extend(rest.into_iter().map(|text| PaneRow::TodoLine {
             done: todo.done,
             text,
             phased,

@@ -47,6 +47,8 @@ pub fn summary_local(cfg: &Config) -> SummaryPart {
             default_template: cfg.default_template.clone(),
             confirm_create: cfg.confirm_create,
             register_naming_pattern: cfg.register_naming_pattern.clone(),
+            hat: cfg.resolve_hat(),
+            agent: cfg.resolve_agent(),
         },
     }
 }
@@ -135,6 +137,8 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         bases: cfg.bases.clone(),
         editor: cfg.editor.clone(),
         terminal: cfg.terminal.clone(),
+        hat: cfg.hat.clone(),
+        agent: cfg.agent.clone(),
         theme: cfg.theme.clone(),
         motion: cfg.motion.clone(),
         log_level: cfg.log_level.clone(),
@@ -626,8 +630,10 @@ pub fn stamp_of(path: &Path) -> Option<Stamp> {
     })
 }
 
-/// The detail pane's reads for one project.
+/// The detail pane's reads for one project — and the desk's, which reads
+/// every project through it once, and again only when its stamp moved.
 pub fn detail(path: &Path) -> ProjectDetail {
+    crate::util::trace::hit("detail");
     paths::stall_if_marked(path);
     // The stamp before the reads: a write that lands between the two is
     // caught by the next check rather than hidden behind a newer stamp.
@@ -673,6 +679,9 @@ pub fn detail(path: &Path) -> ProjectDetail {
         Ok(entries) => detail.listing = entries,
         Err(err) => problems.push(format!("folder: {err}")),
     }
+    // The repository's head, from `.git` as files: absent when the folder
+    // is not a repository, which is no problem to report.
+    detail.head = crate::core::glance::git_head(path);
     detail.error = problems.into_iter().next();
     detail
 }

@@ -28,6 +28,37 @@ fn file(content: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, path)
 }
 
+/// `body` under the frozen clock, so the stamp an add or a tick writes is
+/// a known one and the bytes can be checked whole. A debug build's: the
+/// decision is compiled out of a release, where [`unstamped`] serves.
+#[cfg(debug_assertions)]
+fn frozen<R>(body: impl FnOnce() -> R) -> R {
+    crate::util::faults::with_thread_fault("time:frozen", body)
+}
+
+/// The tail an add writes under the frozen clock.
+#[cfg(debug_assertions)]
+const ADDED: &str = " added:2026-01-01T00:00:00Z";
+/// The token a tick writes under the frozen clock.
+#[cfg(debug_assertions)]
+const DONE: &str = " done:2026-01-01T00:00:00Z";
+
+/// `text` without the stamps a writer puts after a todo — ` added:<stamp>`
+/// and ` done:<stamp>` — so the rest can be checked byte for byte whatever
+/// the clock said.
+fn unstamped(text: &str) -> String {
+    let mut out = text.to_string();
+    for key in [" added:", " done:"] {
+        while let Some(at) = out.find(key) {
+            let end = out[at + 1..]
+                .find(|c: char| c.is_whitespace())
+                .map_or(out.len(), |n| at + 1 + n);
+            out.replace_range(at..end, "");
+        }
+    }
+    out
+}
+
 #[test]
 fn a_heading_is_matched_where_it_starts_a_line_in_any_spelling() {
     for heading in [
@@ -329,7 +360,7 @@ fn a_phase_is_written_as_the_name_it_reads_back_as() {
     let plain = doc("## Todo\n\n- [ ] read the order\n");
     let (_d, path) = file(&plain);
     add_todo_in(&path, "grade the reel", Some("## Grade:")).unwrap();
-    let written = fs::read_to_string(&path).unwrap();
+    let written = unstamped(&fs::read_to_string(&path).unwrap());
     assert!(
         written.contains("\n### Grade\n- [ ] grade the reel\n"),
         "{written}"
@@ -353,7 +384,7 @@ fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
     let (_d, path) = file(&grouped);
     add_todo_in(&path, "copy the audio", Some("setup")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         grouped.replace("- [x] download\n", "- [x] download\n- [ ] copy the audio\n")
     );
 
@@ -362,7 +393,7 @@ fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
     let (_d, path) = file(&grouped);
     add_todo_in(&path, "listen to the song", Some("Creative Plan")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         grouped.replace(
             "### Other\n",
             "### Creative Plan\n- [ ] listen to the song\n\n### Other\n"
@@ -374,7 +405,7 @@ fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
     let (_d, path) = file(&plain);
     add_todo_in(&path, "cut the first minute", Some("Main Edit")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         plain.replace(
             "- [ ] read the order\n",
             "- [ ] read the order\n\n### Main Edit\n- [ ] cut the first minute\n"
@@ -387,7 +418,7 @@ fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
     let (_d, path) = file(&bare);
     add_todo_in(&path, "first", Some("Setup")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         format!("{bare}\n## Todo\n\n### Setup\n- [ ] first\n")
     );
 
@@ -395,7 +426,7 @@ fn a_todo_joins_the_phase_it_names_or_opens_one_where_a_reader_would_look() {
     let (_d, path) = file(&grouped);
     add_todo_in(&path, "last", None).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         grouped.replace(
             "- [ ] chase the invoice\n",
             "- [ ] chase the invoice\n- [ ] last\n"
@@ -428,7 +459,7 @@ fn a_task_takes_the_phase_label_above_it_and_the_ordinals_do_not_move() {
     let (_dir, path) = file(&before);
     assert!(toggle_todo(&path, 3, "export").unwrap());
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         before.replace("[ ] export", "[x] export")
     );
 }
@@ -458,16 +489,19 @@ fn a_task_is_read_in_any_indent_and_toggled_by_one_byte() {
                 done: true,
                 text: "ingested".to_string(),
                 phase: None,
+                ..Default::default()
             },
             Todo {
                 done: false,
                 text: "edited".to_string(),
                 phase: None,
+                ..Default::default()
             },
             Todo {
                 done: false,
                 text: "delivered".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ]
     );
@@ -476,17 +510,220 @@ fn a_task_is_read_in_any_indent_and_toggled_by_one_byte() {
     assert!(toggle_todo(&path, 1, "edited").unwrap());
     assert!(toggle_todo(&path, 2, "delivered").unwrap());
     let after = fs::read_to_string(&path).unwrap();
+    // A tick writes its date after the text; an untick of a line that
+    // never had one writes nothing but the one byte.
     assert_eq!(
-        after,
+        unstamped(&after),
         before
             .replace("[x] ingested", "[ ] ingested")
             .replace("[ ] edited", "[x] edited")
             .replace("[] delivered", "[x] delivered")
     );
+    assert_eq!(after.matches(" done:").count(), 2, "{after}");
+    assert!(after.contains("[ ] ingested\n"), "{after}");
     let err = toggle_todo(&path, 0, "edited").unwrap_err().to_string();
     assert!(err.contains("changed meanwhile"), "{err}");
     assert!(toggle_todo(&path, 9, "").is_err());
     assert_eq!(fs::read_to_string(&path).unwrap(), after);
+}
+
+/// **The trailer is read from the end of the line and written back in one
+/// order.** `@owner`, `added:` and `done:` are each optional, in any order
+/// and any case a hand wrote them; a `@word` in the middle of the text is
+/// text; the first owner of the run is the owner; and a line with none is
+/// a todo with none, which nothing fills in.
+#[test]
+fn a_todo_line_carries_its_owner_and_its_dates_at_its_end() {
+    let content = doc(concat!(
+        "## Todo\n\n",
+        "- [ ] colour grade @claude added:2026-10-12T14:02:11Z\n",
+        "- [x] shoot @sales added:2026-09-20 done:2026-09-28T18:30:00Z\n",
+        "- [ ] Done:2026-10-01 ADDED:2026-09-01 @two @one\n",
+        "- [ ] email @acme about the invoice @me\n",
+        "- [ ] ping @claude, then wait\n",
+        "- [ ] plain\n",
+        "- [ ] @\n",
+        "- [ ] added:soon @x\n",
+    ));
+    let todos = todos_in(&content);
+    let read = |i: usize| {
+        let t = &todos[i];
+        (
+            t.text.as_str(),
+            t.owner.as_deref(),
+            t.added.as_deref(),
+            t.done_at.as_deref(),
+        )
+    };
+    assert_eq!(
+        read(0),
+        (
+            "colour grade",
+            Some("claude"),
+            Some("2026-10-12T14:02:11Z"),
+            None
+        )
+    );
+    assert_eq!(todos[0].added_day(), Some("2026-10-12"));
+    assert_eq!(
+        read(1),
+        (
+            "shoot",
+            Some("sales"),
+            Some("2026-09-20"),
+            Some("2026-09-28T18:30:00Z")
+        )
+    );
+    assert_eq!(todos[1].done_day(), Some("2026-09-28"));
+    // Any order, any case; the first owner wins; a text of nothing but a
+    // trailer is empty.
+    assert_eq!(
+        read(2),
+        ("", Some("two"), Some("2026-09-01"), Some("2026-10-01"))
+    );
+    assert_eq!(
+        read(3),
+        ("email @acme about the invoice", Some("me"), None, None)
+    );
+    // A `@word` followed by text is text, whatever its punctuation.
+    assert_eq!(read(4), ("ping @claude, then wait", None, None, None));
+    assert_eq!(read(5), ("plain", None, None, None));
+    // A bare `@` names nobody, and `added:` without a day is a word.
+    assert_eq!(read(6), ("@", None, None, None));
+    assert_eq!(read(7), ("added:soon", Some("x"), None, None));
+}
+
+/// A tick stamps `done:` after what the line already says, and an untick
+/// takes exactly that token off again; the owner and `added:` stay where
+/// they were; a line a hand wrote in another order comes back in fastf's.
+#[test]
+#[cfg(debug_assertions)]
+fn a_tick_stamps_done_and_an_untick_takes_it_off() {
+    let before = doc(concat!(
+        "## Todo\n\n",
+        "- [ ] grade @claude added:2026-10-12T14:02:11Z\n",
+        "- [ ] bare\n",
+        "- [x] hand-ticked done:2026-10-01 @me\n",
+        "- [ ] spaced   \n",
+    ));
+    let (_dir, path) = file(&before);
+    frozen(|| {
+        assert!(toggle_todo(&path, 0, "grade").unwrap());
+        assert!(toggle_todo(&path, 1, "bare").unwrap());
+        assert!(!toggle_todo(&path, 2, "hand-ticked").unwrap());
+        assert!(toggle_todo(&path, 3, "spaced").unwrap());
+    });
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        doc(&format!(
+            concat!(
+                "## Todo\n\n",
+                "- [x] grade @claude added:2026-10-12T14:02:11Z{done}\n",
+                "- [x] bare{done}\n",
+                "- [ ] hand-ticked @me\n",
+                "- [x] spaced   {done}\n",
+            ),
+            done = DONE
+        ))
+    );
+    frozen(|| {
+        assert!(!toggle_todo(&path, 0, "grade").unwrap());
+        assert!(!toggle_todo(&path, 1, "bare").unwrap());
+    });
+    let after = fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains("- [ ] grade @claude added:2026-10-12T14:02:11Z\n"),
+        "the owner and the added stamp stay: {after}"
+    );
+    assert!(after.contains("- [ ] bare\n"), "{after}");
+}
+
+/// A rewording keeps the trailer and replaces the text alone; a rewording
+/// that ends in `@name` hands the todo over and writes the trailer again
+/// with the new owner; `set_owner` rewrites the tail and nothing else.
+#[test]
+fn a_rewording_keeps_the_trailer_and_an_owner_is_one_token() {
+    let before = doc(concat!(
+        "## Todo\n\n",
+        "- [ ] grade @claude added:2026-10-12T14:02:11Z\n",
+        "- [x] shoot added:2026-09-20 done:2026-09-28T18:30:00Z\n",
+        "- [ ] bare\n",
+    ));
+    let (_dir, path) = file(&before);
+    replace_todo(&path, 0, "grade", "  grade the colour ").unwrap();
+    replace_todo(&path, 1, "shoot", "shoot it @sam").unwrap();
+    set_owner(&path, 2, "bare", Some("acme")).unwrap();
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        doc(concat!(
+            "## Todo\n\n",
+            "- [ ] grade the colour @claude added:2026-10-12T14:02:11Z\n",
+            "- [x] shoot it @sam added:2026-09-20 done:2026-09-28T18:30:00Z\n",
+            "- [ ] bare @acme\n",
+        ))
+    );
+    set_owner(&path, 0, "grade the colour", None).unwrap();
+    set_owner(&path, 2, "bare", None).unwrap();
+    let after = fs::read_to_string(&path).unwrap();
+    assert!(
+        after.contains("- [ ] grade the colour added:2026-10-12T14:02:11Z\n"),
+        "{after}"
+    );
+    assert!(after.contains("- [ ] bare\n"), "{after}");
+    // One word, or nothing.
+    for bad in ["two words", ""] {
+        assert!(set_owner(&path, 2, "bare", Some(bad)).is_err(), "{bad:?}");
+    }
+    let err = replace_todo(&path, 2, "bare", "@sam")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("more than its owner"), "{err}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), after);
+}
+
+/// An add stamps `added:` with the one moment of the write, after the
+/// owner the text named or the one given; `done:` typed into a new todo
+/// is dropped, and an `added:` typed is kept, since it says when.
+#[test]
+#[cfg(debug_assertions)]
+fn an_add_stamps_added_after_the_owner() {
+    let (_dir, path) = file(&doc("## Todo\n\n- [ ] first\n"));
+    frozen(|| {
+        add_todos_at(
+            &path,
+            &[
+                "cut @claude".to_string(),
+                "deliver".to_string(),
+                "old one added:2025-12-31 done:2026-01-01".to_string(),
+            ],
+            &TodoPlace::End,
+        )
+        .unwrap();
+        add_todos_with(
+            &path,
+            &[NewTodo::owned("call back @nobody", Some("sales"))],
+            &TodoPlace::End,
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        doc(&format!(
+            concat!(
+                "## Todo\n\n",
+                "- [ ] first\n",
+                "- [ ] cut @claude{added}\n",
+                "- [ ] deliver{added}\n",
+                "- [ ] old one added:2025-12-31\n",
+                "- [ ] call back @sales{added}\n",
+            ),
+            added = ADDED
+        ))
+    );
+    let err = add_todos_at(&path, &["@claude".to_string()], &TodoPlace::End)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "the todo is empty — nothing written");
 }
 
 #[test]
@@ -495,13 +732,14 @@ fn a_todo_is_added_at_the_end_of_its_section_or_the_section_is_opened() {
     add_todo(&path, "  deliver the video ").unwrap();
     let after = fs::read_to_string(&path).unwrap();
     assert!(
-        after.ends_with("— a\n\n## Todo\n\n- [ ] deliver the video\n"),
+        unstamped(&after).ends_with("— a\n\n## Todo\n\n- [ ] deliver the video\n"),
         "{after:?}"
     );
+    assert!(after.contains("deliver the video added:"), "{after:?}");
     add_todo(&path, "invoice").unwrap();
     let after = fs::read_to_string(&path).unwrap();
     assert!(
-        after.ends_with("- [ ] deliver the video\n- [ ] invoice\n"),
+        unstamped(&after).ends_with("- [ ] deliver the video\n- [ ] invoice\n"),
         "{after:?}"
     );
     assert_eq!(todos_in(&after).len(), 2);
@@ -512,7 +750,7 @@ fn a_todo_is_added_at_the_end_of_its_section_or_the_section_is_opened() {
     add_todo(&path, "one").unwrap();
     let after = fs::read_to_string(&path).unwrap();
     assert!(
-        after.contains("## Todo\n\n- [ ] one\n\n## Archive\n"),
+        unstamped(&after).contains("## Todo\n\n- [ ] one\n\n## Archive\n"),
         "{after:?}"
     );
 
@@ -731,34 +969,35 @@ fn add_todos_in_writes_several_in_order_under_a_phase() {
     ));
     let three = ["one".to_string(), "two".to_string(), "three".to_string()];
     let run = "- [ ] one\n- [ ] two\n- [ ] three\n";
+    let written = |path: &std::path::Path| unstamped(&fs::read_to_string(path).unwrap());
 
     // An existing label: the end of its run, all three together.
     let (_d, path) = file(&grouped);
     add_todos_in(&path, &three, Some("setup")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        written(&path),
         grouped.replace("- [x] download\n", &format!("- [x] download\n{run}"))
     );
     // A new label, above `### Other`.
     let (_d, path) = file(&grouped);
     add_todos_in(&path, &three, Some("Shoot")).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        written(&path),
         grouped.replace("### Other\n", &format!("### Shoot\n{run}\n### Other\n"))
     );
     // No phase: the end of the section.
     let (_d, path) = file(&grouped);
     add_todos_in(&path, &three, None).unwrap();
-    assert_eq!(
-        fs::read_to_string(&path).unwrap(),
-        format!("{grouped}{run}")
-    );
+    assert_eq!(written(&path), format!("{grouped}{run}"));
     // No section: the heading, the label and the run.
     let bare = doc("## Notes\n\n- 2026-01-01 — a\n");
     let (_d, path) = file(&bare);
     add_todos_in(&path, &three, Some("Setup")).unwrap();
     let after = fs::read_to_string(&path).unwrap();
-    assert_eq!(after, format!("{bare}\n## Todo\n\n### Setup\n{run}"));
+    assert_eq!(
+        unstamped(&after),
+        format!("{bare}\n## Todo\n\n### Setup\n{run}")
+    );
     assert_eq!(
         todos_in(&after)
             .iter()
@@ -775,7 +1014,7 @@ fn add_todos_in_skips_empty_and_refuses_a_newline() {
     let texts = ["  a ", "", "   ", "b"].map(String::from);
     add_todos_in(&path, &texts, None).unwrap();
     let after = fs::read_to_string(&path).unwrap();
-    assert_eq!(after, format!("{before}- [ ] a\n- [ ] b\n"));
+    assert_eq!(unstamped(&after), format!("{before}- [ ] a\n- [ ] b\n"));
 
     // One bad line refuses the lot: nothing is half-written.
     let err = add_todos_in(&path, &["fine".to_string(), "two\nlines".to_string()], None)
@@ -810,8 +1049,8 @@ fn add_todo_in_is_add_todos_in_with_one_text() {
             add_todo_in(&one, "  a task ", phase).unwrap();
             add_todos_in(&several, &["  a task ".to_string()], phase).unwrap();
             assert_eq!(
-                fs::read_to_string(&one).unwrap(),
-                fs::read_to_string(&several).unwrap(),
+                unstamped(&fs::read_to_string(&one).unwrap()),
+                unstamped(&fs::read_to_string(&several).unwrap()),
                 "{shape:?} under {phase:?}"
             );
         }
@@ -819,7 +1058,7 @@ fn add_todo_in_is_add_todos_in_with_one_text() {
     let (_dir, path) = file(&shapes[1]);
     add_todo_in(&path, "one", None).unwrap();
     assert_eq!(
-        fs::read_to_string(&path).unwrap(),
+        unstamped(&fs::read_to_string(&path).unwrap()),
         doc("## Todo\n\n- [ ] one\n\n## Archive\n")
     );
     for (text, phase, refusal) in [
@@ -856,7 +1095,7 @@ fn add_at(body: &str, texts: &[&str], place: TodoPlace) -> (usize, String) {
     let (_dir, path) = file(&doc(body));
     let texts: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
     let first = add_todos_at(&path, &texts, &place).unwrap();
-    (first, fs::read_to_string(&path).unwrap())
+    (first, unstamped(&fs::read_to_string(&path).unwrap()))
 }
 
 fn ordinal_of(content: &str, text: &str) -> usize {
@@ -980,5 +1219,8 @@ fn a_crlf_file_keeps_its_line_endings_when_written_to() {
     let (_dir, path) = file(&mixed);
     add_todos_at(&path, &["b".to_string()], &TodoPlace::End).unwrap();
     let written = fs::read_to_string(&path).unwrap();
-    assert!(written.ends_with("- [ ] a\n- [ ] b\n"), "{written:?}");
+    assert!(
+        unstamped(&written).ends_with("- [ ] a\n- [ ] b\n"),
+        "{written:?}"
+    );
 }

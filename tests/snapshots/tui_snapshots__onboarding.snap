@@ -1,9 +1,8 @@
 ---
 source: tests/tui_snapshots.rs
-assertion_line: 25
 expression: frame
 ---
-" fast-folder   library │ templates   2 bases                                         highest ID0248 "
+" fast-folder   library │ desk │ templates   2 bases                                  highest ID0248 "
 " → projects 0   archive not mounted                                                ⚠ 1 needs you  ! "
 "                                                                                                    "
 " ⌕ / to search                                                                         0/0 · newest "
@@ -12,18 +11,18 @@ expression: frame
 "│                                                                                                  │"
 "│                   nothing here yet — n creates a project, e registers a folder                   │"
 "│                                                                                                  │"
-"│                                                                                                  │"
 "│               ┌ welcome ─────────────────────────────────────────────────────────┐               │"
 "│               │ Where should your projects live?                                 │               │"
 "│               │ This folder is your first base — where new projects are created. │               │"
 "│               │ Add more later (a second drive, a network share) under Settings. │               │"
 "│               │ Templates shape every project: T opens them, H explains them.    │               │"
+"│               │ Once projects have todos, w opens the desk: every project's next │               │"
+"│               │ todo, by owner.                                                  │               │"
 "│               │                                                                  │               │"
 "│               │ /home/user/Projects                                              │               │"
 "│               │ an empty answer skips — the question comes back next time        │               │"
 "│               │ Enter create it   Esc skip for now                               │               │"
 "│               └──────────────────────────────────────────────────────────────────┘               │"
-"│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"

@@ -41,6 +41,24 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
             was,
             text,
         } => replace_todo(project, ordinal, was, text),
+        Action::SetTodoOwner {
+            project,
+            ordinal,
+            was,
+            owner,
+        } => {
+            let owner =
+                crate::core::operations::set_todo_owner(&project, ordinal, &was, owner.as_deref())?;
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                match owner {
+                    Some(owner) => format!("Owner: @{owner}."),
+                    None => "Nobody's now.".to_string(),
+                },
+            ))
+        }
         Action::AddTodos {
             project,
             texts,
@@ -524,6 +542,23 @@ pub(super) fn spawn(kind: &SpawnKind) -> Result<String, String> {
             let cfg = crate::core::config::Config::load().map_err(|e| format!("{e:#}"))?;
             crate::cli::terminal::open_terminal_at(&cfg, &project.path)
                 .map(|()| String::new())
+                .map_err(|e| format!("{e:#}"))
+        }
+        SpawnKind::Agent(project) => {
+            crate::core::library::revalidate_for_read(project).map_err(|e| format!("{e:#}"))?;
+            let cfg = crate::core::config::Config::load().map_err(|e| format!("{e:#}"))?;
+            let Some(line) = cfg.resolve_agent() else {
+                return Err(crate::cli::agent::NO_AGENT.to_string());
+            };
+            // The window runs `fastf agent <id>`, which resolves the project
+            // again and runs the line in its folder; the id is exact, so the
+            // picker there only ever asks about one id in two bases.
+            let args = [
+                std::ffi::OsString::from("agent"),
+                std::ffi::OsString::from(&project.id),
+            ];
+            crate::cli::terminal::open_terminal_running(&cfg, &args)
+                .map(|()| line)
                 .map_err(|e| format!("{e:#}"))
         }
         SpawnKind::Clipboard(text) => crate::util::clipboard::copy(text)

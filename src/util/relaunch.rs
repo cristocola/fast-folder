@@ -209,6 +209,16 @@ fn stream_has_no_reader(fd: i32) -> bool {
 /// no emulator could be started, and the caller falls through to the plain
 /// behaviour rather than failing.
 pub fn respawn_in_terminal(preference: Option<&str>) -> Result<()> {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    spawn_in_terminal(preference, &args)
+}
+
+/// Open a terminal emulator running this binary with `args` — the relaunch
+/// with an argv of the caller's choosing, which is how the app opens a window
+/// running `fastf agent <id>` while it keeps its own screen. The window runs
+/// fastf with `--relaunched` ahead of `args`, as a relaunch does, so what
+/// runs there knows the window is its own.
+pub fn spawn_in_terminal(preference: Option<&str>, args: &[OsString]) -> Result<()> {
     let exe = std::env::current_exe()
         .ok()
         .map(OsString::from)
@@ -216,10 +226,9 @@ pub fn respawn_in_terminal(preference: Option<&str>) -> Result<()> {
         // shell would have used anyway.
         .or_else(|| std::env::args_os().next())
         .unwrap_or_else(|| OsString::from("fastf"));
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
 
     let mut tried = Vec::new();
-    for candidate in candidate_commands(preference, &exe, &args) {
+    for candidate in candidate_commands(preference, &exe, args) {
         let (program, rest) = candidate.split_first().expect("candidate is never empty");
         if paths::find_on_path(&program.to_string_lossy()).is_none() {
             continue;

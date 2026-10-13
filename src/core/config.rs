@@ -97,6 +97,24 @@ pub struct Config {
     #[serde(default)]
     pub terminal: String,
 
+    /// The agent to start in a project's folder — `fastf agent`, `x` in
+    /// the app: one shell line, the shape a `post_create` command has
+    /// (`claude`, `codex --full-auto`, `claude '{path}'`), run with the
+    /// project as its working folder and `FASTF_PROJECT_PATH` set. Empty =
+    /// none configured, which `fastf agent` refuses by name.
+    ///
+    /// Never read raw — see [`Config::resolve_agent`].
+    #[serde(default)]
+    pub agent: String,
+
+    /// The hat: the owner name for the user's own todos; the desk lists them
+    /// as yours and `fastf todo add --mine` uses it. Empty = none. Shown in the app's header;
+    /// `FASTF_HAT` sets it for one shell. It never changes what a file says.
+    ///
+    /// Never read raw — see [`Config::resolve_hat`].
+    #[serde(default)]
+    pub hat: String,
+
     /// The guided app's palette: `auto` (follow what the terminal announces:
     /// Doom One where it draws 24-bit colour), `doom-one`, `rich`, `ansi` or
     /// `mono`. Empty = `auto`. `FASTF_THEME` overrides it
@@ -209,6 +227,8 @@ impl Default for Config {
             bases: Vec::new(),
             editor: String::new(),
             terminal: String::new(),
+            hat: String::new(),
+            agent: String::new(),
             theme: String::new(),
             motion: String::new(),
             log_level: String::new(),
@@ -371,6 +391,24 @@ impl Config {
             Ok(name) if !name.trim().is_empty() => TerminalPreference::Named(name.trim().into()),
             _ => TerminalPreference::Probe,
         }
+    }
+
+    /// The agent's shell line, or `None` with none configured.
+    pub fn resolve_agent(&self) -> Option<String> {
+        let line = self.agent.trim();
+        (!line.is_empty()).then(|| line.to_string())
+    }
+
+    /// The hat: `FASTF_HAT` for this shell, else the `hat` key, else none.
+    /// A `@` typed in front of the name is not part of it.
+    pub fn resolve_hat(&self) -> Option<String> {
+        let hat = match std::env::var("FASTF_HAT") {
+            Ok(hat) => hat,
+            Err(_) => self.hat.clone(),
+        };
+        let hat = hat.trim();
+        let hat = hat.strip_prefix('@').unwrap_or(hat).trim();
+        (!hat.is_empty()).then(|| hat.to_string())
     }
 
     /// The editor to start: the `editor` key, else `$EDITOR`, else a fallback.

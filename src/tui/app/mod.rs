@@ -16,6 +16,7 @@ pub mod attention;
 pub mod background;
 pub mod bases;
 pub mod data;
+pub mod desk;
 pub mod jobs;
 pub mod library;
 pub mod modal;
@@ -28,6 +29,7 @@ pub mod studio;
 pub mod wizard;
 
 mod builder;
+mod desk_tab;
 mod geometry;
 mod keys;
 mod listing;
@@ -92,22 +94,31 @@ pub enum Focus {
 ///
 /// **A tab, not a dialog**: a tab keeps its place, and the templates are a
 /// place to work, with their counts, a filter box of their own and their
-/// verbs.
+/// verbs. The desk is the library grouped by who each project's next todo
+/// is in; its pane is the library's pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
     #[default]
     Library,
+    Desk,
     Templates,
 }
 
 impl Screen {
-    pub const ALL: [Screen; 2] = [Screen::Library, Screen::Templates];
+    pub const ALL: [Screen; 3] = [Screen::Library, Screen::Desk, Screen::Templates];
 
     pub fn label(self) -> &'static str {
         match self {
             Screen::Library => "library",
+            Screen::Desk => "desk",
             Screen::Templates => "templates",
         }
+    }
+
+    /// Whether the tab lists projects and shows the library's pane: the
+    /// library and the desk, as against the templates tab.
+    pub fn lists_projects(self) -> bool {
+        self != Screen::Templates
     }
 }
 
@@ -261,6 +272,28 @@ pub struct App {
     pane_seek: Option<pane::PaneSection>,
     pub focus: Focus,
     pub screen: Screen,
+    /// The desk tab's rows, cursor, group filter and order.
+    pub desk: desk::DeskState,
+    /// Who is working in which project, by name, from the last pass over
+    /// the process table — for every project when the desk asked, for the
+    /// selected one while the pane shows it. A project with no entry has not
+    /// been asked about; one with an empty list has nobody in it.
+    pub working: HashMap<PathBuf, Vec<String>>,
+    /// A hat for this run alone (`fastf desk --as`), used instead of the
+    /// configured one.
+    pub hat_override: Option<String>,
+    /// Whether the desk has been on screen this run: the session then
+    /// stamps when the desk was last looked at, for the journal's rule.
+    pub desk_visited: bool,
+    /// When a previous run last had the desk on screen, from the session
+    /// file: the journal page draws its rule there, so what happened since
+    /// reads above it.
+    pub desk_seen_at: Option<String>,
+    /// `fastf desk`, or a session that ended on the desk: open on it.
+    open_on_desk: bool,
+    /// `fastf desk --random`: land the cursor on a random card once the
+    /// rows are in.
+    desk_random_once: bool,
     pub templates: TemplatesState,
     /// The templates tab's own list. It is state on the app, not a modal:
     /// a tab you can leave and come back to keeps its place, and a modal
@@ -289,6 +322,9 @@ pub struct App {
     /// The clock a log line is stamped with. The runtime's is the wall clock;
     /// a fixture's stands still, so a snapshot never depends on the hour.
     pub clock: fn() -> String,
+    /// The same clock as a full stamp, for the desk's ages (`4 d` since a
+    /// project last moved); a fixture's stands still too.
+    pub now: fn() -> String,
     /// Where the data lives, for the help's footer. Set by the runtime, which
     /// may look; `None` in a fixture, so no snapshot can name a real path.
     pub data_dir: Option<String>,
@@ -385,6 +421,13 @@ impl App {
             pane_seek: None,
             focus: Focus::Projects,
             screen: Screen::Library,
+            desk: desk::DeskState::default(),
+            working: HashMap::new(),
+            hat_override: None,
+            desk_visited: false,
+            desk_seen_at: None,
+            open_on_desk: false,
+            desk_random_once: false,
             templates: TemplatesState::default(),
             studio: Studio::default(),
             modals: ModalStack::default(),
@@ -397,6 +440,7 @@ impl App {
             unseen_warnings: 0,
             outbox: Vec::new(),
             clock: crate::util::time::now_hms,
+            now: crate::util::time::now_iso8601,
             data_dir: None,
             has_display: true,
             session: crate::tui::frame::recent_actions(),
@@ -427,9 +471,33 @@ impl App {
                 app.library.install_initial(initial);
             }
             Entry::Studio { open } => app.studio_entry = Some(open),
+            Entry::Desk {
+                group,
+                order,
+                hat,
+                random,
+            } => {
+                app.desk.filter = group;
+                if let Some(order) = order {
+                    app.desk.order = order;
+                }
+                app.hat_override = hat;
+                app.open_on_desk = true;
+                app.desk_random_once = random;
+            }
         }
         app.recompute();
         app
+    }
+
+    /// The hat: the one this run was given, else the configured one once
+    /// the summary has read it.
+    pub fn hat(&self) -> Option<String> {
+        self.hat_override.clone().or_else(|| {
+            self.summary
+                .as_ref()
+                .and_then(|summary| summary.prefs.hat.clone())
+        })
     }
 
     /// Start where the last run left off: the sort order, the pane, the row,
@@ -452,6 +520,13 @@ impl App {
             .filter(|base| !base.trim().is_empty())
             .map(PathBuf::from)
             .collect();
+        self.desk_seen_at = session.desk_seen_at.clone();
+        if let Some(order) = session.desk_order() {
+            self.desk.order = order;
+        }
+        if self.desk.filter.is_none() {
+            self.desk.filter = session.desk_group();
+        }
         if !self.is_menu {
             self.recompute();
             return;
@@ -460,6 +535,10 @@ impl App {
             self.library.explicit_sort = Some(order);
         }
         self.select_id_when_found = session.selected.clone();
+        // A run that ended on the desk starts there, as `fastf desk` does.
+        if session.tab.as_deref() == Some(Screen::Desk.label()) {
+            self.open_on_desk = true;
+        }
         self.recompute();
     }
 
@@ -480,6 +559,10 @@ impl App {
                     effects.extend(self.open_builder(Some(slug)))
                 }
             }
+        }
+        if self.open_on_desk {
+            self.open_on_desk = false;
+            effects.extend(self.show_screen(Screen::Desk));
         }
         if self.library.loaded {
             let template_reads = self.refresh_templates();

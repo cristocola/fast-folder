@@ -143,6 +143,17 @@ pub fn tag(value: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The owner picker's "a name you type…" prompt.
+pub const OWNER_PROMPT: &str = "Owner (a name, written @name at the end of the todo)";
+
+/// An owner, by the owner's own rule (`validated::Owner`): one word, with
+/// or without its `@`.
+pub fn owner(value: &str) -> Result<String, String> {
+    crate::core::validated::Owner::parse(value)
+        .map(crate::core::validated::Owner::into_string)
+        .map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{delete_prompt, folder_name, name_list, unregister_prompt};

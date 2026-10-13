@@ -46,10 +46,10 @@ auto_tags:
 
 ## Todo
 
-- [x] shoot
+- [x] shoot @sales added:2026-04-21T09:00:00Z done:2026-04-28T18:30:00Z
 
 ### Post
-- [ ] colour grade
+- [ ] colour grade @claude added:2026-05-02T18:41:00Z
 - [ ] deliver the masters
 ```
 
@@ -59,13 +59,34 @@ A new project starts with an empty `## Notes` and no `## Todo`. The two notes an
 
 A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
 
+**A todo's owner and its dates are at the end of its line**, after the
+task. `@claude` is the **owner**: a name you write for yourself to say who the
+todo is with, such as an agent (`@claude`), a client (`@acme`) or your own
+hat (`@sales`). `added:` and `done:` are when
+it was added and when it was ticked, the same stamps the notes carry. The
+text comes first, so a person reads the task; the three tokens name
+themselves, so an agent reading the raw file needs no documentation. `fastf
+todo add` writes `added:`, `done` writes `done:` and `--undo` removes it. A
+`@name` at the end of the text you type is the owner; `fastf todo owner` and
+the pane's `O` change it. A line written by hand without any of these, such
+as `- [ ] fix the thing`, is a todo with no owner and no dates, shown as such
+and **never filled in**: fastf does not know when it was written.
+
+**Only the end of the line is read for the owner.** fastf takes the run of
+`@name`, `added:` and `done:` tokens at the end of the line, in any order and
+any case, and treats everything before it as the text. A `@word` in the
+middle of the text stays text, so a todo like `- [ ] mail @acme the invoice`
+has no owner, and `- [ ] mail the invoice @acme` has the owner acme. When
+two `@names` end the line, the first is the owner. See
+[docs/cli.md](cli.md#todos).
+
 The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking. Only `id` and `template` are required to read the file; the rest is repaired from the folder when it is missing (see below).
 
 `id_number` is the number behind that id, written down rather than parsed back out of it. A template may declare any `id.prefix`, digits included, and `ID0047`, `47` and `2047` cannot all be told apart by reading their trailing digits — so the number is recorded when the project is created. Projects made before fastf stored it have their number read from the id string instead, and `fastf reindex` fills the field in for them.
 
 `auto_tags` names which of `tags` came from the template's `tag_from`, so `fastf tag reauto` can replace exactly those and nothing else. Without it the only question re-deriving could ask was whether a tag started with a `tag_from` slug and a slash, which is also true of a literal tag the template declares and of any tag you typed yourself — so it deleted those too. The key is absent when a project has no derived tags, and a project created before fastf recorded it keeps working: re-deriving reconstructs what it can from the variables in the file, and writes the record as it goes.
 
-After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, or set a variable from the app's detail pane, and every rewrite leaves the rest of the file byte for byte as it was — with the exceptions that are the point of the verb. Setting a variable also rewrites the variables table under `# Project Info`, so the table stays true, but only while it is still the table fastf wrote: reshape it, rename its header, and fastf leaves it alone. A note is appended at the end of the `## Notes` section; editing one from the pane rewrites that note's own lines; toggling a todo rewrites the one character inside its brackets; rewording a todo rewrites the text after its brackets and keeps the indent, the list marker, the tick and the line ending; removing a todo takes its one line, and a blank line only where one would otherwise be left doubled. A file saved with Windows line endings keeps them on every line fastf adds or rewrites. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file.
+After creation the file is yours. fastf rewrites the frontmatter when you tag, move, rename, or register a project, or set a variable from the app's detail pane, and every rewrite leaves the rest of the file byte for byte as it was — with the exceptions that are the point of the verb. Setting a variable also rewrites the variables table under `# Project Info`, so the table stays true, but only while it is still the table fastf wrote: reshape it, rename its header, and fastf leaves it alone. A note is appended at the end of the `## Notes` section; editing one from the pane rewrites that note's own lines; toggling a todo rewrites the one character inside its brackets and its `done:` stamp — written on a tick, taken off on an untick; rewording a todo rewrites the text after its brackets and keeps the indent, the list marker, the tick, the owner and the dates and the line ending; handing a todo over rewrites its `@owner` alone; removing a todo takes its one line, and a blank line only where one would otherwise be left doubled. A file saved with Windows line endings keeps them on every line fastf adds or rewrites. That includes **keys fastf does not recognise**: add `obsidian_folder:` or anything else your own tooling needs, and it stays where you put it, in the same position in the file.
 
 **Notes are dated entries under `## Notes`** — `- 2026-04-20T14:32:11Z — text`, with any further lines of the note indented under it. The reader is lenient: a line at the left margin starting with `- ` and a date starts a note, with or without the `—`; every line until the next one belongs to it; text above the first entry is one undated note; the heading is matched in any case and with or without a colon. A project whose notes are under a `## Journal` heading keeps them there. **Todos** are `- [ ] text` and `- [x] text` lines under `## Todo`. See [docs/cli.md](cli.md#notes).
 
@@ -106,6 +127,19 @@ the folder does not, which is why a note is still how work is said to have
 happened. `fastf show --json` also carries `last_note`, the timestamp of the
 newest dated note: when somebody last *said* something happened, as distinct
 from when anything wrote the file.
+
+### What the desk reads
+
+`fastf desk` and the app's desk tab list every project as one line, grouped
+by the owner of its first open todo, with how long the project has been
+quiet. All of it is read from the folder: the owner from the todo's own
+`@name`, the age from `touched` and from the newest file a walk of the folder
+finds (never one under a dot-folder such as `.git`), and `active` from the
+operating system's process table (Linux). Nothing is stored for it and
+nothing is inferred. A project with no `## Todo` at all is listed under
+`no open todos`. There is no lifecycle state to set: what the desk says about
+a project is what its file and its folder say right now. See
+[docs/cli.md](cli.md#the-desk).
 
 ### A project as memory
 
@@ -503,11 +537,11 @@ coarse mutation lock per data folder; it does not coordinate simultaneous
 writers on two computers, so two machines writing one shared base at the same
 moment can mint the same ID.
 
-**What it starts.** fastf runs other programs on your behalf in five places,
+**What it starts.** fastf runs other programs on your behalf in six places,
 all of them configuration rather than input: a template's `post_create`
-commands, your editor, the file manager for Reveal, a clipboard tool
-(`wl-copy`, `xclip`, `xsel`, `clip`, `pbcopy`), and — unix only — a terminal
-emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
+commands, your editor, your agent (`fastf agent`, the `agent` key), the file
+manager for Reveal, a clipboard tool (`wl-copy`, `xclip`, `xsel`, `clip`,
+`pbcopy`), and — unix only — a terminal emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
 and a reconcile each run as a copy of fastf, detached from the terminal, with
 nothing on its command line but the job it is to read from the data folder. On
 Linux with a systemd user session it is started through `systemd-run --user

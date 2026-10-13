@@ -210,6 +210,7 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::FocusDetail if app.pane_behind_list() => "details",
         CommandId::FocusDetail => "pane",
         CommandId::PaneEditText => "edit",
+        CommandId::PaneOwner => "owner",
         CommandId::PaneAdd => "add",
         CommandId::PaneEdit => pane_verb(app),
         // On the add line Enter writes one more and opens the next, and Esc
@@ -232,6 +233,10 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::Quit => "quit",
         CommandId::Close => "close",
         CommandId::Templates => "templates",
+        CommandId::ShowDesk if app.screen == crate::tui::app::Screen::Desk => "library",
+        CommandId::ShowDesk => "desk",
+        CommandId::DeskGroupOnly => "this group",
+        CommandId::DeskRandom => "pick one",
         CommandId::StripFilter => "its projects",
         CommandId::ActionsRun => "run",
         CommandId::StudioEdit => "edit",

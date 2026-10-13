@@ -14,13 +14,23 @@ use clap::{Parser, Subcommand};
     long_about = "fastf creates structured project folders from YAML templates.\n\
 \n\
 Templates define a folder structure, placeholder files, and variables (text inputs\n\
-or select menus). Each project gets an auto-incrementing ID. Templates, config, and\n\
-counters live in one data folder: next to the binary when a config.toml sits there\n\
-(portable mode), otherwise in your user config directory. See `fastf paths`.\n\
+or select menus). Each project gets an auto-incrementing ID and a PROJECT_INFO.md\n\
+that holds its description, tags, dated notes and todo list. A todo may end in\n\
+@owner, a name you write for yourself to say who it is with (an agent, a client,\n\
+your own hat), and the desk lists every project's next todo by that owner.\n\
+Templates, config, and counters live in one data folder: next to the binary when\n\
+a config.toml sits there (portable mode), otherwise in your user config\n\
+directory. See `fastf paths`.\n\
 \n\
 Getting started:\n\
   fastf                        # the guided app: your whole library, on one screen\n\
   fastf new                    # pick a template and fill in variables\n\
+  fastf open 47                # reveal a project's folder, by id or name\n\
+  fastf todo add 47 \"cut the first minute @claude\"   # a todo, with its owner\n\
+  fastf desk                   # every project's next todo, grouped by owner\n\
+  fastf hat sales              # the owner name for your own todos\n\
+  fastf agent 47               # run the configured agent in a project's folder\n\
+  fastf peek 47                # a short summary of one project\n\
   fastf template list          # see available templates\n\
   fastf template new           # create a new template interactively\n\
   fastf paths                  # where fastf keeps its data\n\
@@ -238,6 +248,23 @@ enum Commands {
             fastf term lullaby                     # name substring match"
     )]
     Term {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
+    /// Start the configured agent in a project's folder
+    #[command(
+        after_help = "Runs the `agent` config key — one shell line, as a post-create command\n\
+        is: `claude`, `codex --full-auto`, `claude 'read PROJECT_INFO.md first'` —\n\
+        with the project as its working folder and FASTF_PROJECT_PATH set, in\n\
+        the terminal this was typed in, and exits with the agent's status. From\n\
+        a desktop launcher it opens a terminal window and runs there.\n\n\
+        Examples:\n  \
+            fastf config set agent claude\n  \
+            fastf agent ID0047\n  \
+            fastf agent lullaby                    # name substring match"
+    )]
+    Agent {
         /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
         query: String,
     },
@@ -641,10 +668,18 @@ enum Commands {
             tasks alone — a `###` phase label is not a task and takes no number.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
+            A todo's line carries its owner and its dates, as\n\
+            `- [ ] cut @claude added:2026-10-12T14:02:11Z`: `add` stamps\n\
+            `added:`, `done` stamps `done:` and `--undo` takes it off, and a\n\
+            trailing `@name` is the owner. A line written by hand without them\n\
+            is a todo with no owner and no dates, and nothing fills them in.\n\n\
             Examples:\n  \
             fastf todo list ID0047\n  \
             fastf todo add ID0047 \"colour grade\"\n  \
             fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
+            fastf todo add ID0047 \"cut the first minute @claude\"\n  \
+            fastf todo add ID0047 \"call the label back\" --mine\n  \
+            fastf todo owner ID0047 3 claude\n  \
             fastf todo done ID0047 3\n  \
             fastf todo done ID0047 3 --undo\n  \
             fastf todo edit ID0047 3 \"grade the colour\"\n  \
@@ -653,6 +688,105 @@ enum Commands {
     Todo {
         #[command(subcommand)]
         action: TodoAction,
+    },
+
+    /// Print or set the hat: the owner name for your own todos
+    #[command(
+        after_help = "The hat is the owner name you use for your own todos, for example\n\
+        @sales. When it is set, the desk\n\
+        lists the todos with that owner under `yours`, `fastf todo add --mine`\n\
+        gives new todos that owner, and the app's header shows it. It is the `hat`\n\
+        configuration key; FASTF_HAT sets it for one shell without writing the\n\
+        config file.\n\n\
+        Examples:\n  \
+            fastf hat                 # print the hat\n  \
+            fastf hat sales           # set the hat to @sales\n  \
+            fastf hat --off           # unset it"
+    )]
+    Hat {
+        /// The owner name to set, with or without its `@`
+        #[arg(conflicts_with = "off")]
+        name: Option<String>,
+        /// Unset the hat
+        #[arg(long)]
+        off: bool,
+    },
+
+    /// List every project as one line, grouped by the owner of its next open todo
+    #[command(
+        after_help = "Each project is one line: its first open todo, how long since anything in\n\
+        the project was written, and `active` when a program is working in it. The\n\
+        lines are grouped by that todo's owner: the hat (yours), each\n\
+        other owner, no owner, and no open todo at all. Only the first open todo\n\
+        of each project is listed, never every todo.\n\n\
+        On a terminal it opens the guided app on its desk tab, carrying the group,\n\
+        the order, the hat and --random; --plain and --json keep the list in the\n\
+        terminal, as do --quiet, --template, --tag and --base, and so does a pipe.\n\n\
+        Examples:\n  \
+            fastf desk                              # the app on its desk tab\n  \
+            fastf desk --mine                       # only the projects whose next todo is yours\n  \
+            fastf desk --owner claude               # only the projects whose next todo is @claude's\n  \
+            fastf desk --no-owner                   # only the projects whose next todo has no owner\n  \
+            fastf desk --quiet 7                    # nothing written for a week\n  \
+            fastf desk --random                     # one project, picked at random\n  \
+            fastf desk --as sales --json"
+    )]
+    Desk {
+        /// Use this owner name as the hat for this run, instead of the configured one
+        #[arg(long = "as", value_name = "NAME")]
+        as_hat: Option<String>,
+        /// Only the projects whose next todo is yours (its owner is the hat)
+        #[arg(long)]
+        mine: bool,
+        /// Only the projects whose next todo has this owner
+        #[arg(long, value_name = "NAME")]
+        owner: Option<String>,
+        /// Only the projects whose next todo has no owner
+        #[arg(long = "no-owner")]
+        no_owner: bool,
+        /// Only the projects with no open todo
+        #[arg(long = "no-open-todos")]
+        no_open_todos: bool,
+        /// Only projects nothing has written in for this many days
+        #[arg(long, value_name = "DAYS")]
+        quiet: Option<u64>,
+        /// One line, picked at random from what the other flags leave
+        #[arg(long)]
+        random: bool,
+        /// Only projects made from this template
+        #[arg(long, value_name = "SLUG")]
+        template: Option<String>,
+        /// Only projects that have this tag
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only projects in this base, by its label or its full path
+        #[arg(long)]
+        base: Option<String>,
+        /// The order within a group: quiet (longest since anything was written first, the default), recent, name or id
+        #[arg(long, value_name = "ORDER")]
+        order: Option<String>,
+        /// The plain list in the terminal, rather than the app
+        #[arg(long)]
+        plain: bool,
+        /// Print the desk as JSON: an array, one object per project
+        #[arg(long, conflicts_with = "plain")]
+        json: bool,
+    },
+
+    /// Print a short summary of one project without opening its folder
+    #[command(
+        after_help = "The next open todo and its owner, how many todos are open\n\
+        and done, which programs are working in the folder right now, the newest\n\
+        file under it, the repository's branch and last commit when the folder is\n\
+        one, the last note, and how long the project has been quiet. `fastf show`\n\
+        prints everything fastf knows about the project.\n\n\
+        Examples:\n  \
+            fastf peek ID0047\n  \
+            fastf peek lullaby"
+    )]
+    Peek {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
     },
 
     /// Every dated note across every project, newest first
@@ -664,6 +798,7 @@ enum Commands {
             fastf journal --since 2026-10-01               # this month\n  \
             fastf journal --grep lesson:                   # what was learned\n  \
             fastf journal --template music-video --grep lesson:\n  \
+            fastf journal --todos                          # and what was ticked, by its date\n  \
             fastf journal --tag client/Acme -n 100 --json"
     )]
     Journal {
@@ -691,7 +826,13 @@ enum Commands {
         #[arg(long, value_name = "TEXT")]
         grep: Option<String>,
 
-        /// Print the notes as JSON: an array, one object per note
+        /// Also the todos' events, by their dates: `done` for every todo
+        /// ticked, `all` for the ones added too
+        #[arg(long, value_name = "WHICH", num_args = 0..=1, default_missing_value = "done", value_parser = ["done", "all"])]
+        todos: Option<String>,
+
+        /// Print the entries as JSON: an array, one object per entry, each
+        /// with its `kind`
         #[arg(long)]
         json: bool,
     },
@@ -801,6 +942,8 @@ enum ConfigAction {
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            agent                       The agent `fastf agent` starts in a project's folder, as one shell line (default: none)\n  \
+            hat                         The owner name for your own todos; the desk lists them as yours (default: none; FASTF_HAT sets one for a shell)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
@@ -890,15 +1033,37 @@ enum TodoAction {
         #[arg(long)]
         open: bool,
     },
-    /// Add an open task — one line
+    /// Add an open task: one line, dated, with an owner or without
     Add {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The task text
+        /// The task text; a trailing `@name` is its owner
         text: String,
         /// Put it under this `###` phase label, opening one if there is none
         #[arg(long)]
         phase: Option<String>,
+        /// Its owner (over a `@name` at the end of the text)
+        #[arg(long, value_name = "NAME", conflicts_with = "mine")]
+        owner: Option<String>,
+        /// Make the hat (`fastf hat`) its owner
+        #[arg(long)]
+        mine: bool,
+    },
+    /// Show or set a task's owner
+    Owner {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
+        /// The new owner, with or without its `@`
+        #[arg(conflicts_with_all = ["none", "mine"])]
+        owner: Option<String>,
+        /// Remove the owner
+        #[arg(long, conflicts_with = "mine")]
+        none: bool,
+        /// Make the hat (`fastf hat`) its owner
+        #[arg(long)]
+        mine: bool,
     },
     /// Tick a task off by its number
     Done {
@@ -1229,6 +1394,7 @@ fn run() -> Result<()> {
         }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
+        Some(Commands::Agent { query }) => cli::agent::run(&query),
         Some(Commands::Move {
             query,
             base,
@@ -1312,7 +1478,38 @@ fn run() -> Result<()> {
         Some(Commands::Note { action }) => run_note(action),
 
         Some(Commands::Todo { action }) => run_todo(action),
+        Some(Commands::Hat { name, off }) => cli::hat::run(cli::hat::HatArgs { name, off }),
 
+        Some(Commands::Desk {
+            as_hat,
+            mine,
+            owner,
+            no_owner,
+            no_open_todos,
+            quiet,
+            random,
+            template,
+            tag,
+            base,
+            order,
+            plain,
+            json,
+        }) => cli::desk::run(cli::desk::DeskArgs {
+            as_hat,
+            mine,
+            owner,
+            no_owner,
+            no_open_todos,
+            quiet,
+            random,
+            template,
+            tag,
+            base,
+            order,
+            plain,
+            json,
+        }),
+        Some(Commands::Peek { query }) => cli::peek::run(&query),
         Some(Commands::Journal {
             limit,
             since,
@@ -1320,6 +1517,7 @@ fn run() -> Result<()> {
             tag,
             base,
             grep,
+            todos,
             json,
         }) => cli::journal::run(cli::journal::JournalArgs {
             limit,
@@ -1328,6 +1526,11 @@ fn run() -> Result<()> {
             tag,
             base,
             grep,
+            todos: match todos.as_deref() {
+                None => cli::journal::Todos::None,
+                Some("all") => cli::journal::Todos::All,
+                Some(_) => cli::journal::Todos::Done,
+            },
             json,
         }),
 
@@ -1520,9 +1723,32 @@ fn run_note(action: NoteAction) -> Result<()> {
 fn run_todo(action: TodoAction) -> Result<()> {
     match action {
         TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
-        TodoAction::Add { query, text, phase } => {
-            cli::todo::add(cli::todo::AddArgs { query, text, phase })
-        }
+        TodoAction::Add {
+            query,
+            text,
+            phase,
+            owner,
+            mine,
+        } => cli::todo::add(cli::todo::AddArgs {
+            query,
+            text,
+            phase,
+            owner,
+            mine,
+        }),
+        TodoAction::Owner {
+            query,
+            number,
+            owner,
+            none,
+            mine,
+        } => cli::todo::owner(cli::todo::OwnerArgs {
+            query,
+            number,
+            owner,
+            none,
+            mine,
+        }),
         TodoAction::Done {
             query,
             number,

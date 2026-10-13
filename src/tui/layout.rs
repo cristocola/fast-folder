@@ -76,6 +76,12 @@ impl Regions {
     pub fn table_rows(&self) -> usize {
         self.table.height.saturating_sub(3) as usize
     }
+
+    /// How many rows the desk's list shows in the table's place: its height
+    /// minus the borders — its headings are rows, so it has no header row.
+    pub fn desk_rows(&self) -> usize {
+        self.table.height.saturating_sub(2) as usize
+    }
 }
 
 /// Split the body between the table and the pane, as the window allows.

@@ -91,6 +91,26 @@ fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: St
                 "(probe: konsole, gnome-terminal, kitty, …)".to_string(),
         }
     );
+    println!(
+        "  {:<26} {}",
+        "agent:".green(),
+        match config.resolve_agent() {
+            Some(line) => line,
+            None => "(none — `fastf config set agent claude` names one)".to_string(),
+        }
+    );
+    println!(
+        "  {:<26} {}",
+        "hat:".green(),
+        match (
+            config.resolve_hat(),
+            std::env::var_os("FASTF_HAT").is_some()
+        ) {
+            (Some(hat), true) => format!("@{hat} (from $FASTF_HAT)"),
+            (Some(hat), false) => format!("@{hat}"),
+            (None, _) => "(none: `fastf hat <name>` sets one)".to_string(),
+        }
+    );
 }
 
 fn print_look_and_defaults(config: &Config) {
@@ -258,6 +278,14 @@ pub fn normalize_base_entry(raw: &str) -> Result<String> {
 /// `fastf config set <key> <value>` — the same write the guided app performs,
 /// with its answer printed.
 pub fn set(key: &str, value: &str) -> Result<()> {
+    let said = set_quietly(key, value)?;
+    println!("{said}");
+    Ok(())
+}
+
+/// The write `set` makes, answering its sentence instead of printing it, for
+/// a command that is one key's own door (`fastf hat`).
+pub fn set_quietly(key: &str, value: &str) -> Result<String> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
     // `config set` calls each write back their own copy of the whole file and
@@ -267,8 +295,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         said = apply(config, key, value)?;
         Ok(())
     })?;
-    println!("{said}");
-    Ok(())
+    Ok(said)
 }
 
 /// Apply one setting to a `Config` already in hand, and say what happened.
@@ -287,6 +314,18 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
         "terminal" => {
             config.terminal = value.to_string();
             format!("Set terminal = {}", value)
+        }
+        "hat" => set_hat(config, value)?,
+        "agent" => {
+            config.agent = value.trim().to_string();
+            if config.agent.is_empty() {
+                "Set agent = (none)  — `fastf agent` is off until one is named".to_string()
+            } else {
+                format!(
+                    "Set agent = {}  (`fastf agent <project>` runs it in the project's folder)",
+                    config.agent
+                )
+            }
         }
         "motion" => set_motion(config, value)?,
         "log_level" => set_log_level(config, value)?,
@@ -351,7 +390,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             )
         }
         other => bail!(
-            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, agent, hat, theme, motion, log-level, default-template, date-format, \
          preview-lines, prompt-open-after-create, confirm-create, \
          recent-limit, register-naming-pattern, on-name-collision, \
          post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
@@ -370,6 +409,22 @@ fn set_base_dir(config: &mut Config, value: &str) -> Result<String> {
     Ok(format!(
         "Set base_dir = {}",
         crate::util::paths::display_path(&resolved)
+    ))
+}
+
+/// The hat is an owner's name, by the owner's rule; empty takes it off.
+fn set_hat(config: &mut Config, value: &str) -> Result<String> {
+    let value = value.trim();
+    let value = value.strip_prefix('@').unwrap_or(value);
+    if value.is_empty() {
+        config.hat = String::new();
+        return Ok("Set hat = (none)  — no todo counts as yours until a hat is set".to_string());
+    }
+    let owner = crate::core::validated::Owner::parse(value)?;
+    config.hat = owner.into_string();
+    Ok(format!(
+        "Set hat = {}  (`fastf todo add --mine` now gives new todos the owner @{})",
+        config.hat, config.hat
     ))
 }
 

@@ -86,11 +86,20 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
+    /// Asked twice it answers the same, and an id is long enough to tell
+    /// two machines apart. Windows always has one; a Linux machine may have
+    /// none — a container with no `/etc/machine-id`, where a package is
+    /// built and this suite runs — and `None` is the answer there.
     #[cfg(any(target_os = "linux", windows))]
     #[test]
-    fn this_machine_has_an_id_and_it_is_steady() {
-        let first = super::id().expect("a machine id");
-        assert_eq!(super::id().as_deref(), Some(first.as_str()));
-        assert!(first.len() >= 16, "{first}");
+    fn the_machine_id_is_steady_where_there_is_one() {
+        let first = super::id();
+        assert_eq!(super::id(), first);
+        if cfg!(windows) {
+            assert!(first.is_some(), "Windows has a MachineGuid");
+        }
+        if let Some(id) = first {
+            assert!(id.len() >= 16, "{id}");
+        }
     }
 }

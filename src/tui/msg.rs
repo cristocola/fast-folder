@@ -28,7 +28,7 @@ pub enum Msg {
     /// **every** message, not only this one (`Runtime::dispatch` says why).
     Tick,
     /// Folder sizes that landed since the last tick.
-    Sizes(Vec<(PathBuf, Option<u64>)>),
+    Sizes(Vec<(PathBuf, Option<crate::util::tree_size::TreeFacts>)>),
     /// The whole summary at once — a fixture's, or a test's.
     Summary(Box<Summary>),
     /// One part of the summary, as soon as it is read (`SummaryPart`).
@@ -69,6 +69,13 @@ pub enum Msg {
     },
     /// Metadata read on demand, for a query that needs template variables.
     MetaLoaded(Vec<(PathBuf, Option<Metadata>)>),
+    /// Records read for the desk and the journal page, a chunk at a time.
+    Details(Vec<(PathBuf, ProjectDetail)>),
+    /// Who is working in the projects `asked` about, by name.
+    Working {
+        asked: Vec<PathBuf>,
+        active: std::collections::HashMap<PathBuf, Vec<String>>,
+    },
     /// A read of `jobs/`: every job, newest first.
     Jobs(Vec<crate::core::jobs::JobView>),
     /// A job's worker answered that it runs — or why it could not start.
@@ -150,6 +157,9 @@ pub enum Resumed {
     },
     /// A new project's post-create actions ran on the main screen.
     PostCreate,
+    /// The agent started on the main screen exited; `ok` says whether it
+    /// exited cleanly, for the status line.
+    Agent { project: Box<Project>, ok: bool },
     /// `fg` after Ctrl-Z: the screen is retaken, at whatever size it has now.
     Shell,
 }

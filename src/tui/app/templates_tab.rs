@@ -6,32 +6,14 @@ use crate::tui::effect::Effect;
 use crate::tui::layout;
 
 impl App {
-    /// `T`: to the templates tab, and `T` back. The search bar belongs to
-    /// whichever tab is showing, so switching drops the query with it — the
-    /// two searches are over different things and carrying one across would
-    /// hide most of the other list for no reason anyone typed.
+    /// `T`: to the templates tab from either of the others, and `T` back to
+    /// the library (`show_screen` has the switch itself).
     pub(super) fn toggle_templates(&mut self) -> Vec<Effect> {
-        self.screen = match self.screen {
-            Screen::Library => Screen::Templates,
-            Screen::Templates => Screen::Library,
-        };
-        self.search.editing = false;
-        self.search.input.clear();
-        self.search.query = Default::default();
-        self.recompute();
-        let mut effects = self.after_rows_changed();
-        if self.screen == Screen::Templates {
-            let rows = self.studio.rows("");
-            self.studio.reselect(&rows);
-            self.studio.clamp_viewport(&rows, self.template_rows());
-            if self.studio.shown.is_none()
-                && let Some(slug) = self.studio.selected_slug()
-            {
-                effects.push(Effect::LoadTemplateView { slug });
-            }
-            self.offer_guide_once();
-        }
-        effects
+        self.show_screen(if self.screen == Screen::Templates {
+            Screen::Library
+        } else {
+            Screen::Templates
+        })
     }
 
     /// The ends of the templates list. `Studio::jump` keeps the selection on

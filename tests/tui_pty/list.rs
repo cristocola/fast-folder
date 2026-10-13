@@ -1091,7 +1091,7 @@ fn todos_typed_in_one_burst_all_land_in_order() {
     assert_eq!(code, 0, "{}", pty::plain(&out));
     let file = fs::read_to_string(root.join("PROJECT_INFO.md")).unwrap();
     let at = |text: &str| {
-        file.find(&format!("- [ ] {text}\n"))
+        file.find(&format!("- [ ] {text} added:"))
             .unwrap_or_else(|| panic!("{text} was lost:\n{file}"))
     };
     assert!(
@@ -1232,4 +1232,68 @@ fn a_stalled_base_holds_up_neither_the_rows_nor_the_quit() {
         left.saturating_sub(quit_at)
     );
     assert_eq!(code, 0);
+}
+
+/// The desk reads every project's record once, and nothing of a base that
+/// stopped answering: its rows never land, so no read is ever asked of it.
+///
+/// The trace file is how that is observable: the desk looks the same whether
+/// it read each record once or on every frame, and the cost is a round trip
+/// per project on a network base.
+#[cfg(debug_assertions)]
+#[test]
+fn the_desk_reads_each_record_once_and_a_stalled_base_not_at_all() {
+    use fastf::util::paths::STALL_MARKER;
+    use std::path::Path;
+
+    let sb = Sandbox::new();
+    for (name, id) in [("Alpha", "ID0001"), ("Beta", "ID0002"), ("Gamma", "ID0003")] {
+        sb.plant_project(&sb.base, name, id);
+    }
+    let stalled = sb.with_bases(&["stalled"]).remove(0);
+    sb.plant_project(&stalled, "Stuck_Project", "ID0004");
+    fs::write(stalled.join(STALL_MARKER), "").unwrap();
+    let trace = sb.tmp.path().join("trace");
+
+    // The pane's own read of the selected project has landed by the time
+    // `w` is pressed, so the desk asks for the other two and no more.
+    let script = pty::Script::new()
+        .pause(1800)
+        .key("w")
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_FAULT", Path::new("paths:stall-base")),
+            ("FASTF_TRACE_FILE", trace.as_path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    let _ = fs::remove_file(stalled.join(STALL_MARKER));
+    let screen = app_screen(&out);
+    let text = pty::plain(&out);
+
+    assert_eq!(code, 0, "{text}");
+    assert!(
+        text.contains("no open todos"),
+        "the desk drew its groups:\n{screen}"
+    );
+    assert!(
+        !text.contains("Stuck_Project"),
+        "nothing of the stalled base is on the desk:\n{screen}"
+    );
+    let reads = traced(&trace, "detail");
+    assert!(
+        (3..=4).contains(&reads),
+        "three projects: one read each (a fourth only when the pane's own read \
+         of the selected one and the desk's were asked in the same breath), \
+         not {reads}"
+    );
+    assert!(text.contains("Goodbye."));
 }

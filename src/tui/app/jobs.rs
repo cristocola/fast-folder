@@ -230,7 +230,7 @@ impl App {
     /// verb that asks nothing first. One that asked carries what it asked
     /// about to `start_job_over`.
     pub(super) fn start_job(&mut self, kind: JobKind) -> Vec<Effect> {
-        let targets = self.library.targets();
+        let targets = self.verb_targets();
         self.start_job_over(kind, targets)
     }
 

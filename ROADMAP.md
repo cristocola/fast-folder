@@ -40,8 +40,22 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   `ShellExecuteW` path, which CI compiles and lints but cannot watch open a
   window), plus `fastf term`. A person at a desktop has to say whether the right
   window appeared.
+- The desk over a real library of thirty projects with three owners, at 80×24
+  and 120×40: the groups, the ages, `active` beside a folder a shell sits in,
+  the `⚠` on an assigned todo nobody has touched for days, `f`/`F`, `s`, `z`,
+  and a todo ticked in another window moving its project to the right group
+  within ten seconds.
+- `fastf agent` from a shell, from the app (`x` opens a window per agent, `X`
+  steps the app aside and brings it back with the pane re-read) and from a
+  launcher (the window runs the agent, then closes when it exits).
+- A `PROJECT_INFO.md` edited by hand: a trailer in the wrong order
+  (`done: @owner added:`), one with a day and no time, one with none, and a
+  `@word` in the middle of a todo's text — each read as the docs say and
+  written back unchanged by a tick.
+- An rclone base on the desk: one read per project, the rows filling in as
+  each lands, and a stalled base holding up only its own.
 
-Last reviewed: 2026-09-28.
+Last reviewed: 2026-10-13.
 
 ## Backlog
 
@@ -49,14 +63,11 @@ Unscheduled; nothing here is promised.
 
 - Editing a template's starter todos in the guided builder: the manifest field
   round-trips untouched, but only `template.yaml` and an editor can change it.
-- A touched column in the list, and sorting by it: one stat per row, on a
-  worker, and a stale answer for a base that stopped answering.
 - A template pre-filling the description (`description: "{artist} — {title}"`
   interpolated at create): part of template upgrades.
 - Portable project packages.
 - Template upgrades.
 - Template diagnostics and language-server support.
-- Project lifecycle states.
 - Declarative post-create workflows.
 - Scriptability, what is left of it: `search --limit/--template/--since/--tag`,
   `print_path` as a `new` flag rather than only a config toggle,
@@ -146,3 +157,16 @@ fix is the one `Builder::summary` and `transform_example` took: hand it the
   mode, the wheel and the ASCII alphabet are untested there.
 - An input thread that truly blocks: it polls once a second when idle because
   crossterm's read cannot be cancelled for the suspend handshake.
+- A todo's owner is read at the end of its line only. A line written
+  `- [ ] @editor cut v1`, the owner first, is a todo with no owner and the
+  desk lists it under `no owner`; reading a leading run of `@name` as the
+  owner too would take in lists written that way.
+- `FASTF_PROJECT_PATH` on Windows is the verbatim path (`\\?\C:\…`), which
+  `cmd` and many tools will not `cd` into; `fastf agent` hands it to the
+  agent as a post-create command always got it.
+- The app's journal page prints a stamp's UTC time and `fastf journal` the
+  local one. The page's snapshot fixes the bytes, so local time there needs
+  a clock the test can pin.
+- `fastf agent` exits 1 and prints an error whenever the agent exits
+  non-zero, a Ctrl-C out of it included; its help says it exits with the
+  agent's status.

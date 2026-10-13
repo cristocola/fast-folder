@@ -16,7 +16,8 @@ use fastf::tui::command::Key;
 use fastf::tui::entry::Entry;
 use fastf::tui::msg::Msg;
 use fastf::tui::testing::{
-    empty_fixture, fixture, render_to_string, sample_projects, sample_summary,
+    desk_fixture, desk_records, empty_fixture, fixture, render_to_string, sample_projects,
+    sample_summary,
 };
 use fastf::tui::theme::Theme;
 use ratatui::crossterm::event::KeyCode;
@@ -36,7 +37,13 @@ fn dashboard_120x40() {
     let mut app = fixture(12, 120, 40);
     let _ = update(
         &mut app,
-        Msg::Sizes(vec![(sample_projects(1)[0].path.clone(), Some(3_355_443))]),
+        Msg::Sizes(vec![(
+            sample_projects(1)[0].path.clone(),
+            Some(fastf::util::tree_size::TreeFacts {
+                bytes: 3_355_443,
+                newest: None,
+            }),
+        )]),
     );
     snap("dashboard_120x40", render_to_string(&app, 120, 40));
 }
@@ -494,6 +501,8 @@ fn activity_log_page() {
     );
     let frame = render_to_string(&app, 100, 30);
     assert!(frame.contains("moved ID0248"), "{frame}");
+    // messages, journal, jobs, log.
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let frame = render_to_string(&app, 100, 30);
@@ -526,12 +535,165 @@ fn activity_jobs_page() {
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Esc)));
     let _ = update(&mut app, Msg::Key(Key::ch('L')));
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
     let frame = render_to_string(&app, 100, 30);
     assert!(
         frame.contains("running") && frame.contains("done"),
         "{frame}"
     );
     snap("activity_jobs_page", frame);
+}
+
+/// `L`, turned to the journal page: every dated note and todo event across
+/// the projects, newest first, the rule where the desk was last open.
+#[test]
+fn activity_journal_page() {
+    let mut app = fixture(6, 100, 30);
+    app.desk_seen_at = Some("2026-01-10T00:00:00Z".to_string());
+    let _ = update(&mut app, Msg::Details(desk_records(&sample_projects(6))));
+    let _ = update(&mut app, Msg::Key(Key::ch('L')));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Tab)));
+    let frame = render_to_string(&app, 100, 30);
+    assert!(
+        frame.contains("journal") && frame.contains("the desk was last open"),
+        "{frame}"
+    );
+    snap("activity_journal_page", frame);
+}
+
+/// The pane's glance: what last moved under the folder, the repository's
+/// head and who is working in it, each a row once it is known, in the
+/// reference section ahead of the variables.
+#[test]
+fn detail_pane_glance_120x40() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let mut app = fixture(12, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    let mut record = a_record();
+    record.head = Some(fastf::core::glance::GitHead {
+        branch: Some("main".to_string()),
+        sha: Some("a1b2c3d".to_string()),
+        when: Some("2026-01-09T09:40:12Z".to_string()),
+        subject: Some("Rough cut of the first minute".to_string()),
+    });
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(record),
+        },
+    );
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(
+            project.path.clone(),
+            Some(fastf::util::tree_size::TreeFacts {
+                bytes: 3_355_443,
+                newest: Some((
+                    UNIX_EPOCH + Duration::from_secs(1_767_951_665),
+                    std::path::PathBuf::from("02_Edit/cut_v03.prproj"),
+                )),
+            }),
+        )]),
+    );
+    let _ = update(
+        &mut app,
+        Msg::Working {
+            asked: vec![project.path.clone()],
+            active: [(
+                project.path.clone(),
+                vec!["claude".to_string(), "bash".to_string()],
+            )]
+            .into_iter()
+            .collect(),
+        },
+    );
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("cut_v03.prproj") && frame.contains("main @ a1b2c3d"),
+        "{frame}"
+    );
+    // The picture is of a platform that can say who is working in a folder.
+    // Where none can, the row is absent and the frame is a row shorter.
+    if fastf::core::holders::WORKING_KNOWN {
+        assert!(frame.contains("claude, bash"), "{frame}");
+        snap("detail_pane_glance_120x40", frame);
+    } else {
+        assert!(!frame.contains("working"), "{frame}");
+    }
+}
+
+/// The desk at the standard size: every group heading with its count, one
+/// line per project (the next todo, how long since it was written in,
+/// `active` or the warning), the unread project under `reading`, the pane
+/// in the list's place.
+#[test]
+fn desk_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let path = app.desk.rows[2].path().unwrap().to_path_buf();
+    app.working.insert(path, vec!["claude".to_string()]);
+    let _ = update(&mut app, Msg::Tick);
+    let frame = render_to_string(&app, 80, 24);
+    assert!(
+        frame.contains("no owner") && frame.contains("@claude ·"),
+        "{frame}"
+    );
+    snap("desk_80x24", frame);
+}
+
+/// The desk with room for the pane beside it.
+#[test]
+fn desk_120x40() {
+    let app = desk_fixture(12, 120, 40);
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("no open todos") && frame.contains("reading"),
+        "{frame}"
+    );
+    snap("desk_120x40", frame);
+}
+
+/// A window narrower than the folder names: the name gives way, cut with
+/// the ellipsis, and every row still says what is next, how long it has
+/// waited and whether it is stuck, with nothing cut by the border.
+#[test]
+fn a_desk_narrower_than_its_names_keeps_the_next_todo_and_the_age() {
+    let app = desk_fixture(12, 60, 24);
+    let frame = render_to_string(&app, 60, 24);
+    let row = frame
+        .lines()
+        .find(|line| line.contains("ID0247"))
+        .unwrap_or_else(|| panic!("{frame}"));
+    assert!(row.contains("2026-08-27_Clie…"), "{frame}");
+    assert!(row.contains("send the invoice"), "{frame}");
+    assert!(row.contains("16 d ⚠"), "{frame}");
+    assert!(!row.contains("ID0247 2026-08-27_Client"), "{frame}");
+}
+
+/// One group shown alone: the heading, its cards, the bar naming the filter.
+#[test]
+fn desk_group_alone_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('j')));
+    let _ = update(&mut app, Msg::Key(Key::ch('f')));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(
+        frame.contains("@claude ·") && !frame.contains("no owner"),
+        "{frame}"
+    );
+    snap("desk_group_alone_80x24", frame);
+}
+
+/// The desk's pane is the library's: `→` goes into it in the list's place.
+#[test]
+fn desk_pane_focused_80x24() {
+    let mut app = desk_fixture(12, 80, 24);
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("gather the receipts"), "{frame}");
+    snap("desk_pane_focused_80x24", frame);
 }
 
 /// A small window: two header lines, the pane in the list's place.
@@ -1433,11 +1595,13 @@ fn detail_pane_editing_a_variable_120x40() {
                 done: true,
                 text: "ingested the footage".to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "deliver the video".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         touched: Some("2026-09-02T18:40:00Z".to_string()),
@@ -1502,6 +1666,7 @@ fn detail_pane_groups_todos_by_phase_120x40() {
         done,
         text: text.to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let detail = ProjectDetail {
         todos: vec![
@@ -1562,6 +1727,82 @@ fn detail_pane_groups_todos_by_phase_120x40() {
     );
 }
 
+/// A todo's owner and its day sit at the right of its row, dim, and a long
+/// todo wraps short of them; a todo with neither keeps its whole row; a
+/// ticked one shows the day it was ticked; the hat shows after the
+/// tabs.
+#[test]
+fn detail_pane_shows_the_owner_and_the_day_120x40() {
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+
+    let mut app = fixture(12, 120, 40);
+    app.summary.as_mut().unwrap().prefs.hat = Some("sales".to_string());
+    let project = app.library.selected().unwrap().clone();
+    let todo = |done: bool,
+                text: &str,
+                owner: Option<&str>,
+                added: Option<&str>,
+                done_at: Option<&str>| {
+        fastf::core::body::Todo {
+            done,
+            text: text.to_string(),
+            phase: None,
+            owner: owner.map(str::to_string),
+            added: added.map(str::to_string),
+            done_at: done_at.map(str::to_string),
+        }
+    };
+    let detail = ProjectDetail {
+        todos: vec![
+            todo(
+                true,
+                "shoot the product close-ups",
+                Some("sales"),
+                Some("2026-09-20T10:00:00Z"),
+                Some("2026-09-28T18:30:00Z"),
+            ),
+            todo(
+                false,
+                "cut the first minute of the edit, then rewatch it with the client's notes beside you",
+                Some("claude"),
+                Some("2026-10-12T14:02:11Z"),
+                None,
+            ),
+            todo(false, "approve the storyboard", Some("acme"), None, None),
+            todo(false, "deliver the masters", None, None, None),
+        ],
+        ..Default::default()
+    };
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    let rows = app.pane_rows();
+    let first = rows
+        .iter()
+        .position(|r| matches!(r, PaneRow::Todo { ordinal: 1, .. }))
+        .unwrap();
+    while app.pane_cursor < first {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains("@claude 2026-10-12"), "{frame}");
+    assert!(
+        frame.contains("@sales 2026-09-28"),
+        "the day it was ticked: {frame}"
+    );
+    assert!(frame.contains("@sales"), "the hat in the header: {frame}");
+    snap(
+        "detail_pane_shows_the_owner_and_the_day_120x40",
+        render_to_string(&app, 120, 40),
+    );
+}
+
 /// A note and a todo too wide for the pane continue on the rows under them,
 /// each in its own column, instead of being cut.
 #[test]
@@ -1582,6 +1823,7 @@ fn detail_pane_wraps_a_long_note_and_todo_120x40() {
             text: "send the rough cut to the label and ask whether the lyric video is in scope"
                 .to_string(),
             phase: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1609,6 +1851,7 @@ fn a_record() -> fastf::tui::app::data::ProjectDetail {
         done,
         text: text.to_string(),
         phase: Some(phase.to_string()),
+        ..Default::default()
     };
     fastf::tui::app::data::ProjectDetail {
         notes: vec![
@@ -1829,6 +2072,18 @@ fn every_state_draws_at_every_size() {
         ("the templates tab", || {
             let mut app = fixture(12, 120, 40);
             press_key(&mut app, Key::ch('T'));
+            app
+        }),
+        ("the desk", || desk_fixture(12, 120, 40)),
+        ("the desk's pane", || {
+            let mut app = desk_fixture(12, 120, 40);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            press_key(&mut app, Key::ch('G'));
+            app
+        }),
+        ("a group alone", || {
+            let mut app = desk_fixture(12, 120, 40);
+            press_key(&mut app, Key::ch('f'));
             app
         }),
         ("the builder", || {

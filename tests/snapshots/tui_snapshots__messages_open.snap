@@ -2,7 +2,7 @@
 source: tests/tui_snapshots.rs
 expression: frame
 ---
-" fast-folder   library │ templates   2 bases                                         highest ID0248 "
+" fast-folder   library │ desk │ templates   2 bases                                  highest ID0248 "
 " → projects 12   archive not mounted                                               ⚠ 1 needs you  ! "
 "                                                                                                    "
 " ⌕ / to search                                                                       12/12 · oldest "
@@ -11,7 +11,7 @@ expression: frame
 "│  ID0237 2026-08-17_Live_Session_ID0237             scanning… ││ A Fiverr music video: treatment  │"
 "│  ID0238 2026-08-18_Spring_Campaign_ID0238          scanning… ││ approved, shoot booked           │"
 "│  ID0239 2026-┌ activity ──────────────────────────────────────────────────────────┐rojects       │"
-"│  ID0240 2026-│ ▸ messages     jobs     log   Tab turns the page · newest first    │              │"
+"│  ID0240 2026-│ ▸ messages     journal     jobs     log   Tab turns the page · new…│              │"
 "│  ID0241 2026-│                                                                    │              │"
 "│  ID0242 2026-│ 10:00:00  ⚠ warning: the archive base is not mounted               │───────────── │"
 "│  ID0243 2026-│ 10:00:00  sorted by oldest                                         │              │"

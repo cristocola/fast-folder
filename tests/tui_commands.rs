@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 16] = Context::ALL;
+const CONTEXTS: [Context; 17] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -449,6 +449,7 @@ fn f2_means_edit_and_plus_means_add_wherever_they_are_bound() {
         HashSet::from([
             Context::Projects,
             Context::Detail,
+            Context::Desk,
             Context::Templates,
             Context::Builder,
             Context::Settings,
@@ -468,6 +469,7 @@ fn f2_means_edit_and_plus_means_add_wherever_they_are_bound() {
         plus_contexts,
         HashSet::from([
             Context::Projects,
+            Context::Desk,
             Context::Detail,
             Context::Templates,
             Context::Builder,

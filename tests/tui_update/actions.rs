@@ -113,7 +113,9 @@ fn an_action_done_patch_forgets_the_stale_sizes() {
 
     let mut app = fixture(12, 80, 24);
     let selected_path = app.library.selected().unwrap().path.clone();
-    app.library.sizes.insert(selected_path.clone(), Some(10));
+    app.library
+        .sizes
+        .insert(selected_path.clone(), Some(facts(10)));
 
     // Start an add-tag action to get a busy id.
     press(&mut app, Key::ch('A'));

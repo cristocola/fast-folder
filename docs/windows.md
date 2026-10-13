@@ -95,6 +95,14 @@ exists.
 
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
+`fastf agent <query>` runs the configured agent in the console it was typed
+in, and the app's `x` starts one in a new console of its own.
+
+The desk and the pane say who is working in a project from the process
+table, which fastf reads on Linux alone: on Windows the `active` column and
+the pane's `working` row are simply absent, never a guess. Everything else on
+the desk (the groups, the ages, what last moved, the repository's head) is
+read from the files and works the same here.
 
 ## The guided app in the old console
 

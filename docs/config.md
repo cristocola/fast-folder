@@ -59,6 +59,19 @@ fastf config set editor nvim
 fastf config set terminal kitty
 fastf config set terminal none                   # never relaunch (fastf term still works)
 
+# The agent `fastf agent` and the app's `x` start in a project's folder: one
+# shell line, run as a post-create command is, with the project as its
+# working folder and FASTF_PROJECT_PATH set. Empty = none, and the verbs say so.
+fastf config set agent claude
+fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
+
+# The hat: the owner name for your own todos. The desk lists them as yours,
+# `fastf todo add --mine` gives new todos that owner, and the app's header
+# shows it. `fastf hat sales` is the
+# short way; FASTF_HAT sets it for one shell without writing the file.
+fastf config set hat sales
+fastf config set hat ""                          # no hat
+
 # The app's palette. auto is Doom One wherever the terminal announces 24-bit
 # colour, and the sixteen ANSI colours elsewhere; pin one for a terminal that
 # announces nothing (an ssh session forwards no COLORTERM) or lies. NO_COLOR

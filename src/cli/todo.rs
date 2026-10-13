@@ -9,6 +9,10 @@
 //! fastf todo list ID0047                              # the list, numbered
 //! fastf todo add ID0047 "colour grade"                # at the end
 //! fastf todo add ID0047 "cut" --phase "Main Edit"     # under a label
+//! fastf todo add ID0047 "cut @claude"                 # owner: @claude
+//! fastf todo add ID0047 "call back" --mine            # in the hat's
+//! fastf todo owner ID0047 3 claude                    # hand number 3 over
+//! fastf todo owner ID0047 3 --none                    # to nobody
 //! fastf todo done ID0047 3                            # tick number 3
 //! fastf todo done ID0047 3 --undo                     # untick it again
 //! fastf todo edit ID0047 3 "grade the colour"         # reword number 3
@@ -27,6 +31,15 @@ use colored::Colorize;
 use crate::core::body::Todo;
 use crate::core::library::{self, Project};
 use crate::core::{config::Config, project_info};
+
+/// The hat, or the refusal `--mine` gets without one.
+fn hat_or_refuse(cfg: &Config) -> Result<String> {
+    cfg.resolve_hat().ok_or_else(|| {
+        anyhow::anyhow!(
+            "no hat is set: `fastf hat <name>` sets one, or name the owner with --owner"
+        )
+    })
+}
 
 /// The project a todo command works on, refusing a folder fastf owns no
 /// metadata for with the sentence `tag` and `note` give for the same thing.
@@ -93,6 +106,20 @@ pub fn list(args: ListArgs) -> Result<()> {
     println!();
     let done = todos.iter().filter(|t| t.done).count();
     let width = todos.len().to_string().len();
+    // The owner and the day in two columns after the text, each as wide as
+    // the widest shown, so the eye reads down them; a list with neither has
+    // neither.
+    let text_w = todos
+        .iter()
+        .map(|t| unicode_width::UnicodeWidthStr::width(t.text.as_str()))
+        .max()
+        .unwrap_or(0);
+    let owner_w = todos
+        .iter()
+        .filter_map(|t| t.owner.as_deref())
+        .map(|o| unicode_width::UnicodeWidthStr::width(o) + 1)
+        .max()
+        .unwrap_or(0);
     let mut phase: Option<&str> = None;
     let mut shown = 0;
     for (index, todo) in todos.iter().enumerate() {
@@ -109,15 +136,23 @@ pub fn list(args: ListArgs) -> Result<()> {
         shown += 1;
         let marker = if todo.done { "[x]" } else { "[ ]" };
         let number = format!("{:>width$}.", index + 1, width = width);
+        let trailer = trailer_columns(todo, text_w, owner_w);
         if todo.done {
             println!(
-                "  {} {} {}",
+                "  {} {} {}{}",
                 number.dimmed(),
                 marker.dimmed(),
-                todo.text.dimmed()
+                todo.text.dimmed(),
+                trailer.dimmed()
             );
         } else {
-            println!("  {} {} {}", number.dimmed(), marker.green(), todo.text);
+            println!(
+                "  {} {} {}{}",
+                number.dimmed(),
+                marker.green(),
+                todo.text,
+                trailer.dimmed()
+            );
         }
     }
     if shown == 0 {
@@ -128,6 +163,35 @@ pub fn list(args: ListArgs) -> Result<()> {
     Ok(())
 }
 
+/// The owner and the day after a todo's text, padded into their columns:
+/// `  @claude  2026-10-12` — the day it was added, or the day it was done
+/// once it is. Empty when the todo has neither, so a plain list stays plain.
+fn trailer_columns(todo: &Todo, text_w: usize, owner_w: usize) -> String {
+    let owner = todo.owner.as_deref().map(|o| format!("@{o}"));
+    let day = if todo.done {
+        todo.done_day().or_else(|| todo.added_day())
+    } else {
+        todo.added_day()
+    };
+    if owner.is_none() && day.is_none() {
+        return String::new();
+    }
+    let pad = text_w.saturating_sub(unicode_width::UnicodeWidthStr::width(todo.text.as_str()));
+    let mut out = " ".repeat(pad);
+    if owner_w > 0 {
+        let owner = owner.unwrap_or_default();
+        let pad = owner_w.saturating_sub(unicode_width::UnicodeWidthStr::width(owner.as_str()));
+        out.push_str("  ");
+        out.push_str(&owner);
+        out.push_str(&" ".repeat(pad));
+    }
+    if let Some(day) = day {
+        out.push_str("  ");
+        out.push_str(day);
+    }
+    out.trim_end().to_string()
+}
+
 pub struct AddArgs {
     /// Project ID, prefix, or name substring.
     pub query: String,
@@ -135,23 +199,100 @@ pub struct AddArgs {
     pub text: String,
     /// The `###` label to put it under, opening one if the list has none.
     pub phase: Option<String>,
+    /// Its owner, over any `@owner` typed at the end of the text.
+    pub owner: Option<String>,
+    /// Make the hat its owner.
+    pub mine: bool,
 }
 
 pub fn add(args: AddArgs) -> Result<()> {
-    let (_cfg, project) = project(&args.query)?;
-    crate::core::operations::add_todo_in(&project, &args.text, args.phase.as_deref())
-        .with_context(|| format!("adding a todo to {}", project.id))?;
+    let (cfg, project) = project(&args.query)?;
+    let owner = match (&args.owner, args.mine) {
+        (Some(_), true) => bail!("--owner and --mine name two owners — pass one"),
+        (Some(owner), false) => Some(owner.clone()),
+        (None, true) => Some(hat_or_refuse(&cfg)?),
+        (None, false) => None,
+    };
+    let owner = crate::core::operations::add_todo_owned(
+        &project,
+        &args.text,
+        owner.as_deref(),
+        args.phase.as_deref(),
+    )
+    .with_context(|| format!("adding a todo to {}", project.id))?;
+    let assigned = owner
+        .map(|owner| format!(" for @{owner}"))
+        .unwrap_or_default();
     match &args.phase {
         Some(phase) => println!(
-            "{}  Todo added to {} under {}",
+            "{}  Todo added to {} under {}{assigned}",
             "✓".green().bold(),
             project.id.green().bold(),
             phase.bold()
         ),
         None => println!(
-            "{}  Todo added to {}",
+            "{}  Todo added to {}{assigned}",
             "✓".green().bold(),
             project.id.green().bold()
+        ),
+    }
+    Ok(())
+}
+
+pub struct OwnerArgs {
+    /// Project ID, prefix, or name substring.
+    pub query: String,
+    /// The number `fastf todo list` printed, counted from one.
+    pub number: usize,
+    /// The new owner, with or without its `@`. `None` with `--none` takes
+    /// the todo away from everybody; `None` without it prints the owner.
+    pub owner: Option<String>,
+    pub none: bool,
+    /// Make the hat its owner.
+    pub mine: bool,
+}
+
+/// `fastf todo owner`: print a todo's owner, or set it.
+pub fn owner(args: OwnerArgs) -> Result<()> {
+    let (cfg, project) = project(&args.query)?;
+    let todos = crate::core::body::read_todos(&project.path)?;
+    let todo = numbered(&project, &todos, args.number)?;
+    let wanted: Option<Option<String>> = match (&args.owner, args.none, args.mine) {
+        (Some(_), true, _) | (Some(_), _, true) | (None, true, true) => {
+            bail!("name one owner, --mine or --none — not two of them")
+        }
+        (Some(owner), false, false) => Some(Some(owner.clone())),
+        (None, true, false) => Some(None),
+        (None, false, true) => Some(Some(hat_or_refuse(&cfg)?)),
+        (None, false, false) => None,
+    };
+    let Some(wanted) = wanted else {
+        match &todo.owner {
+            Some(owner) => println!("@{}  {}", owner.bold(), todo.text.dimmed()),
+            None => println!("{}  {}", "(nobody's)".dimmed(), todo.text.dimmed()),
+        }
+        return Ok(());
+    };
+    let owner = crate::core::operations::set_todo_owner(
+        &project,
+        args.number - 1,
+        &todo.text,
+        wanted.as_deref(),
+    )
+    .with_context(|| format!("setting a todo's owner in {}", project.id))?;
+    match owner {
+        Some(owner) => println!(
+            "{}  {} is now @{}'s: {}",
+            "✓".green().bold(),
+            format!("todo {}", args.number).bold(),
+            owner.bold(),
+            todo.text
+        ),
+        None => println!(
+            "{}  {} is nobody's now: {}",
+            "✓".green().bold(),
+            format!("todo {}", args.number).bold(),
+            todo.text
         ),
     }
     Ok(())

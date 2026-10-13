@@ -15,6 +15,9 @@ impl App {
     /// What the table asks of the body (`layout::TableNeeds`): measured over
     /// the whole library in view, so a search never moves the pane.
     pub fn table_needs(&self) -> layout::TableNeeds {
+        if self.screen == Screen::Desk {
+            return self.desk_needs();
+        }
         layout::TableNeeds {
             min_width: self.table_min_width(),
             rows: self.library.in_view,
@@ -42,7 +45,12 @@ impl App {
             .min(u16::MAX as usize) as u16
     }
 
+    /// How many rows the list on screen shows: the table's, under its header
+    /// row, or the desk's, which has none.
     pub fn rows_on_screen(&self) -> usize {
+        if self.screen == Screen::Desk {
+            return self.regions().desk_rows();
+        }
         self.regions().table_rows()
     }
 
@@ -61,7 +69,7 @@ impl App {
     /// Whether the library's pane is drawn this frame: beside or under the
     /// table, or in the list's place while it has the focus.
     pub fn detail_visible(&self) -> bool {
-        self.screen == Screen::Library
+        self.screen.lists_projects()
             && match self.regions().placement {
                 Some(layout::Placement::Beside | layout::Placement::Below) => true,
                 Some(layout::Placement::Over) => self.focus == Focus::Detail,
@@ -85,10 +93,11 @@ impl App {
         self.focus == Focus::Detail && self.placement_here() == Some(layout::Placement::Over)
     }
 
-    /// Where this tab's pane is: the library's, or the templates tab's.
+    /// Where this tab's pane is: the library's (the desk's too), or the
+    /// templates tab's.
     pub fn placement_here(&self) -> Option<layout::Placement> {
         match self.screen {
-            Screen::Library => self.regions().placement,
+            Screen::Library | Screen::Desk => self.regions().placement,
             Screen::Templates => Some(self.template_panes().2),
         }
     }
@@ -117,9 +126,10 @@ impl App {
         if self.screen == Screen::Templates {
             return Context::Templates;
         }
-        match self.focus {
-            Focus::Projects => Context::Projects,
-            Focus::Detail => Context::Detail,
+        match (self.screen, self.focus) {
+            (Screen::Desk, Focus::Projects) => Context::Desk,
+            (_, Focus::Projects) => Context::Projects,
+            (_, Focus::Detail) => Context::Detail,
         }
     }
 
@@ -164,7 +174,7 @@ impl App {
     /// The size cell for `path`, as the table draws it.
     pub fn size_cell(&self, path: &std::path::Path) -> SizeCell {
         match self.library.sizes.get(path) {
-            Some(size) => SizeCell::Known(*size),
+            Some(facts) => SizeCell::Known(facts.clone()),
             None => SizeCell::Pending,
         }
     }

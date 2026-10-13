@@ -386,6 +386,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // A decision: every pool runs one worker (`util::pool::width_for`), so a
     // job paced with `delay-<ms>` takes one entry at a time.
     "pool:serial",
+    // A decision: the clock stands at `util::time::FROZEN`, so a test can
+    // check the bytes a todo's `added:` or `done:` stamp lands in.
+    "time:frozen",
     // A walk's listing of one folder, and its look at one entry, failed the
     // way a mount fails (`walk:readdir:eio`).
     "walk:readdir",

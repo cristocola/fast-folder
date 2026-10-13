@@ -38,29 +38,45 @@ fn tabs_line(
 ) -> Line<'static> {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let mut left = vec![
-        Span::styled(
-            " fast-folder",
-            theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
-        ),
-        Span::raw(gap),
-    ];
-    for (i, screen) in Screen::ALL.iter().enumerate() {
-        if i > 0 {
-            left.push(Span::styled(" │ ", theme.dim()));
+    // The name and the tabs; `named` and `gap` are what a narrow window
+    // gives up before any tab, since the tabs say where you are and where
+    // `T` and `w` go.
+    let tabs = |named: bool, gap: &str| -> Vec<Span<'static>> {
+        let mut left = Vec::new();
+        if named {
+            left.push(Span::styled(
+                " fast-folder",
+                theme.accent().add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+            left.push(Span::raw(gap.to_string()));
+        } else {
+            left.push(Span::raw(" "));
         }
-        let here = *screen == app.screen;
-        left.push(Span::styled(
-            screen.label(),
-            if here {
-                theme
-                    .accent()
-                    .add_modifier(ratatui::style::Modifier::UNDERLINED)
-            } else {
-                theme.dim()
-            },
-        ));
-    }
+        for (i, screen) in Screen::ALL.iter().enumerate() {
+            if i > 0 {
+                left.push(Span::styled(" │ ", theme.dim()));
+            }
+            let here = *screen == app.screen;
+            left.push(Span::styled(
+                screen.label(),
+                if here {
+                    theme
+                        .accent()
+                        .add_modifier(ratatui::style::Modifier::UNDERLINED)
+                } else {
+                    theme.dim()
+                },
+            ));
+        }
+        // The hat, after the tabs: the owner name whose todos the desk lists as yours. It
+        // goes with the tabs, since it says where you are as much as they do.
+        if let Some(hat) = app.hat() {
+            left.push(Span::raw(gap.to_string()));
+            left.push(Span::styled(format!("@{hat}"), theme.text()));
+        }
+        left
+    };
+    let left = tabs(true, gap);
     let mut with_bases = left.clone();
     if let Some(bases) = known {
         with_bases.push(Span::styled(
@@ -77,13 +93,16 @@ fn tabs_line(
         ],
         None => Vec::new(),
     };
-    // A narrow window gives up the highest ID first, then the base count —
-    // never the tabs, which say where you are and where `T` goes.
+    // A narrow window gives up the highest ID first, then the base count,
+    // then the room around the name, then the name — never the tabs, which
+    // say where you are and where `T` and `w` go.
     first_that_fits(
         vec![
             (with_bases.clone(), highest),
             (with_bases, Vec::new()),
             (left, Vec::new()),
+            (tabs(true, " "), Vec::new()),
+            (tabs(false, " "), Vec::new()),
         ],
         width,
         g.ellipsis,
@@ -249,7 +268,11 @@ pub fn search_bar(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> 
     let g = theme.glyphs;
     let width = area.width as usize;
 
-    let right = list_report(app, width);
+    let right = if app.screen == crate::tui::app::Screen::Desk {
+        crate::tui::view::desk::report(app, width)
+    } else {
+        list_report(app, width)
+    };
     let right_width: usize = right.iter().map(|s| s.width()).sum::<usize>().min(width);
 
     let mut prefix = format!(" {} ", g.search);

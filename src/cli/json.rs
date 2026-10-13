@@ -63,10 +63,29 @@ pub struct TodoJson {
     pub done: bool,
     pub text: String,
     pub phase: Option<String>,
+    /// Who it is assigned to, without the `@`; `null` when nobody is.
+    pub owner: Option<String>,
+    /// When it was added, as its line says; `null` when the line does not.
+    pub added: Option<String>,
+    /// When it was ticked, the same way.
+    pub done_at: Option<String>,
 }
 
-/// One note of the journal across projects: what `fastf journal --json`
-/// prints, one per dated note, newest first.
+impl TodoJson {
+    pub fn of(todo: &crate::core::body::Todo) -> Self {
+        Self {
+            done: todo.done,
+            text: todo.text.clone(),
+            phase: todo.phase.clone(),
+            owner: todo.owner.clone(),
+            added: todo.added.clone(),
+            done_at: todo.done_at.clone(),
+        }
+    }
+}
+
+/// One entry of the journal across projects: what `fastf journal --json`
+/// prints, newest first — a dated note, or with `--todos` a todo's event.
 #[derive(Serialize)]
 pub struct JournalEntryJson {
     pub id: String,
@@ -74,6 +93,9 @@ pub struct JournalEntryJson {
     pub path: String,
     pub timestamp: String,
     pub text: String,
+    /// `note`, `done` or `added`: what the entry is. A row an older fastf
+    /// printed was always a note.
+    pub kind: &'static str,
 }
 
 /// One project, whole: what `fastf show --json` prints.

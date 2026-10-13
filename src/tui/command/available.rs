@@ -81,6 +81,25 @@ pub(super) fn needs_selection_and_display(app: &App) -> Availability {
     needs_selection(app)
 }
 
+/// The agent verbs need an `agent` configured; the window one a display too.
+pub(super) fn agent_configured(app: &App) -> Availability {
+    if app
+        .summary
+        .as_ref()
+        .is_none_or(|summary| summary.prefs.agent.is_none())
+    {
+        return Availability::Disabled(crate::cli::agent::NO_AGENT);
+    }
+    needs_selection(app)
+}
+
+pub(super) fn agent_and_display(app: &App) -> Availability {
+    if !app.has_display {
+        return Availability::Disabled("no display — needs a desktop session; X starts it here");
+    }
+    agent_configured(app)
+}
+
 pub(super) fn needs_selection(app: &App) -> Availability {
     if app.library.selected().is_some() {
         Availability::Enabled
@@ -98,7 +117,12 @@ pub(super) fn needs_selection(app: &App) -> Availability {
 /// It is deliberately not part of `needs_selection`: `o`, `t` and `y` act on
 /// the row under the cursor and are none of a hidden mark's business.
 pub(super) fn batch_target(app: &App) -> Availability {
-    if !app.library.marks.is_empty() && app.library.targets().is_empty() {
+    // On the desk a verb acts on the row under the cursor alone: the marks
+    // are the library's, and the desk shows none of them.
+    if app.screen != crate::tui::app::Screen::Desk
+        && !app.library.marks.is_empty()
+        && app.library.targets().is_empty()
+    {
         return Availability::Disabled(
             "every marked row is hidden — F clears the filters, - clears the marks",
         );
@@ -175,6 +199,18 @@ pub(super) fn pane_text_row(app: &App) -> Availability {
     }
 }
 
+/// `O` gives a todo an owner: on a todo row, and nowhere else.
+pub(super) fn pane_todo_row(app: &App) -> Availability {
+    use crate::tui::app::pane::PaneRow;
+    match selection_and_not_busy(app) {
+        Availability::Enabled => match app.pane_rows().get(app.pane_cursor) {
+            Some(PaneRow::Todo { .. }) => Availability::Enabled,
+            _ => Availability::Hidden,
+        },
+        other => other,
+    }
+}
+
 /// The pane's line editor is open and not yet sent: Enter keeps. Hidden in
 /// the note editor, where Enter is a new line and `Ctrl-S` is the keep.
 pub(super) fn pane_line_editing(app: &App) -> Availability {
@@ -228,10 +264,32 @@ pub(super) fn has_search(app: &App) -> Availability {
 }
 
 pub(super) fn has_row_filter(app: &App) -> Availability {
-    if app.library.template_filter.is_some() || app.library.base_filter.is_some() {
+    let group = app.screen == crate::tui::app::Screen::Desk && app.desk.filter.is_some();
+    if app.library.template_filter.is_some() || app.library.base_filter.is_some() || group {
         Availability::Enabled
     } else {
         Availability::Hidden
+    }
+}
+
+/// `f` on the desk needs a card under the cursor that has been read: a
+/// project not read yet is in no group to show alone.
+pub(super) fn desk_card_under_cursor(app: &App) -> Availability {
+    if app.desk.selected_is_read() {
+        Availability::Enabled
+    } else if app.desk.selected_card().is_some() {
+        Availability::Disabled("still reading this project")
+    } else {
+        Availability::Disabled("nothing on the desk")
+    }
+}
+
+/// `z` needs cards to pick from.
+pub(super) fn desk_has_cards(app: &App) -> Availability {
+    if app.desk.selected_card().is_some() {
+        Availability::Enabled
+    } else {
+        Availability::Disabled("nothing on the desk")
     }
 }
 

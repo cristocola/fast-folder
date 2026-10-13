@@ -207,6 +207,24 @@ pub fn open_terminal_at(_preference: Option<&str>, dir: &Path) -> anyhow::Result
         .map_err(|e| anyhow::Error::from(e).context("could not start a console"))
 }
 
+/// A new console running this binary with `args`: how the app starts an
+/// agent in a window of its own on Windows, where a console program gets a
+/// console by asking for one.
+#[cfg(windows)]
+pub fn open_console_running(args: &[std::ffi::OsString]) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+    let exe = std::env::current_exe().unwrap_or_else(|_| "fastf".into());
+    Command::new(exe)
+        .args(args)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow::Error::from(e).context("could not start a console"))
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

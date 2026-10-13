@@ -413,11 +413,13 @@ fn angle_brackets_walk_the_projects_from_the_pane_and_keep_the_section() {
                 done: false,
                 text: "grade".to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "deliver".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         ..Default::default()

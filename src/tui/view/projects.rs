@@ -21,7 +21,6 @@ use crate::tui::theme::Theme;
 use crate::tui::view::{fit, highlighted};
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::text_area::TextArea;
-use crate::util::size_scan::SizeCell;
 
 /// The widest a template column gets before it is clamped.
 const TEMPLATE_MAX: usize = 16;
@@ -113,9 +112,9 @@ fn fact_spans(
             Span::styled(date_cell(at).to_string(), theme.text()),
         ],
         Fact::Size => vec![Span::styled(
-            match app.size_cell(&project.path) {
-                SizeCell::Pending => theme.glyphs.pending.to_string(),
-                SizeCell::Known(size) => size_label(size),
+            match app.size_cell(&project.path).bytes() {
+                None => theme.glyphs.pending.to_string(),
+                Some(size) => size_label(size),
             },
             theme.text(),
         )],
@@ -483,9 +482,9 @@ fn cursor_cell(app: &App, row: usize, p: &library::Project) -> Cell<'static> {
 fn size_cell(app: &App, p: &library::Project) -> Cell<'static> {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let (label, style) = match app.size_cell(&p.path) {
-        SizeCell::Pending => (g.pending.to_string(), theme.dim()),
-        SizeCell::Known(size) => (size_label(size), theme.text()),
+    let (label, style) = match app.size_cell(&p.path).bytes() {
+        None => (g.pending.to_string(), theme.dim()),
+        Some(size) => (size_label(size), theme.text()),
     };
     Cell::from(Line::from(Span::styled(
         format!("{label:>width$}", width = SIZE_CELL),
@@ -666,6 +665,7 @@ fn key_width(rows: &[PaneRow]) -> usize {
     rows.iter()
         .filter_map(|row| match row {
             PaneRow::Variable { label, .. } => Some(label.width()),
+            PaneRow::Glance { key, .. } => Some(key.width()),
             _ => None,
         })
         .max()
@@ -718,6 +718,7 @@ fn pane_line(
             Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
         }
         PaneRow::Variable { label, value, .. } => variable_line(theme, label, value, width, key_w),
+        PaneRow::Glance { key, value } => variable_line(theme, key, value, width, key_w),
         PaneRow::Entry(entry) => entry_line(theme, entry, width),
         PaneRow::More(more) => Line::from(Span::styled(
             format!("  {} {more} more", g.ellipsis),
@@ -737,12 +738,25 @@ fn pane_line(
         PaneRow::AddNote => Line::from(Span::styled(format!("{} add a note", g.sep), theme.dim())),
         PaneRow::Phase { name, done, total } => phase_line(theme, name, *done, *total, width),
         PaneRow::Todo {
-            done, text, phased, ..
+            done,
+            text,
+            phased,
+            owner,
+            when,
+            ..
         } => {
             if editing_todo == Some(index) {
                 Line::default()
             } else {
-                todo_first_line(theme, *done, text, *phased, width)
+                todo_first_line(
+                    theme,
+                    *done,
+                    text,
+                    *phased,
+                    owner.as_deref(),
+                    when.as_deref(),
+                    width,
+                )
             }
         }
         // The rest of a long todo, under its text; blank while the todo
@@ -907,24 +921,31 @@ fn phase_line(theme: &Theme, name: &str, done: usize, total: usize, width: usize
 /// The markdown's own marker, which every terminal can draw. An
 /// open todo reads in the text colour — the accent is for focus,
 /// and a list of accented boxes is a list shouting — and a done
-/// one recedes with its text.
+/// one recedes with its text. Who it is assigned to and its day sit
+/// at the right, dim, the way a phase carries its count; the text
+/// was wrapped to leave them the room (`pane::todo_rows`).
 fn todo_first_line(
     theme: &Theme,
     done: bool,
     text: &str,
     phased: bool,
+    owner: Option<&str>,
+    when: Option<&str>,
     width: usize,
 ) -> Line<'static> {
     let g = theme.glyphs;
     let style = if done { theme.dim() } else { theme.text() };
     let indent = if phased { PHASE_INDENT } else { 0 };
+    let aside = crate::tui::app::pane::trailer_text(owner, when);
+    let room = width.saturating_sub(TODO_INDENT + indent + aside.width());
+    let text = fit(text, room, g.ellipsis);
+    let gap = width.saturating_sub(TODO_INDENT + indent + text.width() + aside.width());
     Line::from(vec![
         Span::raw(" ".repeat(indent)),
         Span::styled(if done { "[x] " } else { "[ ] " }, theme.dim()),
-        Span::styled(
-            fit(text, width.saturating_sub(TODO_INDENT + indent), g.ellipsis),
-            style,
-        ),
+        Span::styled(text, style),
+        Span::raw(" ".repeat(gap)),
+        Span::styled(aside, theme.dim()),
     ])
 }
 

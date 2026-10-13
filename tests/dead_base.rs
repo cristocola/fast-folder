@@ -250,3 +250,14 @@ fn a_change_in_the_base_that_does_not_answer_is_refused_at_once() {
         refused.stderr
     );
 }
+
+/// The desk reads every project's todos and `peek` one project's folder;
+/// neither looks into the base that does not answer.
+#[test]
+fn the_desk_and_a_peek_are_not_held_up() {
+    let library = library();
+    let desk = done(&library, &["desk", "--plain"]);
+    assert!(desk.stdout.contains("ID0007"), "{}", desk.stdout);
+    let peek = done(&library, &["peek", "ID0007"]);
+    assert!(peek.stdout.contains("ID0007"), "{}", peek.stdout);
+}

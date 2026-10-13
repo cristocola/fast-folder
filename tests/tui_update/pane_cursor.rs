@@ -180,6 +180,7 @@ fn with_todos(app: &mut App, n: usize) {
                     done: false,
                     text: format!("task {t}"),
                     phase: None,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -204,7 +205,7 @@ fn a_size_landing_never_moves_the_pane_cursor() {
     let path = app.library.selected().unwrap().path.clone();
     update(
         &mut app,
-        Msg::Sizes(vec![(path, Some(41 * 1024 * 1024 * 1024))]),
+        Msg::Sizes(vec![(path, Some(facts(41 * 1024 * 1024 * 1024)))]),
     );
     assert_eq!(app.pane_rows(), before, "the rows are the same rows");
     assert_eq!(app.pane_cursor, at, "and the cursor is where it was");
@@ -282,6 +283,7 @@ fn an_open_todo_is_plain_text_and_a_finished_phase_recedes() {
         done,
         text: text.to_string(),
         phase: Some(phase.to_string()),
+        ..Default::default()
     };
     with_detail(
         &mut app,

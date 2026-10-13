@@ -54,14 +54,7 @@ pub fn run(args: ShowArgs) -> Result<()> {
                     text: n.text.clone(),
                 })
                 .collect(),
-            todos: todos
-                .iter()
-                .map(|t| TodoJson {
-                    done: t.done,
-                    text: t.text.clone(),
-                    phase: t.phase.clone(),
-                })
-                .collect(),
+            todos: todos.iter().map(TodoJson::of).collect(),
         });
     }
 

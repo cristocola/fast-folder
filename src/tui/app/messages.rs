@@ -10,7 +10,43 @@ impl App {
             Msg::Paste(text) => self.on_paste(&text),
             Msg::Resize(width, height) => self.on_resize(width, height),
             Msg::Tick => self.on_tick(),
-            Msg::Sizes(cells) => self.on_sizes(cells),
+            Msg::Sizes(cells) => {
+                // The newest file the pane shows before these land, to say
+                // whether what it shows after is a change.
+                let shown = self.library.selected().and_then(|project| {
+                    self.library
+                        .sizes
+                        .get(&project.path)
+                        .and_then(|facts| facts.as_ref())
+                        .and_then(|facts| facts.newest.clone())
+                });
+                let effects = self.on_sizes(cells);
+                // A walk's newest file is part of how quiet a card is, and
+                // the pane's glance names it: the rows under the cursor may
+                // have gained one.
+                if self.screen == Screen::Desk {
+                    self.after_records_changed();
+                }
+                self.refind_pane();
+                // A `last moved` that replaced a different one pulses, as a
+                // size that changed does: the eye is told what moved.
+                let now = self.library.selected().and_then(|project| {
+                    self.library
+                        .sizes
+                        .get(&project.path)
+                        .and_then(|facts| facts.as_ref())
+                        .and_then(|facts| facts.newest.clone())
+                });
+                if shown.is_some() && now.is_some() && shown != now && self.pane_live() {
+                    let rows = self.pane_rows();
+                    if let Some(at) = rows.iter().position(
+                        |row| matches!(row, pane::PaneRow::Glance { key, .. } if *key == "last moved"),
+                    ) {
+                        self.pane_pulses.start(at, self.elapsed_ms);
+                    }
+                }
+                effects
+            }
             Msg::Summary(summary) => {
                 self.summary = Some(*summary);
                 self.summary_error = None;
@@ -64,7 +100,13 @@ impl App {
                 effects
             }
             Msg::DiscoverFailed { generation, error } => self.on_discover_failed(generation, error),
-            Msg::Detail { path, detail } => self.on_detail(path, detail),
+            Msg::Detail { path, detail } => {
+                let effects = self.on_detail(path, detail);
+                self.after_records_changed();
+                effects
+            }
+            Msg::Details(read) => self.on_details(read),
+            Msg::Working { asked, active } => self.on_working(asked, active),
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
                 self.recompute();
@@ -132,6 +174,23 @@ impl App {
             }
             Msg::Resumed(Resumed::Shell) => Vec::new(),
 
+            // The agent had the folder; what it ticked and noted is in the
+            // file, which the pane reads again.
+            Msg::Resumed(Resumed::Agent { project, ok }) => {
+                self.session = crate::tui::frame::recent_actions();
+                if ok {
+                    self.good(format!("The agent finished in {}", project.name));
+                } else {
+                    self.warn(format!(
+                        "The agent did not finish cleanly in {}",
+                        project.name
+                    ));
+                }
+                self.apply_change(ListChange::DetailOnly {
+                    path: project.path.clone(),
+                })
+            }
+
             Msg::Resumed(Resumed::Note { project, text }) => {
                 self.on_note_from_editor(project, text)
             }
@@ -163,7 +222,10 @@ impl App {
         self.look_again_while_waiting()
     }
 
-    fn on_sizes(&mut self, cells: Vec<(PathBuf, Option<u64>)>) -> Vec<Effect> {
+    fn on_sizes(
+        &mut self,
+        cells: Vec<(PathBuf, Option<crate::util::tree_size::TreeFacts>)>,
+    ) -> Vec<Effect> {
         for (path, size) in cells {
             // **A number that changed, not a number that arrived.** The
             // table is measured from the rows, never from the sizes, so
@@ -174,9 +236,12 @@ impl App {
             // row fills at once on the first screenful and on every
             // scroll: `rescanning` is the one arrival that *is* a
             // change, a size a verb threw away coming back.
+            let bytes = size.as_ref().map(|facts| facts.bytes);
             let previous = self.library.sizes.insert(path.clone(), size);
             let rescanned = self.rescanning.remove(&path);
-            if rescanned || previous.is_some_and(|had| had != size) {
+            if rescanned
+                || previous.is_some_and(|had| had.as_ref().map(|facts| facts.bytes) != bytes)
+            {
                 self.pulses.start(path, self.elapsed_ms);
             }
         }
@@ -205,10 +270,8 @@ impl App {
         Vec::new()
     }
 
-    fn on_detail(&mut self, path: PathBuf, detail: Box<ProjectDetail>) -> Vec<Effect> {
-        if self.details.len() >= DETAIL_CACHE {
-            self.details.clear();
-        }
+    pub(super) fn on_detail(&mut self, path: PathBuf, detail: Box<ProjectDetail>) -> Vec<Effect> {
+        self.prune_details();
         let mut effects = Vec::new();
         // The file is the truth, and the pane just read it: a row
         // whose tags or names disagree with the metadata — edited
@@ -257,6 +320,24 @@ impl App {
             self.land_pane_seek();
         }
         effects
+    }
+
+    /// Keep the record cache to the library: the desk reads a record for
+    /// every project, so the cache may hold as many as there are projects,
+    /// and `DETAIL_CACHE` beyond them for the rows a reload took away —
+    /// those go first, and only when even that is not enough does the
+    /// whole cache go.
+    fn prune_details(&mut self) {
+        let allowed = self.library.snapshot.len() + DETAIL_CACHE;
+        if self.details.len() < allowed {
+            return;
+        }
+        let listed: std::collections::HashSet<&PathBuf> =
+            self.library.snapshot.iter().map(|p| &p.path).collect();
+        self.details.retain(|path, _| listed.contains(path));
+        if self.details.len() >= allowed {
+            self.details.clear();
+        }
     }
 
     fn on_template_source_loaded(
@@ -514,6 +595,12 @@ impl App {
             }
             (SpawnKind::Terminal(_), Err(error)) => {
                 self.error(format!("could not open a terminal: {error}"));
+            }
+            (SpawnKind::Agent(project), Ok(line)) => {
+                self.good(format!("Started {line} in {}", project.name));
+            }
+            (SpawnKind::Agent(_), Err(error)) => {
+                self.error(format!("could not start the agent: {error}"));
             }
             (SpawnKind::Clipboard(_), Ok(tool)) => {
                 self.good(format!("Copied with {tool}"));

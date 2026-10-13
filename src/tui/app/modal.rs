@@ -35,6 +35,8 @@ pub enum MessageLevel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Then {
     SortPick,
+    /// The picked value is the desk's order within each group.
+    DeskOrder,
     TemplateFilter,
     /// The picked value is a tag to add to these projects, or `NEW_TAG` to
     /// type one.
@@ -53,6 +55,13 @@ pub enum Then {
     /// selected project — a `select` variable edited from the detail pane,
     /// which offers its options and nothing else.
     PaneVariable(String),
+    /// The picked value is the new owner of the selected project's todo
+    /// `ordinal`, whose text was `was` when the picker opened — `NOBODY`
+    /// to take the owner off, `NEW_OWNER` to type one.
+    TodoOwner {
+        ordinal: usize,
+        was: String,
+    },
     /// `!`: the picked value is an unfinished item's path, or
     /// `ATTENTION_FINISH` to finish now what fastf can.
     Attention,
@@ -198,6 +207,9 @@ pub struct Activity {
     pub page: ActivityPage,
     /// Newest first, drawn as they stand.
     pub messages: Vec<String>,
+    /// The journal: every dated note and todo event across the projects,
+    /// newest first, with the rule where the desk was last open.
+    pub journal: Vec<String>,
     /// Newest first; an event of several lines is several.
     pub log: Vec<String>,
     /// One line per job, newest first, and the id of each.
@@ -206,7 +218,7 @@ pub struct Activity {
     /// The job Enter opens the log of.
     pub job_cursor: usize,
     /// Each page keeps its own place.
-    pub scroll: [usize; 3],
+    pub scroll: [usize; 4],
     /// Whether the files have been read yet; until then the messages page
     /// holds this session's, from memory.
     pub loaded: bool,
@@ -215,13 +227,15 @@ pub struct Activity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivityPage {
     Messages = 0,
-    Jobs = 1,
-    Log = 2,
+    Journal = 1,
+    Jobs = 2,
+    Log = 3,
 }
 
 impl ActivityPage {
-    pub const ALL: [ActivityPage; 3] = [
+    pub const ALL: [ActivityPage; 4] = [
         ActivityPage::Messages,
+        ActivityPage::Journal,
         ActivityPage::Jobs,
         ActivityPage::Log,
     ];
@@ -229,6 +243,7 @@ impl ActivityPage {
     pub fn title(self) -> &'static str {
         match self {
             ActivityPage::Messages => "messages",
+            ActivityPage::Journal => "journal",
             ActivityPage::Jobs => "jobs",
             ActivityPage::Log => "log",
         }
@@ -240,6 +255,7 @@ impl Activity {
     pub fn lines(&self) -> &[String] {
         match self.page {
             ActivityPage::Messages => &self.messages,
+            ActivityPage::Journal => &self.journal,
             ActivityPage::Jobs => &self.jobs,
             ActivityPage::Log => &self.log,
         }
@@ -380,7 +396,7 @@ pub enum Modal {
         level: MessageLevel,
         scroll: usize,
     },
-    /// `L`: messages, jobs and the log.
+    /// `L`: messages, the journal, jobs and the log.
     Activity(Box<Activity>),
 }
 
@@ -503,6 +519,12 @@ impl App {
                 self.library.explicit_sort = Sort::from_label(&item.value);
                 self.reordered()
             }
+            Then::DeskOrder => {
+                if let Some(order) = crate::core::desk::Order::parse(&item.value) {
+                    self.desk.order = order;
+                }
+                self.reordered()
+            }
             Then::TemplateFilter => self.set_template_filter(Some(item.value.clone())),
             // A tag filter is `tag:x` in the bar and nothing else — one
             // mechanism, so clearing it is the same Esc rung as clearing any
@@ -555,6 +577,14 @@ impl App {
                     slug,
                     value: item.value.clone(),
                 })
+            }
+            Then::TodoOwner { ordinal, was } => {
+                if item.value == crate::tui::app::pane_edit::NEW_OWNER {
+                    return self.open_owner_prompt(ordinal, was);
+                }
+                let owner =
+                    (item.value != crate::tui::app::pane_edit::NOBODY).then(|| item.value.clone());
+                self.send_todo_owner(ordinal, was, owner)
             }
             Then::FormField(key) => {
                 let Some(Modal::Flow(flow)) = self.modals.top_mut() else {

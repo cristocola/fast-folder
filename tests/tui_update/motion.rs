@@ -119,7 +119,10 @@ fn a_page_of_sizes_arriving_for_the_first_time_does_not_pulse() {
     let paths: Vec<_> = (0..app.library.len())
         .map(|row| app.library.row(row).unwrap().path.clone())
         .collect();
-    let cells = paths.iter().map(|p| (p.clone(), Some(4096))).collect();
+    let cells = paths
+        .iter()
+        .map(|p| (p.clone(), Some(facts(4096))))
+        .collect();
     let _ = update(&mut app, Msg::Sizes(cells));
     assert!(
         app.pulses.is_empty(),
@@ -127,7 +130,10 @@ fn a_page_of_sizes_arriving_for_the_first_time_does_not_pulse() {
     );
 
     // And the same size again is still not news.
-    let _ = update(&mut app, Msg::Sizes(vec![(paths[1].clone(), Some(4096))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(paths[1].clone(), Some(facts(4096)))]),
+    );
     assert!(app.pulses.is_empty());
 }
 
@@ -141,9 +147,15 @@ fn a_size_that_changes_pulses_its_row() {
     app.theme = Theme::rich();
     app.elapsed_ms = 500;
     let path = app.library.row(1).unwrap().path.clone();
-    let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(4096)))]),
+    );
     assert!(app.pulses.is_empty(), "the first one is an arrival");
-    let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(8192))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(8192)))]),
+    );
     assert!(
         app.pulses
             .style_for(&path, 500, &app.theme, Motion::On)
@@ -163,7 +175,10 @@ fn a_size_rescanned_after_a_verb_pulses_its_row() {
     app.elapsed_ms = 500;
     let project = app.library.row(1).unwrap().clone();
     let path = project.path.clone();
-    let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(4096)))]),
+    );
 
     let _ = app.apply_change(ListChange::Patched {
         project: Box::new(project.clone()),
@@ -173,7 +188,10 @@ fn a_size_rescanned_after_a_verb_pulses_its_row() {
     // The verb's own row pulse is not what this test is about.
     app.pulses.clear();
 
-    let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(4096)))]),
+    );
     assert!(
         app.pulses
             .style_for(&path, 500, &app.theme, Motion::On)
@@ -183,7 +201,10 @@ fn a_size_rescanned_after_a_verb_pulses_its_row() {
 
     // And it is spent: the next arrival is an arrival again.
     app.pulses.clear();
-    let _ = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(4096)))]),
+    );
     assert!(app.pulses.is_empty());
 }
 
@@ -200,7 +221,7 @@ fn moving_focus_eases_the_borders_and_titles_between_their_rest_states() {
     app.motion = Motion::On;
     for row in 0..app.library.len() {
         let path = app.library.row(row).unwrap().path.clone();
-        app.library.sizes.insert(path, Some(1));
+        app.library.sizes.insert(path, Some(facts(1)));
     }
     app.status = Default::default();
     assert_eq!(app.tick_interval(), None, "a still app asks for no wake");
@@ -270,7 +291,7 @@ fn with_motion_off_the_focus_lands_at_once() {
     app.motion = Motion::Off;
     for row in 0..app.library.len() {
         let path = app.library.row(row).unwrap().path.clone();
-        app.library.sizes.insert(path, Some(1));
+        app.library.sizes.insert(path, Some(facts(1)));
     }
     app.status = Default::default();
     app.elapsed_ms = 1_000;
@@ -326,7 +347,7 @@ fn the_faster_wake_ends_with_the_pulse() {
     // Nothing pending: the fixture's sizes are all known.
     for row in 0..app.library.len() {
         let path = app.library.row(row).unwrap().path.clone();
-        app.library.sizes.insert(path, Some(1));
+        app.library.sizes.insert(path, Some(facts(1)));
     }
     app.status = Default::default();
     assert_eq!(app.tick_interval(), None, "a still app asks for no wake");

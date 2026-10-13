@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ desk │ templates   2 bases              highest ID0248 "
+" → projects 12   archive not mounted                           ⚠ 1 needs you  ! "
+" ⌕ / to search                                        11/12 reading 1 ◜ · quiet "
+"┌ ID0246 ──────────────────────────────────────────────────────────────────────┐"
+"│ 2026-08-26_Old_Shoot_ID0246                                                  │"
+"│ Lookbook for the spring line, delivery at the end of the month               │"
+"│ client-project   ·   projects   ·   created 2026-08-26                       │"
+"│ touched 2026-01-07                                                           │"
+"│ scanning…   ·   1 note   ·   0/1 todos done                                  │"
+"│ ── tags ──────────────────────────────────────────────────────────────────── │"
+"│ · add a tag                                                                  │"
+"│ ── todo ──────────────────────────────────────────────────────────────────── │"
+"│ [ ] gather the receipts                                           2026-01-02 │"
+"│ · add a todo                                                                 │"
+"│ · add a phase                                                                │"
+"│ ── notes ─────────────────────────────────────────────────────────────────── │"
+"│ 2026-01-05 brief signed off                                                  │"
+"│ · add a note                                                                 │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"                                                                                "
+" ← list  / search  a actions  Enter edit  + add  ? help                         "

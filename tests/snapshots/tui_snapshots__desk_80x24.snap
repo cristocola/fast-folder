@@ -1,0 +1,28 @@
+---
+source: tests/tui_snapshots.rs
+expression: frame
+---
+" fast-folder   library │ desk │ templates   2 bases              highest ID0248 "
+" → projects 12   archive not mounted                           ⚠ 1 needs you  ! "
+" ⌕ / to search                                        11/12 reading 1 ◜ · quiet "
+"┌ desk ────────────────────────────────────────────────────────────────────────┐"
+"│  no owner · 3 ────────────────────────────────────────────────────────────── │"
+"│▸ ID0246 2026-08-26_Old_Shoot_ID0246          gather the rece…   13 d         │"
+"│  ID0238 2026-08-18_Spring_Campaign_ID0238    gather the rece…    8 d         │"
+"│  ID0242 2026-08-22_Lullaby_Remix_ID0242      gather the rece…    1 d         │"
+"│  @claude · 3 ─────────────────────────────────────────────────────────────── │"
+"│  ID0248 2026-08-28_Lullaby_Remix_ID0248      Main Edit · cut…   19 d ⚠       │"
+"│  ID0240 2026-08-20_Old_Shoot_ID0240          Main Edit · cut…   14 d ⚠       │"
+"│  ID0244 2026-08-24_Spring_Campaign_ID0244    Main Edit · cut…    7 d ⚠       │"
+"│  @sales · 3 ──────────────────────────────────────────────────────────────── │"
+"│  ID0247 2026-08-27_Client_Onboarding_Acme_I… send the invoice   16 d ⚠       │"
+"│  ID0239 2026-08-19_Test_Run_ID0239           send the invoice   11 d ⚠       │"
+"│  ID0243 2026-08-23_Live_Session_ID0243       send the invoice    4 d ⚠       │"
+"│  no open todos · 2 ───────────────────────────────────────────────────────── │"
+"│  ID0241 2026-08-21_Client_Onboarding_Acme_I…                    17 d         │"
+"│  ID0245 2026-08-25_Test_Run_ID0245                              10 d         │"
+"│  reading ◜ · 1 ───────────────────────────────────────────────────────────── │"
+"│  ID0237 2026-08-17_Live_Session_ID0237                                       │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"                                                                                "
+" → details  / search  f this group  z pick one  a actions  o open  t terminal   "

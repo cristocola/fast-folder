@@ -139,6 +139,8 @@ pub fn sample_summary(projects: usize) -> Summary {
             default_template: String::new(),
             confirm_create: true,
             register_naming_pattern: "{date}_{name}_{id}".to_string(),
+            hat: None,
+            agent: None,
         },
         probing: false,
     }
@@ -158,6 +160,7 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
     );
     app.is_menu = true;
     app.clock = || "10:00:00".to_string();
+    app.now = || "2026-01-20T10:00:00Z".to_string();
     // **Past the one-time guide.** It offers itself the first time templates
     // come up at all, so without this a fixture that opens the tab gets the
     // guide on top and every key after it turns a page instead of driving the
@@ -168,6 +171,67 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
     let _ = crate::tui::app::update(
         &mut app,
         crate::tui::msg::Msg::Summary(Box::new(sample_summary(n))),
+    );
+    app
+}
+
+/// The records the desk's fixture hands every project but the last: a mix
+/// of assignees, so every heading the desk can show is on it (an agent's todo
+/// with a phase, a colleague's, one with no owner, no open todo), each with
+/// a `touched` of its own, so the ages differ. The last project stays unread.
+pub fn desk_records(projects: &[Project]) -> Vec<(PathBuf, crate::tui::app::data::ProjectDetail)> {
+    use crate::core::body::{Note, Todo};
+    let todo = |done: bool, text: &str, phase: Option<&str>, owner: Option<&str>| Todo {
+        done,
+        text: text.to_string(),
+        phase: phase.map(str::to_string),
+        owner: owner.map(str::to_string),
+        added: Some("2026-01-02T09:00:00Z".to_string()),
+        done_at: done.then(|| "2026-01-12T17:30:00Z".to_string()),
+    };
+    projects
+        .iter()
+        .enumerate()
+        .take(projects.len().saturating_sub(1))
+        .map(|(i, project)| {
+            let todos = match i % 4 {
+                0 => vec![
+                    todo(true, "treatment", Some("Prep"), Some("sales")),
+                    todo(
+                        false,
+                        "cut the first minute",
+                        Some("Main Edit"),
+                        Some("claude"),
+                    ),
+                    todo(false, "colour grade", Some("Main Edit"), None),
+                ],
+                1 => vec![todo(false, "send the invoice", None, Some("sales"))],
+                2 => vec![todo(false, "gather the receipts", None, None)],
+                _ => vec![todo(true, "everything", None, None)],
+            };
+            let detail = crate::tui::app::data::ProjectDetail {
+                todos,
+                notes: vec![Note {
+                    timestamp: Some(format!("2026-01-{:02}T11:00:00Z", 3 + i % 9)),
+                    text: "brief signed off".to_string(),
+                }],
+                touched: Some(format!("2026-01-{:02}T10:00:00Z", 1 + (i * 3) % 19)),
+                ..Default::default()
+            };
+            (project.path.clone(), detail)
+        })
+        .collect()
+}
+
+/// `fixture`, with the desk's records delivered and the desk tab on screen:
+/// every heading, one project still `reading`.
+pub fn desk_fixture(n: usize, width: u16, height: u16) -> App {
+    let mut app = fixture(n, width, height);
+    let records = desk_records(&sample_projects(n));
+    let _ = crate::tui::app::update(&mut app, crate::tui::msg::Msg::Details(records));
+    let _ = crate::tui::app::update(
+        &mut app,
+        crate::tui::msg::Msg::Key(crate::tui::command::Key::ch('w')),
     );
     app
 }

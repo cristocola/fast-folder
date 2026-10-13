@@ -9,6 +9,12 @@ use crate::tui::command::{self, CommandId, Context, Key};
 use crate::tui::effect::{Action, Effect};
 use crate::tui::validators;
 
+/// The owner picker's row that takes the owner off. Not a name a hand could
+/// mean: an owner is one word of letters, digits and `- _ . /`.
+pub(crate) const NOBODY: &str = "(nobody)";
+/// The owner picker's row that opens the prompt for a new name.
+pub(crate) const NEW_OWNER: &str = "(type a name)";
+
 impl App {
     /// A pane edit is open: the field has first refusal on anything typed,
     /// the registry answers the rest (`Enter`, `Esc`, `Ctrl-S`), and what
@@ -54,7 +60,7 @@ impl App {
             return Vec::new();
         };
         let read = self.details.contains_key(&project.path);
-        if !read || !self.pane_live() || self.screen != super::Screen::Library {
+        if !read || !self.pane_live() || !self.screen.lists_projects() {
             let mut prompt = crate::tui::app::actions::TextPrompt::new(
                 validators::DESCRIBE_PROMPT,
                 crate::tui::app::actions::TextThen::Describe(project.path.clone()),
@@ -321,6 +327,124 @@ impl App {
             pending: false,
         });
         Vec::new()
+    }
+
+    /// `O` on a todo: a picker over the owners the list already names, the
+    /// hat, nobody, and a name to type.
+    pub(super) fn pane_owner(&mut self) -> Vec<Effect> {
+        let rows = self.pane_rows();
+        let Some(PaneRow::Todo { ordinal, .. }) = rows.get(self.pane_cursor) else {
+            return Vec::new();
+        };
+        let ordinal = *ordinal;
+        let Some(detail) = self
+            .library
+            .selected()
+            .and_then(|project| self.details.get(&project.path))
+        else {
+            return Vec::new();
+        };
+        let Some(todo) = detail.todos.get(ordinal) else {
+            return Vec::new();
+        };
+        let was = todo.text.clone();
+        let current = todo.owner.clone();
+        let mut names: Vec<String> = Vec::new();
+        if let Some(hat) = self.hat() {
+            names.push(hat);
+        }
+        for owner in detail.todos.iter().filter_map(|todo| todo.owner.as_deref()) {
+            if !names.iter().any(|name| name == owner) {
+                names.push(owner.to_string());
+            }
+        }
+        let mut items: Vec<PickItem> = names
+            .into_iter()
+            .map(|name| PickItem {
+                label: format!("@{name}"),
+                detail: if current.as_deref() == Some(name.as_str()) {
+                    "current".to_string()
+                } else {
+                    String::new()
+                },
+                value: name,
+            })
+            .collect();
+        items.push(PickItem {
+            label: "nobody".to_string(),
+            detail: if current.is_none() {
+                "current".to_string()
+            } else {
+                "take the owner off".to_string()
+            },
+            value: NOBODY.to_string(),
+        });
+        items.push(PickItem {
+            label: "a name you type".to_string(),
+            detail: String::new(),
+            value: NEW_OWNER.to_string(),
+        });
+        self.modals.push(Modal::Pick(PickState::new(
+            " owner? ",
+            items,
+            Then::TodoOwner { ordinal, was },
+        )));
+        Vec::new()
+    }
+
+    /// The picker's "a name you type…": the prompt for it.
+    pub(super) fn open_owner_prompt(&mut self, ordinal: usize, was: String) -> Vec<Effect> {
+        let prompt = crate::tui::app::actions::TextPrompt::new(
+            validators::OWNER_PROMPT,
+            crate::tui::app::actions::TextThen::TodoOwner { ordinal, was },
+        );
+        self.modals.push(Modal::TextPrompt(prompt));
+        Vec::new()
+    }
+
+    /// The name typed into that prompt: refused on the line by the owner's
+    /// rule, else sent.
+    pub(super) fn owner_typed(&mut self, ordinal: usize, was: String, text: String) -> Vec<Effect> {
+        let owner = match validators::owner(&text) {
+            Ok(owner) => owner,
+            Err(error) => {
+                if let Some(Modal::TextPrompt(prompt)) = self.modals.top_mut() {
+                    prompt.error = Some(error);
+                }
+                return Vec::new();
+            }
+        };
+        self.modals.pop();
+        self.send_todo_owner(ordinal, was, Some(owner))
+    }
+
+    /// Send the new owner, the picker having been the edit: the todo's row
+    /// is remembered, as a `select` variable's is, so the answer pulses it.
+    pub(super) fn send_todo_owner(
+        &mut self,
+        ordinal: usize,
+        was: String,
+        owner: Option<String>,
+    ) -> Vec<Effect> {
+        let Some(project) = self.library.selected().cloned() else {
+            return Vec::new();
+        };
+        self.pane_edit = Some(PaneEdit::Line {
+            row: self.pane_cursor,
+            input: crate::tui::widgets::input::LineEdit::with_text(was.clone()),
+            target: EditTarget::Todo {
+                ordinal,
+                was: was.clone(),
+            },
+            error: None,
+            pending: false,
+        });
+        self.send_pane_edit(Action::SetTodoOwner {
+            project: Box::new(project),
+            ordinal,
+            was,
+            owner,
+        })
     }
 
     /// Close the edit open in the pane, leaving its row as it was. The add

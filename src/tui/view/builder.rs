@@ -914,7 +914,7 @@ pub fn render_onboarding(
     let width = 68.min(area.width);
     // The prose wraps to the box, and the box is as tall as the prose it
     // holds: on a narrow window a sentence is several lines, never cut.
-    let prose: [(String, ratatui::style::Style); 4] = [
+    let prose: [(String, ratatui::style::Style); 5] = [
         (
             crate::tui::validators::ONBOARDING_PROMPT.to_string(),
             theme.text(),
@@ -927,14 +927,22 @@ pub fn render_onboarding(
             "Add more later (a second drive, a network share) under Settings.".to_string(),
             theme.dim(),
         ),
-        // The one thing a first run cannot discover for itself: that
-        // templates are what shape a project, and that there is a guide to
-        // them. Both keys read from the registry, never spelled here.
+        // What a first run cannot discover for itself: that templates are
+        // what shape a project, that there is a guide to them, and that the
+        // desk exists once projects have todos. Every key reads from the
+        // registry, never spelled here.
         (
             format!(
                 "Templates shape every project: {} opens them, {} explains them.",
                 crate::tui::command::key_of(command::CommandId::Templates),
                 crate::tui::command::key_of(command::CommandId::Guide),
+            ),
+            theme.dim(),
+        ),
+        (
+            format!(
+                "Once projects have todos, {} opens the desk: every project's next todo, by owner.",
+                crate::tui::command::key_of(command::CommandId::ShowDesk),
             ),
             theme.dim(),
         ),

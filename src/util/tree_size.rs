@@ -12,6 +12,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::util::paths::is_link_like;
 
+/// What one walk of a tree found: the bytes, and the newest regular file —
+/// when it was last written and where it is, relative to the root — which is
+/// what last moved in the project. The same walk answers both, so the newest
+/// file costs nothing the size did not already pay for.
+///
+/// A folder whose name starts with a dot (`.git`, `.venv`, `.cache`) is
+/// bookkeeping: its bytes count, but nothing under it is ever the file that
+/// last moved, or every commit would name `.git/index` over the file that
+/// was worked on. A dot *file* (`.env`) is work like any other.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeFacts {
+    pub bytes: u64,
+    pub newest: Option<(std::time::SystemTime, std::path::PathBuf)>,
+}
+
+impl TreeFacts {
+    /// The newest file's time as the stamp every other date here wears.
+    pub fn newest_stamp(&self) -> Option<String> {
+        self.newest
+            .as_ref()
+            .map(|(at, _)| crate::util::time::iso8601_of(*at))
+    }
+}
+
 /// Sum the logical lengths of every regular file below `root`, abandoning the
 /// walk once `cancel` is set.
 ///
@@ -25,23 +49,43 @@ use crate::util::paths::is_link_like;
 /// **discard** the result rather than record it: there `None` means "no answer",
 /// not "unavailable". Cancellation is checked once per directory entry, which is
 /// what bounds teardown when the tree lives on a slow network share.
-pub(crate) fn directory_size_until(root: &Path, cancel: &AtomicBool) -> Option<u64> {
+pub fn directory_facts_until(root: &Path, cancel: &AtomicBool) -> Option<TreeFacts> {
     crate::util::paths::stall_if_marked(root);
-    directory_size_inner(root, cancel).ok()
+    let mut facts = TreeFacts {
+        bytes: 0,
+        newest: None,
+    };
+    directory_facts_inner(root, root, cancel, &mut facts)
+        .ok()
+        .map(|()| facts)
 }
 
 /// The depth-0 entry point. **Nothing else may call it** — the recursive step
 /// goes to `directory_size_at` with `depth + 1`. Recursing through here resets
 /// the counter at every level and leaves the limit below unreachable.
-fn directory_size_inner(root: &Path, cancel: &AtomicBool) -> io::Result<u64> {
-    directory_size_at(root, cancel, 0)
+fn directory_facts_inner(
+    base: &Path,
+    root: &Path,
+    cancel: &AtomicBool,
+    facts: &mut TreeFacts,
+) -> io::Result<()> {
+    directory_size_at(base, root, cancel, 0, facts, false)
 }
 
 /// The body, carrying the depth. Past the limit the whole snapshot fails, which
 /// the caller renders as `unavailable` — consistent with every other read
 /// failure here, and the only honest answer when part of the tree was not
-/// counted.
-fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Result<u64> {
+/// counted. `base` is the tree's root, which the newest file's path is
+/// relative to; `bookkeeping` says a dot-folder is above `root`, so nothing
+/// here may become the newest file.
+fn directory_size_at(
+    base: &Path,
+    root: &Path,
+    cancel: &AtomicBool,
+    depth: usize,
+    facts: &mut TreeFacts,
+    bookkeeping: bool,
+) -> io::Result<()> {
     if depth >= crate::util::paths::MAX_WALK_DEPTH {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -57,7 +101,6 @@ fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Resu
         ));
     }
 
-    let mut total = 0_u64;
     for entry in fs::read_dir(root)? {
         if cancel.load(Ordering::Relaxed) {
             return Err(io::Error::new(
@@ -77,32 +120,46 @@ fn directory_size_at(root: &Path, cancel: &AtomicBool, depth: usize) -> io::Resu
             continue;
         }
 
-        let bytes = if file_type.is_dir() {
-            directory_size_at(&path, cancel, depth + 1)?
-        } else if file_type.is_file() {
-            metadata.len()
-        } else {
+        if file_type.is_dir() {
+            let hidden = bookkeeping
+                || path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with('.'));
+            directory_size_at(base, &path, cancel, depth + 1, facts, hidden)?;
+            continue;
+        }
+        if !file_type.is_file() {
             // Sockets, FIFOs, devices, and other special nodes have no regular
             // file content to include and must never be opened.
-            0
-        };
-        total = total.checked_add(bytes).ok_or_else(|| {
+            continue;
+        }
+        facts.bytes = facts.bytes.checked_add(metadata.len()).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "directory size overflowed u64")
         })?;
+        // The newest file, by its modification time; a time the filesystem
+        // cannot give leaves the newest as it was.
+        if !bookkeeping
+            && let Ok(modified) = metadata.modified()
+            && facts.newest.as_ref().is_none_or(|(at, _)| modified > *at)
+        {
+            let relative = path.strip_prefix(base).unwrap_or(&path).to_path_buf();
+            facts.newest = Some((modified, relative));
+        }
     }
-    Ok(total)
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::directory_size_until;
+    use super::directory_facts_until;
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
 
     /// The uncancelled walk every case here but one wants.
     fn directory_size(root: &Path) -> Option<u64> {
-        directory_size_until(root, &AtomicBool::new(false))
+        directory_facts_until(root, &AtomicBool::new(false)).map(|facts| facts.bytes)
     }
 
     #[test]
@@ -155,6 +212,47 @@ mod tests {
         fs::create_dir_all(&path).unwrap();
         fs::write(path.join("leaf.bin"), [0_u8; 4]).unwrap();
         assert_eq!(directory_size(&shallow), Some(4));
+    }
+
+    /// The newest file is never under a dot-folder, whose bytes still count:
+    /// a commit must not make `.git/index` what last moved.
+    #[test]
+    fn the_newest_file_is_never_bookkeeping() {
+        use std::time::{Duration, SystemTime};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        fs::create_dir_all(root.join(".git/logs")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), b"fn main() {}").unwrap();
+        fs::write(root.join(".env"), b"KEY=1").unwrap();
+        fs::write(root.join(".git/logs/HEAD"), b"a commit").unwrap();
+        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        for older in ["src/main.rs", ".env"] {
+            fs::File::options()
+                .write(true)
+                .open(root.join(older))
+                .unwrap()
+                .set_modified(hour_ago)
+                .unwrap();
+        }
+        let facts = directory_facts_until(&root, &AtomicBool::new(false)).unwrap();
+        assert_eq!(facts.bytes, 12 + 5 + 8, "the dot-folder's bytes count");
+        let (_, newest) = facts.newest.expect("a newest file");
+        assert_ne!(
+            newest,
+            Path::new(".git/logs/HEAD"),
+            "bookkeeping is never what last moved"
+        );
+
+        // A dot file at the top is work like any other.
+        fs::File::options()
+            .write(true)
+            .open(root.join(".env"))
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(60))
+            .unwrap();
+        let facts = directory_facts_until(&root, &AtomicBool::new(false)).unwrap();
+        assert_eq!(facts.newest.unwrap().1, Path::new(".env"));
     }
 
     #[test]
@@ -266,7 +364,7 @@ mod tests {
         fs::write(root.join("payload.bin"), [0_u8; 32]).unwrap();
 
         let cancel = AtomicBool::new(true);
-        assert_eq!(directory_size_until(&root, &cancel), None);
+        assert_eq!(directory_facts_until(&root, &cancel), None);
         // The same tree measures fine once nothing is asking us to stop.
         assert_eq!(directory_size(&root), Some(32));
     }

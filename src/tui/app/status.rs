@@ -63,18 +63,24 @@ impl App {
                 })
                 .collect()
         };
+        let journal = self.journal_rows();
         self.modals.push(Modal::Activity(Box::new(Activity {
             page: ActivityPage::Messages,
             messages,
+            journal,
             log: vec!["reading…".to_string()],
             jobs: Vec::new(),
             job_ids: Vec::new(),
             job_cursor: 0,
-            scroll: [0, 0, 0],
+            scroll: [0, 0, 0, 0],
             loaded: false,
         })));
         self.refresh_activity_jobs();
-        vec![Effect::LoadActivity, Effect::WatchJobs]
+        // The journal page is built from the records the desk reads; what is
+        // not read yet is asked for now, and the page fills in as it lands.
+        let mut effects = vec![Effect::LoadActivity, Effect::WatchJobs];
+        effects.extend(self.desk_read_effects());
+        effects
     }
 
     /// Put the jobs the app knows of on the activity screen's jobs page, if

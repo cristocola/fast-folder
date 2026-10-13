@@ -168,6 +168,15 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Vec<No
     notes
 }
 
+/// Run one shell line for a project, the way a `post_create` command runs:
+/// `{path}` rewritten to the quoted variable, the project as the working
+/// folder, `FASTF_PROJECT_PATH` set, the terminal inherited — so what the
+/// line starts can talk to the person who typed `fastf agent`. The status
+/// is the answer; the caller says what it means.
+pub fn run_line_in(line: &str, project_path: &Path) -> std::io::Result<std::process::ExitStatus> {
+    run_shell(&rewrite_path_token(line), project_path)
+}
+
 /// A child process that knows which project it is being run for.
 ///
 /// **Every child fastf spawns for a project goes through this**: the project

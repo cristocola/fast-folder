@@ -96,6 +96,34 @@ pub fn open_terminal_at(cfg: &Config, dir: &std::path::Path) -> anyhow::Result<(
     }
 }
 
+/// Open a terminal window running `fastf <args>` — the app's "start the agent
+/// in a window", a window per agent while the app keeps its screen. Unix:
+/// the relaunch's own builder, so the emulator and the argv conventions are
+/// the ones every relaunch uses, and `terminal = "none"` degrades to probing
+/// as it does for `term`; Windows: a new console running fastf.
+pub fn open_terminal_running(cfg: &Config, args: &[std::ffi::OsString]) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use crate::core::config::TerminalPreference;
+        let preference = cfg.resolve_terminal();
+        let name = match &preference {
+            TerminalPreference::Named(_) => preference.name(),
+            TerminalPreference::Disabled | TerminalPreference::Probe => None,
+        };
+        if !crate::util::tty::has_display() {
+            anyhow::bail!(
+                "no display — a terminal window needs a desktop session (DISPLAY or WAYLAND_DISPLAY)"
+            );
+        }
+        crate::util::relaunch::spawn_in_terminal(name, args)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = cfg;
+        crate::util::term_open::open_console_running(args)
+    }
+}
+
 /// Is this process the sole occupant of a window the relaunch opened for it —
 /// started with `--relaunched`, with a real terminal on stdin and stderr?
 ///

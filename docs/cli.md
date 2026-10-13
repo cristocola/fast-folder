@@ -15,6 +15,7 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf copy <query>` | Put a project's folder path on the clipboard |
 | `fastf path <query>` | Print a project's folder path, and nothing else |
 | `fastf term <query>` | Open a terminal window at a project's folder |
+| `fastf agent <query>` | Start the configured agent in a project's folder |
 | `fastf search <expr>...` | Search projects by text, field, date, or tag |
 | `fastf register <dir>` | Onboard an existing folder by writing its `PROJECT_INFO.md` |
 | `fastf apply <slug> <dir>` | Add missing template structure to an existing folder |
@@ -91,7 +92,8 @@ prints is read by nobody. Refusing there is the same as doing nothing.
 So when fastf is asked for something interactive and can prove that nothing can
 read its output, it opens a terminal and runs the same command again inside it.
 This applies to the guided app (`fastf` with no arguments), `fastf recent`,
-`fastf search`, and the ambiguous branch of `open`, `copy`, `path`, and `term`.
+`fastf search`, `fastf agent`, and the ambiguous branch of `open`, `copy`,
+`path`, and `term`.
 A window that only showed text waits for Enter before closing; one that showed
 a picker or a menu closes as soon as you leave it — except `term`'s, which
 *becomes* the shell at the project you picked.
@@ -223,6 +225,37 @@ second one.
 
 On Windows it opens Windows Terminal (`wt`) when it is installed, and a new
 `cmd` console otherwise — see [windows.md](windows.md).
+
+### Starting the agent there
+
+```bash
+fastf config set agent claude                 # one shell line, as a post-create command is
+fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
+fastf agent ID0047                            # the agent, in that project's folder
+fastf agent lullaby                           # same query tiers as open/copy/path/term
+```
+
+`fastf agent` is `term`'s sibling: where `term` puts a shell at the project,
+`agent` puts your agent there and does nothing more. The `agent` key is one
+shell line, run the way a template's `post_create` command runs — the project
+as its working folder, `FASTF_PROJECT_PATH` set, `{path}` rewritten to it —
+and it runs **in the terminal you typed it in**, as if you had opened that
+terminal at the project, and exits with the agent's status. You never `cd`.
+
+From krunner, rofi or a `.desktop` entry there is no terminal, so the hand-off
+above opens one and runs the same command inside it; on Windows a console
+program gets its console. In the app, `x` on a project opens a new window
+running the agent there, so the app stays up and the next `x` is the next
+agent; `X` runs it in the app's own terminal, the dashboard stepping aside as
+it does for a note in `$EDITOR` and coming back when the agent exits — the
+pane re-reads the file, so what the agent ticked and noted is there. Without
+an `agent` configured both verbs say so, and with no display `x` does.
+
+What fastf does **not** do is run the agent for you: no registry of agents,
+no polling, no transcript. The folder's trace is the agent's status — the
+todos it ticked, the notes it wrote, what it changed — and fastf reads the
+trace. An agent that leaves none is a matter for its own prompt;
+`FASTF_PROJECT_PATH` and the raw `PROJECT_INFO.md` are all it needs.
 
 ### Ambiguous queries
 

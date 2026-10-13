@@ -97,6 +97,16 @@ pub struct Config {
     #[serde(default)]
     pub terminal: String,
 
+    /// The agent to start in a project's folder — `fastf agent`, `x` in
+    /// the app: one shell line, the shape a `post_create` command has
+    /// (`claude`, `codex --full-auto`, `claude '{path}'`), run with the
+    /// project as its working folder and `FASTF_PROJECT_PATH` set. Empty =
+    /// none configured, which `fastf agent` refuses by name.
+    ///
+    /// Never read raw — see [`Config::resolve_agent`].
+    #[serde(default)]
+    pub agent: String,
+
     /// The hat worn: the owner whose court is yours. Empty = none. Shown in
     /// the app's header, and what `fastf todo add --mine` assigns to;
     /// `FASTF_HAT` wears one for a shell. It never changes what a file says.
@@ -218,6 +228,7 @@ impl Default for Config {
             editor: String::new(),
             terminal: String::new(),
             hat: String::new(),
+            agent: String::new(),
             theme: String::new(),
             motion: String::new(),
             log_level: String::new(),
@@ -380,6 +391,12 @@ impl Config {
             Ok(name) if !name.trim().is_empty() => TerminalPreference::Named(name.trim().into()),
             _ => TerminalPreference::Probe,
         }
+    }
+
+    /// The agent's shell line, or `None` with none configured.
+    pub fn resolve_agent(&self) -> Option<String> {
+        let line = self.agent.trim();
+        (!line.is_empty()).then(|| line.to_string())
     }
 
     /// The hat worn: `FASTF_HAT` for this shell, else the `hat` key, else

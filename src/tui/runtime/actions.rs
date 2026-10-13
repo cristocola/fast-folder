@@ -544,6 +544,23 @@ pub(super) fn spawn(kind: &SpawnKind) -> Result<String, String> {
                 .map(|()| String::new())
                 .map_err(|e| format!("{e:#}"))
         }
+        SpawnKind::Agent(project) => {
+            crate::core::library::revalidate_for_read(project).map_err(|e| format!("{e:#}"))?;
+            let cfg = crate::core::config::Config::load().map_err(|e| format!("{e:#}"))?;
+            let Some(line) = cfg.resolve_agent() else {
+                return Err(crate::cli::agent::NO_AGENT.to_string());
+            };
+            // The window runs `fastf agent <id>`, which resolves the project
+            // again and runs the line in its folder; the id is exact, so the
+            // picker there only ever asks about one id in two bases.
+            let args = [
+                std::ffi::OsString::from("agent"),
+                std::ffi::OsString::from(&project.id),
+            ];
+            crate::cli::terminal::open_terminal_running(&cfg, &args)
+                .map(|()| line)
+                .map_err(|e| format!("{e:#}"))
+        }
         SpawnKind::Clipboard(text) => crate::util::clipboard::copy(text)
             .map(str::to_string)
             .ok_or_else(|| "no clipboard tool found".to_string()),

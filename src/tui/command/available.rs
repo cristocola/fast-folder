@@ -81,6 +81,25 @@ pub(super) fn needs_selection_and_display(app: &App) -> Availability {
     needs_selection(app)
 }
 
+/// The agent verbs need an `agent` configured; the window one a display too.
+pub(super) fn agent_configured(app: &App) -> Availability {
+    if app
+        .summary
+        .as_ref()
+        .is_none_or(|summary| summary.prefs.agent.is_none())
+    {
+        return Availability::Disabled(crate::cli::agent::NO_AGENT);
+    }
+    needs_selection(app)
+}
+
+pub(super) fn agent_and_display(app: &App) -> Availability {
+    if !app.has_display {
+        return Availability::Disabled("no display — needs a desktop session; X starts it here");
+    }
+    agent_configured(app)
+}
+
 pub(super) fn needs_selection(app: &App) -> Availability {
     if app.library.selected().is_some() {
         Availability::Enabled

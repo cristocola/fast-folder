@@ -519,11 +519,11 @@ coarse mutation lock per data folder; it does not coordinate simultaneous
 writers on two computers, so two machines writing one shared base at the same
 moment can mint the same ID.
 
-**What it starts.** fastf runs other programs on your behalf in five places,
+**What it starts.** fastf runs other programs on your behalf in six places,
 all of them configuration rather than input: a template's `post_create`
-commands, your editor, the file manager for Reveal, a clipboard tool
-(`wl-copy`, `xclip`, `xsel`, `clip`, `pbcopy`), and — unix only — a terminal
-emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
+commands, your editor, your agent (`fastf agent`, the `agent` key), the file
+manager for Reveal, a clipboard tool (`wl-copy`, `xclip`, `xsel`, `clip`,
+`pbcopy`), and — unix only — a terminal emulator plus `notify-send`. It also starts itself: a move, a copy, a delete
 and a reconcile each run as a copy of fastf, detached from the terminal, with
 nothing on its command line but the job it is to read from the data folder. On
 Linux with a systemd user session it is started through `systemd-run --user

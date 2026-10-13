@@ -196,6 +196,11 @@ impl App {
             CommandId::PaneEditCancel => self.cancel_pane_edit(),
             CommandId::OpenFolder => self.spawn_for_selection(SpawnKind::Reveal),
             CommandId::OpenTerminal => self.spawn_for_selection(SpawnKind::Terminal),
+            CommandId::Agent => self.spawn_for_selection(SpawnKind::Agent),
+            CommandId::AgentHere => match self.library.selected() {
+                Some(project) => vec![Effect::Suspend(Suspended::Agent(Box::new(project.clone())))],
+                None => Vec::new(),
+            },
             CommandId::CopyPath => match self.library.selected() {
                 Some(project) => vec![Effect::Spawn(SpawnKind::Clipboard(
                     crate::util::paths::display_path(&project.path),

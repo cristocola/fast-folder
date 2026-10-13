@@ -150,6 +150,9 @@ pub enum Resumed {
     },
     /// A new project's post-create actions ran on the main screen.
     PostCreate,
+    /// The agent started on the main screen exited; `ok` says whether it
+    /// exited cleanly, for the status line.
+    Agent { project: Box<Project>, ok: bool },
     /// `fg` after Ctrl-Z: the screen is retaken, at whatever size it has now.
     Shell,
 }

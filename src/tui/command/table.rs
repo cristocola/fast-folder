@@ -779,6 +779,28 @@ pub static COMMANDS: &[Command] = &[
         needs_selection_and_display
     ),
     cmd!(
+        Agent,
+        "Start the agent in a window",
+        "a new terminal window running the configured agent in the project folder, so the app stays up and the next one is the next agent",
+        ACTIONS,
+        [Key::ch('x')],
+        Project,
+        palette = true,
+        hint = false,
+        agent_and_display
+    ),
+    cmd!(
+        AgentHere,
+        "Start the agent here",
+        "the configured agent in the project folder, in this terminal: the app steps aside until it exits, as it does for a note in the editor",
+        ACTIONS,
+        [Key::ch('X')],
+        Project,
+        palette = true,
+        hint = false,
+        agent_configured
+    ),
+    cmd!(
         CopyPath,
         "Copy path",
         "put the project's folder path on the clipboard",

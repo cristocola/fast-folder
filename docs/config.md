@@ -59,6 +59,12 @@ fastf config set editor nvim
 fastf config set terminal kitty
 fastf config set terminal none                   # never relaunch (fastf term still works)
 
+# The agent `fastf agent` and the app's `x` start in a project's folder: one
+# shell line, run as a post-create command is, with the project as its
+# working folder and FASTF_PROJECT_PATH set. Empty = none, and the verbs say so.
+fastf config set agent claude
+fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
+
 # The hat worn: the owner whose court is yours. `fastf todo add --mine`
 # assigns to it and the app's header shows it. `fastf hat sales` is the
 # short way; FASTF_HAT wears one for a shell without writing anything.

@@ -242,6 +242,23 @@ enum Commands {
         query: String,
     },
 
+    /// Start the configured agent in a project's folder
+    #[command(
+        after_help = "Runs the `agent` config key — one shell line, as a post-create command\n\
+        is: `claude`, `codex --full-auto`, `claude 'read PROJECT_INFO.md first'` —\n\
+        with the project as its working folder and FASTF_PROJECT_PATH set, in\n\
+        the terminal this was typed in, and exits with the agent's status. From\n\
+        a desktop launcher it opens a terminal window and runs there.\n\n\
+        Examples:\n  \
+            fastf config set agent claude\n  \
+            fastf agent ID0047\n  \
+            fastf agent lullaby                    # name substring match"
+    )]
+    Agent {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
     /// Move a project folder into another configured base
     #[command(
         name = "move",
@@ -836,6 +853,7 @@ enum ConfigAction {
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            agent                       The agent `fastf agent` starts in a project's folder, as one shell line (default: none)\n  \
             hat                         The hat worn: the owner whose court is yours (default: none; FASTF_HAT wears one for a shell)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
@@ -1287,6 +1305,7 @@ fn run() -> Result<()> {
         }),
         Some(Commands::Path { query }) => cli::path_cmd::run(&query),
         Some(Commands::Term { query }) => cli::term_cmd::run(&query),
+        Some(Commands::Agent { query }) => cli::agent::run(&query),
         Some(Commands::Move {
             query,
             base,

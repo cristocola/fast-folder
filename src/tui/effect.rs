@@ -274,6 +274,9 @@ pub enum SpawnKind {
     Reveal(Box<Project>),
     /// A terminal window in the folder.
     Terminal(Box<Project>),
+    /// A terminal window running the configured agent in the folder — a
+    /// window per agent, so the desk stays up.
+    Agent(Box<Project>),
     /// Put text on the clipboard.
     Clipboard(String),
 }
@@ -295,6 +298,10 @@ pub enum Suspended {
     /// Ctrl-Z: give the terminal back and stop, as any program does; `fg`
     /// brings the app back with its screen retaken. Unix only.
     Shell,
+    /// Start the configured agent in the selected project's folder, on the
+    /// main screen, and come back when it exits — the pane re-reads the
+    /// file, so what it ticked and noted is there.
+    Agent(Box<Project>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

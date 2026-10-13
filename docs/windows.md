@@ -95,6 +95,8 @@ exists.
 
 `fastf term <query>` works here too: it opens Windows Terminal (`wt`) at the
 project's folder when it is installed, and a new `cmd` console there otherwise.
+`fastf agent <query>` runs the configured agent in the console it was typed
+in, and the app's `x` starts one in a new console of its own.
 
 ## The guided app in the old console
 

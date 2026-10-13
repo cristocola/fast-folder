@@ -132,6 +132,23 @@ impl App {
             }
             Msg::Resumed(Resumed::Shell) => Vec::new(),
 
+            // The agent had the folder; what it ticked and noted is in the
+            // file, which the pane reads again.
+            Msg::Resumed(Resumed::Agent { project, ok }) => {
+                self.session = crate::tui::frame::recent_actions();
+                if ok {
+                    self.good(format!("The agent finished in {}", project.name));
+                } else {
+                    self.warn(format!(
+                        "The agent did not finish cleanly in {}",
+                        project.name
+                    ));
+                }
+                self.apply_change(ListChange::DetailOnly {
+                    path: project.path.clone(),
+                })
+            }
+
             Msg::Resumed(Resumed::Note { project, text }) => {
                 self.on_note_from_editor(project, text)
             }
@@ -514,6 +531,12 @@ impl App {
             }
             (SpawnKind::Terminal(_), Err(error)) => {
                 self.error(format!("could not open a terminal: {error}"));
+            }
+            (SpawnKind::Agent(project), Ok(line)) => {
+                self.good(format!("Started {line} in {}", project.name));
+            }
+            (SpawnKind::Agent(_), Err(error)) => {
+                self.error(format!("could not start the agent: {error}"));
             }
             (SpawnKind::Clipboard(_), Ok(tool)) => {
                 self.good(format!("Copied with {tool}"));

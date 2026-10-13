@@ -162,6 +162,8 @@ pub enum CommandId {
     Actions,
     OpenFolder,
     OpenTerminal,
+    Agent,
+    AgentHere,
     CopyPath,
     ShowPath,
     ToggleDetail,
@@ -238,7 +240,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 115] = [
+    pub const ALL: [CommandId; 117] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -300,6 +302,8 @@ impl CommandId {
         CommandId::Actions,
         CommandId::OpenFolder,
         CommandId::OpenTerminal,
+        CommandId::Agent,
+        CommandId::AgentHere,
         CommandId::CopyPath,
         CommandId::ShowPath,
         CommandId::ToggleDetail,

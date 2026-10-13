@@ -954,6 +954,15 @@ was added, or ticked once it is — drawn dim at the row's right by
 hat worn rides in `Prefs.hat` (the summary's `Local` part, so it lands without a
 base) and the header shows it after the tabs.
 
+**The agent verbs are `x` and `X`** (`Agent`, `AgentHere`, on `ACTIONS`): `x`
+is `SpawnKind::Agent`, a window running `fastf agent <id>` through
+`cli::terminal::open_terminal_running` (the relaunch's builder with an argv of
+its own; a new console on Windows), dimmed without a display as `t` is; `X` is
+`Suspended::Agent`, run where the note editor runs — the screen given back,
+`post_create::run_line_in` owning the terminal, a pause, the screen retaken —
+and `Resumed::Agent` re-reads the pane. Both are `Disabled(cli::agent::NO_AGENT)`
+until `Prefs.agent` names one, so the refusal is the command line's sentence.
+
 **Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
 needs a key of its own: `PaneEditText` (F2) opens a row's text in place
 (`EditTarget::Todo { ordinal, was }` on a todo, `EditTarget::Description` on the

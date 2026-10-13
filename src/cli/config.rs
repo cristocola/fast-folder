@@ -93,6 +93,14 @@ fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: St
     );
     println!(
         "  {:<26} {}",
+        "agent:".green(),
+        match config.resolve_agent() {
+            Some(line) => line,
+            None => "(none — `fastf config set agent claude` names one)".to_string(),
+        }
+    );
+    println!(
+        "  {:<26} {}",
         "hat:".green(),
         match (
             config.resolve_hat(),
@@ -308,6 +316,17 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             format!("Set terminal = {}", value)
         }
         "hat" => set_hat(config, value)?,
+        "agent" => {
+            config.agent = value.trim().to_string();
+            if config.agent.is_empty() {
+                "Set agent = (none)  — `fastf agent` is off until one is named".to_string()
+            } else {
+                format!(
+                    "Set agent = {}  (`fastf agent <project>` runs it in the project's folder)",
+                    config.agent
+                )
+            }
+        }
         "motion" => set_motion(config, value)?,
         "log_level" => set_log_level(config, value)?,
         // A retired key: the app never takes the mouse. Accepted and
@@ -371,7 +390,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             )
         }
         other => bail!(
-            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, hat, theme, motion, log-level, default-template, date-format, \
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, agent, hat, theme, motion, log-level, default-template, date-format, \
          preview-lines, prompt-open-after-create, confirm-create, \
          recent-limit, register-naming-pattern, on-name-collision, \
          post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",

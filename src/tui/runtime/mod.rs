@@ -600,6 +600,11 @@ impl Runtime {
                     let _ = self.tx.send(Msg::Resumed(Resumed::PostCreate));
                     self.announce_size();
                 }
+                Effect::Suspend(Suspended::Agent(project)) => {
+                    let ok = self.run_agent(&project)?;
+                    let _ = self.tx.send(Msg::Resumed(Resumed::Agent { project, ok }));
+                    self.announce_size();
+                }
                 Effect::Suspend(Suspended::Shell) => {
                     self.suspend_to_shell()?;
                     let _ = self.tx.send(Msg::Resumed(Resumed::Shell));
@@ -756,6 +761,51 @@ impl Runtime {
             project,
             text: text.ok(),
         })
+    }
+}
+
+impl Runtime {
+    /// Start the configured agent in `project`'s folder on the main screen,
+    /// as the note editor runs: the screen given back, the agent owning the
+    /// terminal until it exits, a pause so its last lines can be read, the
+    /// screen retaken. `Ok(false)` when the agent exited with a failure.
+    fn run_agent(&mut self, project: &Project) -> Result<bool> {
+        use crate::core::config::Config;
+
+        self.input.pause();
+        release_screen(&mut self.terminal);
+
+        let outcome = Config::load().and_then(|cfg| {
+            let line = cfg
+                .resolve_agent()
+                .ok_or_else(|| anyhow::anyhow!("{}", crate::cli::agent::NO_AGENT))?;
+            eprintln!(
+                "{} {} in {}",
+                colored::Colorize::bold(colored::Colorize::cyan("→")),
+                colored::Colorize::bold(line.as_str()),
+                colored::Colorize::dimmed(crate::util::paths::display_path(&project.path).as_str())
+            );
+            let status = crate::core::post_create::run_line_in(&line, &project.path)
+                .with_context(|| format!("starting `{line}`"))?;
+            Ok(status.success())
+        });
+        let ok = match outcome {
+            Ok(ok) => ok,
+            Err(err) => {
+                eprintln!(
+                    "{} {:#}",
+                    colored::Colorize::bold(colored::Colorize::red("error:")),
+                    err
+                );
+                false
+            }
+        };
+        pause_for_enter();
+
+        self.terminal = take_screen()?;
+        self.input.resume();
+        self.announce_size();
+        Ok(ok)
     }
 }
 

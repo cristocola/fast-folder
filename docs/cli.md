@@ -596,7 +596,7 @@ open the folder to see what is going on:
 `next todo` is the first unticked todo, its owner, and the number `fastf todo
 done` takes. `todos` counts the open and done todos, and how many open ones
 each owner has. `working` lists the programs whose working folder is inside
-the project right now (Linux; `nobody` on other systems). `last moved` is the
+the project right now (Linux; on other systems the row is absent). `last moved` is the
 newest file under the folder, found by one walk of it. `touched` only looks
 at the top level, so this walk is the more accurate "quiet for". A folder
 whose name starts with a dot (`.git`, `.venv`) is skipped, so a commit does

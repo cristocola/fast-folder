@@ -199,10 +199,19 @@ fn peek_prints_one_projects_summary() {
         field("todos").contains("1 open · 1 done") && field("todos").contains("@claude 1"),
         "{out}"
     );
-    assert!(
-        field("working").contains("nobody") || field("working").contains("pid"),
-        "{out}"
-    );
+    // Who is working in a folder is known on Linux alone; elsewhere the
+    // row is absent rather than a `nobody` nothing stands behind.
+    if cfg!(target_os = "linux") {
+        assert!(
+            field("working").contains("nobody") || field("working").contains("pid"),
+            "{out}"
+        );
+    } else {
+        assert!(
+            !out.lines().any(|l| l.trim_start().starts_with("working")),
+            "{out}"
+        );
+    }
     assert!(
         field("last moved").contains("notes.txt"),
         "the newest file outside the repository's own folder: {out}"

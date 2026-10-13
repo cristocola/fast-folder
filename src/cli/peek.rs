@@ -34,11 +34,15 @@ pub fn run(query: &str) -> Result<()> {
         .flatten()
         .map(|meta| crate::core::validated::Description::one_line(&meta.description))
         .unwrap_or_else(|| project.description.clone());
-    let working: Vec<String> = crate::core::holders::in_tree(&project.path)
-        .working_in
-        .iter()
-        .map(|holder| holder.who())
-        .collect();
+    // Asked only where the platform can answer: elsewhere `nobody` would be
+    // a guess, and the row is left out.
+    let working: Option<Vec<String>> = crate::core::holders::WORKING_KNOWN.then(|| {
+        crate::core::holders::in_tree(&project.path)
+            .working_in
+            .iter()
+            .map(|holder| holder.who())
+            .collect()
+    });
     let facts =
         crate::util::tree_size::directory_facts_until(&project.path, &AtomicBool::new(false));
     let head = crate::core::glance::git_head(&project.path);
@@ -97,14 +101,16 @@ pub fn run(query: &str) -> Result<()> {
             owners_line(&todos)
         ),
     );
-    field(
-        "working",
-        if working.is_empty() {
-            "nobody".dimmed().to_string()
-        } else {
-            working.join(", ")
-        },
-    );
+    if let Some(working) = &working {
+        field(
+            "working",
+            if working.is_empty() {
+                "nobody".dimmed().to_string()
+            } else {
+                working.join(", ")
+            },
+        );
+    }
     field(
         "last moved",
         match facts.as_ref().and_then(|f| f.newest.as_ref()) {

@@ -21,7 +21,6 @@ use crate::tui::theme::Theme;
 use crate::tui::view::{fit, highlighted};
 use crate::tui::widgets::input::LineEdit;
 use crate::tui::widgets::text_area::TextArea;
-use crate::util::size_scan::SizeCell;
 
 /// The widest a template column gets before it is clamped.
 const TEMPLATE_MAX: usize = 16;
@@ -113,9 +112,9 @@ fn fact_spans(
             Span::styled(date_cell(at).to_string(), theme.text()),
         ],
         Fact::Size => vec![Span::styled(
-            match app.size_cell(&project.path) {
-                SizeCell::Pending => theme.glyphs.pending.to_string(),
-                SizeCell::Known(size) => size_label(size),
+            match app.size_cell(&project.path).bytes() {
+                None => theme.glyphs.pending.to_string(),
+                Some(size) => size_label(size),
             },
             theme.text(),
         )],
@@ -483,9 +482,9 @@ fn cursor_cell(app: &App, row: usize, p: &library::Project) -> Cell<'static> {
 fn size_cell(app: &App, p: &library::Project) -> Cell<'static> {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let (label, style) = match app.size_cell(&p.path) {
-        SizeCell::Pending => (g.pending.to_string(), theme.dim()),
-        SizeCell::Known(size) => (size_label(size), theme.text()),
+    let (label, style) = match app.size_cell(&p.path).bytes() {
+        None => (g.pending.to_string(), theme.dim()),
+        Some(size) => (size_label(size), theme.text()),
     };
     Cell::from(Line::from(Span::styled(
         format!("{label:>width$}", width = SIZE_CELL),

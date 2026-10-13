@@ -16,6 +16,15 @@ pub use fastf::tui::testing::{
 pub use fastf::tui::theme::Theme;
 pub use ratatui::crossterm::event::KeyCode;
 
+/// What a size scan hands the app for a tree of `bytes`, with no newest
+/// file — the fixtures' shape, where only the number matters.
+pub fn facts(bytes: u64) -> fastf::util::tree_size::TreeFacts {
+    fastf::util::tree_size::TreeFacts {
+        bytes,
+        newest: None,
+    }
+}
+
 pub fn press(app: &mut App, key: Key) -> Vec<Effect> {
     update(app, Msg::Key(key))
 }

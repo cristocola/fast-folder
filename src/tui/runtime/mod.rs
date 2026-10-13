@@ -113,7 +113,7 @@ struct Runtime {
     input: InputThread,
     scanner: SizeScanner,
     /// The size cells last handed to the app, so a tick reports only news.
-    reported: HashMap<PathBuf, Option<u64>>,
+    reported: HashMap<PathBuf, Option<crate::util::tree_size::TreeFacts>>,
     detail: DetailWorker,
     /// **The one clock in the app.** `update` reads no environment and asks no
     /// clock; every duration on screen is measured against the milliseconds
@@ -382,7 +382,7 @@ impl Runtime {
     fn report_sizes(&mut self, app: &App) {
         let wanted = app.library.visible_paths(app.rows_on_screen());
         let cells = self.scanner.cells_for(&wanted);
-        let news: Vec<(PathBuf, Option<u64>)> = wanted
+        let news: Vec<(PathBuf, Option<crate::util::tree_size::TreeFacts>)> = wanted
             .into_iter()
             .zip(cells)
             .filter_map(|(path, cell)| match cell {
@@ -394,7 +394,7 @@ impl Runtime {
             .collect();
         if !news.is_empty() {
             for (path, size) in &news {
-                self.reported.insert(path.clone(), *size);
+                self.reported.insert(path.clone(), size.clone());
             }
             let _ = self.tx.send(Msg::Sizes(news));
         }

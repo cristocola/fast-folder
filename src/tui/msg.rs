@@ -28,7 +28,7 @@ pub enum Msg {
     /// **every** message, not only this one (`Runtime::dispatch` says why).
     Tick,
     /// Folder sizes that landed since the last tick.
-    Sizes(Vec<(PathBuf, Option<u64>)>),
+    Sizes(Vec<(PathBuf, Option<crate::util::tree_size::TreeFacts>)>),
     /// The whole summary at once — a fixture's, or a test's.
     Summary(Box<Summary>),
     /// One part of the summary, as soon as it is read (`SummaryPart`).

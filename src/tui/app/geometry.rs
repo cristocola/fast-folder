@@ -164,7 +164,7 @@ impl App {
     /// The size cell for `path`, as the table draws it.
     pub fn size_cell(&self, path: &std::path::Path) -> SizeCell {
         match self.library.sizes.get(path) {
-            Some(size) => SizeCell::Known(*size),
+            Some(facts) => SizeCell::Known(facts.clone()),
             None => SizeCell::Pending,
         }
     }

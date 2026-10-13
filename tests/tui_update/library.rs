@@ -175,10 +175,13 @@ fn sizes_landing_leave_the_selection_alone() {
     press(&mut app, Key::ch('j'));
     let before = selected_name(&app);
     let path = app.library.row(0).unwrap().path.clone();
-    let effects = update(&mut app, Msg::Sizes(vec![(path.clone(), Some(4096))]));
+    let effects = update(
+        &mut app,
+        Msg::Sizes(vec![(path.clone(), Some(facts(4096)))]),
+    );
     assert!(effects.is_empty());
     assert_eq!(selected_name(&app), before);
-    assert_eq!(app.library.sizes.get(&path), Some(&Some(4096)));
+    assert_eq!(app.library.sizes.get(&path), Some(&Some(facts(4096))));
 }
 
 #[test]
@@ -473,7 +476,7 @@ fn a_patched_row_keeps_its_place_and_forgets_its_size() {
     let mut patched = app.library.selected().unwrap().clone();
     patched.tags.push("urgent".to_string());
     let path = patched.path.clone();
-    app.library.sizes.insert(path.clone(), Some(10));
+    app.library.sizes.insert(path.clone(), Some(facts(10)));
 
     let id = run_id(&press(&mut app, Key::ch('R')));
     let effects = update(

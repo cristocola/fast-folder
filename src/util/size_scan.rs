@@ -15,6 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
+use crate::util::tree_size::TreeFacts;
+
 /// How many trees are walked at once.
 ///
 /// Two. These
@@ -23,13 +25,24 @@ use std::thread::JoinHandle;
 /// make a spinning disk seek against itself.
 const WORKERS: usize = 2;
 
-/// What the app knows about one project's size at this instant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// What the app knows about one project's tree at this instant.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SizeCell {
     /// Not measured yet. The scanner may not even have started this one.
     Pending,
-    /// Measured: `Some(bytes)`, or `None` when the tree could not be read.
-    Known(Option<u64>),
+    /// Measured: the bytes and the newest file, or `None` when the tree
+    /// could not be read.
+    Known(Option<TreeFacts>),
+}
+
+impl SizeCell {
+    /// The bytes alone, as the table's size column draws them.
+    pub fn bytes(&self) -> Option<Option<u64>> {
+        match self {
+            SizeCell::Pending => None,
+            SizeCell::Known(facts) => Some(facts.as_ref().map(|f| f.bytes)),
+        }
+    }
 }
 
 struct State {
@@ -37,7 +50,7 @@ struct State {
     queue: VecDeque<PathBuf>,
     /// Being walked right now, so `request` does not queue them twice.
     in_flight: HashSet<PathBuf>,
-    done: HashMap<PathBuf, Option<u64>>,
+    done: HashMap<PathBuf, Option<TreeFacts>>,
     shutdown: bool,
 }
 
@@ -130,7 +143,7 @@ impl SizeScanner {
         paths
             .iter()
             .map(|path| match state.done.get(path) {
-                Some(size) => SizeCell::Known(*size),
+                Some(facts) => SizeCell::Known(facts.clone()),
                 None => SizeCell::Pending,
             })
             .collect()
@@ -199,7 +212,7 @@ fn worker(state: &Mutex<State>, wake: &Condvar, cancel: &AtomicBool) {
 
         // The slow part runs with the lock released: reads and cancellation have
         // to stay available for however long a network tree takes.
-        let size = crate::util::tree_size::directory_size_until(&path, cancel);
+        let size = crate::util::tree_size::directory_facts_until(&path, cancel);
 
         let mut guard = state.lock().unwrap_or_else(|err| err.into_inner());
         guard.in_flight.remove(&path);
@@ -225,7 +238,7 @@ mod tests {
         let wanted = [path.to_path_buf()];
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            let cell = scanner.cells_for(&wanted)[0];
+            let cell = scanner.cells_for(&wanted)[0].clone();
             if cell != SizeCell::Pending {
                 return cell;
             }
@@ -253,7 +266,7 @@ mod tests {
             "nothing is known before a request"
         );
         scanner.request(std::slice::from_ref(&dir));
-        assert_eq!(await_cell(&scanner, &dir), SizeCell::Known(Some(2048)));
+        assert_eq!(await_cell(&scanner, &dir).bytes(), Some(Some(2048)));
     }
 
     #[test]
@@ -296,7 +309,7 @@ mod tests {
         let scanner = SizeScanner::new();
 
         scanner.request(std::slice::from_ref(&dir));
-        assert_eq!(await_cell(&scanner, &dir), SizeCell::Known(Some(100)));
+        assert_eq!(await_cell(&scanner, &dir).bytes(), Some(Some(100)));
 
         fs::write(dir.join("nested/extra.bin"), vec![0_u8; 5]).unwrap();
         scanner.forget(&dir);
@@ -306,7 +319,7 @@ mod tests {
             "forgetting must clear the snapshot, not keep serving a stale one"
         );
         scanner.request(std::slice::from_ref(&dir));
-        assert_eq!(await_cell(&scanner, &dir), SizeCell::Known(Some(105)));
+        assert_eq!(await_cell(&scanner, &dir).bytes(), Some(Some(105)));
     }
 
     #[test]
@@ -316,7 +329,7 @@ mod tests {
         let scanner = SizeScanner::new();
 
         scanner.request(std::slice::from_ref(&missing));
-        assert_eq!(await_cell(&scanner, &missing), SizeCell::Known(None));
+        assert_eq!(await_cell(&scanner, &missing).bytes(), Some(None));
     }
 
     /// Quitting with a worker blocked on a mount that stopped answering waits

@@ -205,7 +205,7 @@ fn a_size_landing_never_moves_the_pane_cursor() {
     let path = app.library.selected().unwrap().path.clone();
     update(
         &mut app,
-        Msg::Sizes(vec![(path, Some(41 * 1024 * 1024 * 1024))]),
+        Msg::Sizes(vec![(path, Some(facts(41 * 1024 * 1024 * 1024)))]),
     );
     assert_eq!(app.pane_rows(), before, "the rows are the same rows");
     assert_eq!(app.pane_cursor, at, "and the cursor is where it was");

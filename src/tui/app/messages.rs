@@ -180,7 +180,10 @@ impl App {
         self.look_again_while_waiting()
     }
 
-    fn on_sizes(&mut self, cells: Vec<(PathBuf, Option<u64>)>) -> Vec<Effect> {
+    fn on_sizes(
+        &mut self,
+        cells: Vec<(PathBuf, Option<crate::util::tree_size::TreeFacts>)>,
+    ) -> Vec<Effect> {
         for (path, size) in cells {
             // **A number that changed, not a number that arrived.** The
             // table is measured from the rows, never from the sizes, so
@@ -191,9 +194,12 @@ impl App {
             // row fills at once on the first screenful and on every
             // scroll: `rescanning` is the one arrival that *is* a
             // change, a size a verb threw away coming back.
+            let bytes = size.as_ref().map(|facts| facts.bytes);
             let previous = self.library.sizes.insert(path.clone(), size);
             let rescanned = self.rescanning.remove(&path);
-            if rescanned || previous.is_some_and(|had| had != size) {
+            if rescanned
+                || previous.is_some_and(|had| had.as_ref().map(|facts| facts.bytes) != bytes)
+            {
                 self.pulses.start(path, self.elapsed_ms);
             }
         }

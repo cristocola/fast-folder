@@ -27,7 +27,7 @@ pub mod term_open;
 pub(crate) mod test_env;
 pub mod time;
 pub mod trace;
-pub(crate) mod tree_size;
+pub mod tree_size;
 pub mod tty;
 #[cfg(windows)]
 pub(crate) mod win;

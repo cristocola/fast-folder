@@ -255,7 +255,9 @@ pub struct LibraryState {
     /// so an empty list can say they are there and how to see them.
     pub beyond_view: usize,
     /// Landed size cells; a missing key is still pending.
-    pub sizes: HashMap<PathBuf, Option<u64>>,
+    /// What the size scan found for each row: the bytes and the newest file,
+    /// or `None` for a tree that could not be read.
+    pub sizes: HashMap<PathBuf, Option<crate::util::tree_size::TreeFacts>>,
     /// Metadata read on demand; `Some(None)` is a project whose file could not
     /// be parsed.
     pub meta: HashMap<PathBuf, Option<Metadata>>,
@@ -768,7 +770,11 @@ impl LibraryState {
                 .then_with(|| newest(pa, pb)),
             Order::Size => {
                 // Biggest first; unmeasured and unmeasurable rows last.
-                let size = |p: &Project| self.sizes.get(&p.path).copied().flatten();
+                let size = |p: &Project| {
+                    self.sizes
+                        .get(&p.path)
+                        .and_then(|facts| facts.as_ref().map(|f| f.bytes))
+                };
                 size(pb).cmp(&size(pa)).then_with(|| newest(pa, pb))
             }
             Order::Relevance => {

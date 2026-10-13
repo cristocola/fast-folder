@@ -120,6 +120,41 @@ impl Holders {
     }
 }
 
+/// Which programs are working in each of `roots` — their working folder
+/// inside it — by name, each once, for every root at once: one pass over
+/// the processes answers for a whole desk. Linux reads `/proc`; elsewhere
+/// the answer is empty, and a surface shows nothing rather than a guess.
+/// fastf's own processes are left out, as everywhere here.
+pub fn working_in_all(roots: &[PathBuf]) -> std::collections::HashMap<PathBuf, Vec<String>> {
+    let canonical: Vec<(PathBuf, PathBuf)> = roots
+        .iter()
+        .map(|root| {
+            (
+                root.clone(),
+                crate::util::paths::canonical(root).unwrap_or_else(|_| root.clone()),
+            )
+        })
+        .collect();
+    let mut answer: std::collections::HashMap<PathBuf, Vec<String>> = roots
+        .iter()
+        .map(|root| (root.clone(), Vec::new()))
+        .collect();
+    for (program, cwd) in imp::working_folders() {
+        for (root, real) in &canonical {
+            if cwd.starts_with(real)
+                && let Some(names) = answer.get_mut(root)
+                && !names.contains(&program)
+            {
+                names.push(program.clone());
+            }
+        }
+    }
+    for names in answer.values_mut() {
+        names.sort();
+    }
+    answer
+}
+
 /// Who holds something in `root`, as far as this machine can tell. On
 /// Windows this walks the folder for what to ask about; a move that has
 /// scanned it already asks [`in_manifest`].
@@ -145,6 +180,36 @@ mod imp {
     use super::{Holder, Holders};
     use crate::core::transactions::MoveManifest;
     use std::path::{Path, PathBuf};
+
+    /// Every process of this user but fastf's own, with its working folder.
+    pub(super) fn working_folders() -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        let Ok(processes) = std::fs::read_dir("/proc") else {
+            return out;
+        };
+        let me = std::process::id();
+        for process in processes.flatten() {
+            let Some(pid) = process
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            if pid == me {
+                continue;
+            }
+            let base = process.path();
+            let program = program_name(&base);
+            if program.starts_with("fastf") {
+                continue;
+            }
+            if let Ok(cwd) = std::fs::read_link(base.join("cwd")) {
+                out.push((program, cwd));
+            }
+        }
+        out
+    }
 
     pub(super) fn in_tree(root: &Path, _entries: Option<&MoveManifest>) -> Holders {
         let mut holders = Holders::default();
@@ -242,10 +307,14 @@ mod imp {
 mod imp {
     use super::Holders;
     use crate::core::transactions::MoveManifest;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     pub(super) fn in_tree(_root: &Path, _entries: Option<&MoveManifest>) -> Holders {
         Holders::default()
+    }
+
+    pub(super) fn working_folders() -> Vec<(String, PathBuf)> {
+        Vec::new()
     }
 }
 
@@ -262,6 +331,13 @@ mod imp {
     /// Held files named, at most: a refusal names the first, and bisecting
     /// a batch costs a session per step.
     const NAMED: usize = 8;
+
+    /// Not asked on Windows: the Restart Manager answers for files, not for
+    /// folders a console works in, and a probe per project is a walk per
+    /// project. The desk shows nothing here rather than a guess.
+    pub(super) fn working_folders() -> Vec<(String, PathBuf)> {
+        Vec::new()
+    }
 
     pub(super) fn in_tree(root: &Path, entries: Option<&MoveManifest>) -> Holders {
         let (files, folders) = match entries {

@@ -700,6 +700,78 @@ enum Commands {
         off: bool,
     },
 
+    /// The work across every project: one line each, grouped by whose court the ball is in
+    #[command(
+        after_help = "Each project is one line — its first open todo, who holds it, how long the\n\
+        project has been quiet, `active` when a program is working in it — under\n\
+        the court the ball is in: yours (the hat worn), an agent's, somebody you\n\
+        wait on, nobody's, or nothing planned. Never every todo.\n\n\
+        Examples:\n  \
+            fastf desk                              # every court, yours first\n  \
+            fastf desk --mine                       # the hat's court alone\n  \
+            fastf desk --owner claude               # what @claude holds\n  \
+            fastf desk --unowned                    # the pile to assign from\n  \
+            fastf desk --quiet 7                    # nothing written for a week\n  \
+            fastf desk --random                     # pick me one\n  \
+            fastf desk --as sales --json"
+    )]
+    Desk {
+        /// Wear this hat for the run, over the configured one
+        #[arg(long = "as", value_name = "NAME")]
+        as_hat: Option<String>,
+        /// The hat's court alone
+        #[arg(long)]
+        mine: bool,
+        /// One owner's court alone
+        #[arg(long, value_name = "NAME")]
+        owner: Option<String>,
+        /// The unowned pile alone
+        #[arg(long)]
+        unowned: bool,
+        /// The projects with nothing planned alone
+        #[arg(long = "nothing-planned")]
+        nothing_planned: bool,
+        /// Only projects nothing has written in for this many days
+        #[arg(long, value_name = "DAYS")]
+        quiet: Option<u64>,
+        /// One line, picked at random from what the cuts leave
+        #[arg(long)]
+        random: bool,
+        /// Only projects made from this template
+        #[arg(long, value_name = "SLUG")]
+        template: Option<String>,
+        /// Only projects that have this tag
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only projects in this base, by its label or its full path
+        #[arg(long)]
+        base: Option<String>,
+        /// The order within a court: quiet (stalest first, the default), recent, name or id
+        #[arg(long, value_name = "ORDER")]
+        order: Option<String>,
+        /// The plain list, for a pipe
+        #[arg(long)]
+        plain: bool,
+        /// Print the desk as JSON: an array, one object per project
+        #[arg(long, conflicts_with = "plain")]
+        json: bool,
+    },
+
+    /// What is going on in a project, without opening it
+    #[command(
+        after_help = "The glance: the ball and whose court it is in, how the todos stand, who\n\
+        is working in the folder right now, what last moved under it, the\n\
+        repository's head when it is one, the last note, and how long the\n\
+        project has been quiet. `fastf show` is everything; this is the glance.\n\n\
+        Examples:\n  \
+            fastf peek ID0047\n  \
+            fastf peek lullaby"
+    )]
+    Peek {
+        /// Project ID (e.g. ID0047), ID number, ID prefix, or name substring
+        query: String,
+    },
+
     /// Every dated note across every project, newest first
     #[command(
         after_help = "What happened lately, wherever it happened: the notes of every\n\
@@ -1391,6 +1463,36 @@ fn run() -> Result<()> {
         Some(Commands::Todo { action }) => run_todo(action),
         Some(Commands::Hat { name, off }) => cli::hat::run(cli::hat::HatArgs { name, off }),
 
+        Some(Commands::Desk {
+            as_hat,
+            mine,
+            owner,
+            unowned,
+            nothing_planned,
+            quiet,
+            random,
+            template,
+            tag,
+            base,
+            order,
+            plain,
+            json,
+        }) => cli::desk::run(cli::desk::DeskArgs {
+            as_hat,
+            mine,
+            owner,
+            unowned,
+            nothing_planned,
+            quiet,
+            random,
+            template,
+            tag,
+            base,
+            order,
+            plain,
+            json,
+        }),
+        Some(Commands::Peek { query }) => cli::peek::run(&query),
         Some(Commands::Journal {
             limit,
             since,

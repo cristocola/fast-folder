@@ -28,6 +28,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf journal` | Every dated note across every project, newest first |
+| `fastf desk` | The work across every project, one line each, by whose court the ball is in |
+| `fastf peek <query>` | What is going on in a project, without opening it |
 | `fastf todo list/add/done/edit/remove/owner <id>` | A project's task list |
 | `fastf hat [name]` | The hat worn — the owner whose court is yours — or wear another |
 | `fastf show <query>` | Everything fastf knows about one project |
@@ -490,6 +492,110 @@ no date to stand on and is left out, as an undated note is.
 `--json` prints a bare array, one object per entry: `id`, `name`, `path`,
 `timestamp`, `text` and `kind` — `note`, `done` or `added`; without `--todos`
 every row is a `note`.
+
+## The desk
+
+```bash
+fastf desk                        # every project, one line each, by court
+fastf desk --mine                 # the hat's court alone
+fastf desk --as sales             # wear a hat for this run
+fastf desk --owner claude         # what @claude holds
+fastf desk --unowned              # the pile to assign from
+fastf desk --nothing-planned      # the projects with no open todo
+fastf desk --quiet 7              # nothing written for a week
+fastf desk --random               # pick me one
+fastf desk --order name           # quiet (the default), recent, name or id
+fastf desk --template music-video --tag client/Acme --base projects
+fastf desk --json
+```
+
+The overseer's question is not "what are all my todos" but **what is waiting
+on me, what is moving without me, and what has gone quiet**. The desk answers
+it with one line per project — never every todo — grouped by whose court the
+project's **ball** is in. The ball is the project's first open todo in file
+order; the court is its owner: your own hat, an agent you handed it to,
+somebody you are waiting on. A ball nobody was named for is **unowned** — the
+one on top's, until handed off — and a project with no open todo at all has
+**nothing planned**: add one, or close it.
+
+```
+  your court · 2
+    ID0247  2026-09-01_Client_Acme_ID0247   Post · send the invoice           4 d
+    ID0231  2026-08-14_Spring_Campaign      sign off the treatment            1 d
+  unowned · 1
+    ID0212  2026-05-02_Tax_2026              gather the receipts              31 d
+  with @claude · 2
+    ID0248  2026-09-01_Lullaby_Remix         Main Edit · cut the first minute  2 h  active: claude
+    ID0240  2026-08-20_Api_Rewrite           migrate the auth tables           3 d
+  nothing planned · 4
+```
+
+The courts come in the order the one on top reads them: yours first when a hat
+is worn (`fastf hat`, or `--as` for one run), then `unowned`, then the other
+owners by how many balls each holds, then what has nothing planned; with no hat
+worn the unowned pile leads, so a library that never named an owner lands whole
+on the desk. Within a court the **stalest project comes first** — the longest
+since anything wrote in it, which is what makes a decision; `--order recent`,
+`name` or `id` reorder it. The column after the ball is how long the project
+has been quiet (`touched`: the newer of its `PROJECT_INFO.md` and its folder),
+and **`active: claude`** says a program with that name is working in the folder
+right now — on Linux, read from the process table, a fact and not a guess; on
+other systems the column is absent. The desk never asks for a due date and
+never computes one: a commitment with a date belongs to your calendar; the age
+of a ball in a court is the thing a calendar cannot tell you.
+
+The cuts each show one court, or less: `--mine`, `--owner`, `--unowned` and
+`--nothing-planned` (one of them at a time), `--quiet N` for the projects
+nothing has written in for N days, and `--random`, which picks one line from
+what the cuts leave — the one thing that beats a stalled eye. `--template`,
+`--tag` and `--base` choose the projects as `recent`'s do. A hidden project is
+a project in a base you took out of `bases`; there is no state to set.
+
+What it reads: every project's `PROJECT_INFO.md`, several at once on a network
+base, so a library of a hundred is a hundred reads and no more. A file fastf
+cannot read is a project with nothing planned, named once by the warning every
+walk of the library gives. `--json` prints one object per project: `id`,
+`name`, `path`, `base_label`, `court` (`owner`, `unowned`, `nothing-planned`),
+`owner`, `ball` (`number` — the one `fastf todo done` takes — `text`, `phase`,
+`owner`, `added`) or `null`, `open`, `done`, `quiet_since`, `quiet_for` and
+`active`.
+
+### Peek
+
+```bash
+fastf peek ID0047
+fastf peek lullaby
+```
+
+What a hand reaches for when it opens a project's folder to see what is going
+on, read from the folder itself:
+
+```
+  → ID0248 2026-09-01_Lullaby_Remix_ID0248
+    /mnt/projects/2026-09-01_Lullaby_Remix_ID0248
+    A Fiverr music video: treatment approved, shoot booked
+
+  ball        Main Edit · cut the first minute  (with @claude)  added 2026-10-12  todo 3
+  todos       3 open · 1 done · with @claude 2 · unowned 1
+  working     claude (pid 4242), bash (pid 11201)
+  last moved  02_Edit/cut_v03.prproj  2026-10-13T09:41:05Z
+  head        main @ a1b2c3d  Rough cut of the first minute  2026-10-13T09:40:12Z
+  last note   2026-10-12  treatment approved, shoot on the 28th
+  quiet for   2 h  since 2026-10-13T09:41:05Z
+```
+
+`ball` is the first open todo and whose court it is in, with the number
+`fastf todo done` takes; `working` is who has their working folder in the
+project right now (Linux; `nobody` otherwise); `last moved` is the newest
+file under the folder, found by one walk of it — the honest "quiet for", since
+`touched` sees only the top level and the walk sees the tree; a folder whose
+name starts with a dot (`.git`, `.venv`) is bookkeeping and never what last
+moved, so a commit does not name `.git/index` over the file that was worked
+on; `head` is the
+repository's branch and last commit, read from `.git/HEAD` and the reflog as
+files — no `git` is started — and absent when the folder is not a repository;
+`last note` is the newest dated note. `fastf show` is everything fastf knows
+about a project; `peek` is the glance.
 
 ## Registering existing folders
 

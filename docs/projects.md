@@ -123,6 +123,19 @@ happened. `fastf show --json` also carries `last_note`, the timestamp of the
 newest dated note: when somebody last *said* something happened, as distinct
 from when anything wrote the file.
 
+### What the desk reads
+
+`fastf desk` and the app's desk tab put every project on one line by whose
+court its **ball** — the first open todo in file order — is in, with how long
+the project has been quiet. All of it is read: the owner from the todo's own
+`@owner`, the age from `touched` and from the newest file a walk of the folder
+finds (never one under a dot-folder such as `.git`, which is bookkeeping),
+"active" from the operating system's own process table (Linux). Nothing
+is stored for it, nothing is inferred, and a project with no `## Todo` at all
+is simply one with **nothing planned**. There is no lifecycle state to set:
+what the desk calls a project is what its file and its folder say right now.
+See [docs/cli.md](cli.md#the-desk).
+
 ### A project as memory
 
 A project's file is where work leaves its trace, and most of that trace dies

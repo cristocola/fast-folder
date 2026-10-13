@@ -4,6 +4,7 @@ pub mod config;
 pub mod copy;
 pub mod copy_to;
 pub mod desc;
+pub mod desk;
 pub mod extra;
 pub mod folder_verbs;
 
@@ -20,6 +21,7 @@ pub mod new;
 pub mod note;
 pub mod path_cmd;
 pub mod paths_cmd;
+pub mod peek;
 pub(crate) mod progress;
 pub mod recent;
 pub mod reconcile;

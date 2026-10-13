@@ -36,7 +36,13 @@ fn dashboard_120x40() {
     let mut app = fixture(12, 120, 40);
     let _ = update(
         &mut app,
-        Msg::Sizes(vec![(sample_projects(1)[0].path.clone(), Some(3_355_443))]),
+        Msg::Sizes(vec![(
+            sample_projects(1)[0].path.clone(),
+            Some(fastf::util::tree_size::TreeFacts {
+                bytes: 3_355_443,
+                newest: None,
+            }),
+        )]),
     );
     snap("dashboard_120x40", render_to_string(&app, 120, 40));
 }

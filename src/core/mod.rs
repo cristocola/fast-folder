@@ -4,6 +4,8 @@ pub mod body;
 pub mod config;
 pub mod copy_engine;
 pub mod counter;
+pub mod desk;
+pub mod glance;
 pub mod holders;
 pub mod jobs;
 pub mod library;

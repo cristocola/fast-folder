@@ -92,7 +92,7 @@ pub struct Todo {
     /// nearest one, so a task before the first label has none. It is read,
     /// never written by a toggle: a phase is a line of the user's own file.
     pub phase: Option<String>,
-    /// Whose court it is in: the `@owner` at the end of its line. `None`
+    /// Who it is assigned to: the `@owner` at the end of its line. `None`
     /// for a todo nobody was named for.
     pub owner: Option<String>,
     /// When it was added, as the `added:` token says: the stamp notes

@@ -10,7 +10,7 @@ pub enum Context {
     /// The detail pane has focus.
     Detail,
     /// The desk tab's list has focus: every project as one line under the
-    /// court its ball is in. Its pane is the library's (`Detail`).
+    /// its next todo is assigned to. Its pane is the library's (`Detail`).
     Desk,
     /// The templates tab: every template, with the selected one's details
     /// beside it and the verbs on it.

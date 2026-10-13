@@ -802,7 +802,7 @@ fn plus_on_add_a_phase_adds_a_phase() {
 }
 
 /// `O` on a todo is its owner: a picker over the owners the list already
-/// names, the hat worn, nobody and a name to type; the pick is sent as the
+/// names, the hat, nobody and a name to type; the pick is sent as the
 /// edit of that todo, so the answer lands on its row; and `O` is hidden off
 /// a todo row.
 #[test]
@@ -865,7 +865,7 @@ fn o_on_a_todo_picks_its_owner_and_sends_it_as_the_todos_edit() {
         matches!(app.pane_edit, Some(PaneEdit::Line { pending: true, .. })),
         "the picker was the edit, and it waits for the answer"
     );
-    done_ok(&mut app, "In @claude's court.");
+    done_ok(&mut app, "Owner: @claude.");
     assert!(app.pane_edit.is_none(), "the answer closed it");
 
     // "nobody" takes the owner off; the typed name goes through the prompt,

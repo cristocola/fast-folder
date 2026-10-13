@@ -75,8 +75,8 @@ Look at every screen you build with the screenshot tool
 
 `tui::run(Entry)` is the door: `fastf` (`Entry::Menu`), `fastf recent`
 (`Entry::Recent`, its flags as a `Preset` chip), `fastf search`
-(`Entry::Search`) and `fastf desk` (`Entry::Desk`, its cuts as the desk's
-court, order and hat). `require_tty` runs **before** the screen is taken, so a
+(`Entry::Search`) and `fastf desk` (`Entry::Desk`, its flags as the desk's
+group, order and hat). `require_tty` runs **before** the screen is taken, so a
 terminal nobody is holding is never switched to the alternate screen.
 
 ## The shape: model, message, effect, view
@@ -187,7 +187,7 @@ worker's `eprintln!` would land mid-frame on the alternate screen.
 **`session.rs`** keeps eleven things in `state.toml` beside `config.toml`: the
 sort, whether the pane is open, the selected row's id, `guide_seen`,
 `explain_open`, the bases' view — `bases_view` and `inactive_bases` — and the
-desk's: the `tab` the app was quit on when it was the desk, `desk_court`,
+desk's: the `tab` the app was quit on when it was the desk, `desk_group`,
 `desk_order` and `desk_seen_at`, stamped at capture by a run that had the
 desk on screen (`App.desk_visited`), since `update` reads no clock. It is
 read before the first frame and written after the screen is given back, and the
@@ -719,15 +719,16 @@ refreshes the tab with its selection kept.
 
 ## The desk
 
-**The desk is the library read by whose court each project's ball is in**
+**The desk is the library grouped by who each project's next open todo is
+assigned to**
 (`app/desk.rs`, `app/desk_tab.rs`, `view/desk.rs`), never a second library: its
 cards are `library.row(i)` for the rows in view — the bases' view, the query,
 the template and base filters all apply — each with the record the pane's
 cache holds for it (`App.details`), grouped by `core::desk::group` under the
 hat `App::hat()` names (`hat_override` for a run, else `Prefs.hat`). A row
 with no record yet is a dim card under a `reading` heading (`DeskRow::Card {
-read: false }`); a court shown alone lists none of them, since an unread
-project is in no court. **The desk's cursor drives the library's selection**
+read: false }`); a group shown alone lists none of them, since an unread
+project is in no group. **The desk's cursor drives the library's selection**
 (`desk_moved` → `library.select_path`), so the pane, the action menu and every
 verb read the desk's row with no second notion of "selected"; `verb_targets`
 answers the cursor's row alone there, because the marks are the library's and
@@ -735,7 +736,7 @@ the desk shows none. `Context::Desk` is the desk's list; its pane is
 `Context::Detail`, the library's pane, with `pane_edit` and `pane_add` taking
 the desk as the library (`Screen::lists_projects`). `table_needs` answers
 `desk_needs` there — the id and the name as the table measures them over the
-library in view, the ball's minimum, the age and the active cell — so one
+library in view, the next todo's minimum, the age and the active cell — so one
 `layout::regions` places the desk's pane as it places the table's.
 
 **Every record is read once, on a worker per base, and checked afterwards.**
@@ -754,16 +755,16 @@ size plus `DETAIL_CACHE` (`prune_details`), rows a reload took away first. The
 desk's `quiet_since` is the newer of the record's `touched` and the size
 walk's newest file, so `Msg::Sizes` rebuilds the desk too.
 
-**The desk's own keys** are `f` (`DeskCourt`: the cursor's court alone, which
+**The desk's own keys** are `f` (`DeskGroupOnly`: the cursor's group alone, which
 `F` and the Esc ladder take off with the library's filters), `s`/`S`
 (`DeskOrder`/`DeskOrderPick`, `Then::DeskOrder`) and `z` (`DeskRandom`, seeded
 by `elapsed_ms` and a press count, so a test can set it). The rows are
 `DeskRow::{Heading, Card}`; the cursor walks cards only (`DeskState::step`),
-is kept by path across a rebuild, and `clamp_viewport` keeps a court's heading
+is kept by path across a rebuild, and `clamp_viewport` keeps a group's heading
 with its first card. The bar reports `placed/in_view`, `reading n`, the order
-and the court (`view::desk::report`); the view draws `active` from the
-holders and `⚠` for a ball in an owner's court quiet for `STUCK_AFTER_DAYS`
-with nobody working — facts, never a status. The ages are read from
+and the group (`view::desk::report`); the view draws `active` from the
+holders and `⚠` for a todo assigned to an owner in a project quiet for
+`STUCK_AFTER_DAYS` with nobody working — facts, never a status. The ages are read from
 `App.now`, a clock the runtime sets and a fixture pins, beside `App.clock`.
 
 **`L`'s journal page** (`ActivityPage::Journal`, `App::journal_rows`) is built
@@ -1022,7 +1023,7 @@ bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`) through
 is being changed stays in view.
 
 **`O` on a todo is its owner** (`PaneOwner`, `[Detail]` only, hidden off a todo
-row): a `Pick` over the owners the project's own list names, the hat worn, nobody
+row): a `Pick` over the owners the project's own list names, the hat, nobody
 (`pane_edit::NOBODY`) and a name to type (`pane_edit::NEW_OWNER`, a `TextPrompt`
 on `TextThen::TodoOwner`), each sent as `Action::SetTodoOwner` the way a
 `select` variable's pick is: the picker was the edit, so an `EditTarget::Todo`
@@ -1030,7 +1031,7 @@ is set for the row the answer pulses. `@` would be the key, but it is AltGr on a
 German or a French layout. A todo row carries `owner` and `when` — the day it
 was added, or ticked once it is — drawn dim at the row's right by
 `pane::trailer_text`, and `todo_rows` wraps the first line short of them. The
-hat worn rides in `Prefs.hat` (the summary's `Local` part, so it lands without a
+hat rides in `Prefs.hat` (the summary's `Local` part, so it lands without a
 base) and the header shows it after the tabs.
 
 **The agent verbs are `x` and `X`** (`Agent`, `AgentHere`, on `ACTIONS`): `x`

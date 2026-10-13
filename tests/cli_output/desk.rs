@@ -1,10 +1,10 @@
-//! `fastf desk` and `fastf peek`: the work across every project by whose
-//! court the ball is in, and one project's glance.
+//! `fastf desk` and `fastf peek`: every project grouped by who its next open
+//! todo is assigned to, and one project's summary.
 
 use super::*;
 
-/// Four projects, one ball each in a different court, so every heading
-/// the desk can wear is on it.
+/// Four projects, each with a different assignee for its next todo, so
+/// every heading the desk can show is on it.
 fn desk_library() -> Sandbox {
     let sb = Sandbox::new();
     let todos = [
@@ -39,16 +39,16 @@ fn headings(out: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every court in the desk's order — unowned first with no hat worn, then
-/// the owners by how many balls each holds, then nothing planned — and
-/// yours first once a hat is worn; each project one line under its court.
+/// Every group in the desk's order: no owner first when no hat is set,
+/// then the owners by how many projects each has, then no open todos; and
+/// yours first once a hat is set. Each project is one line under its group.
 #[test]
-fn the_desk_groups_every_project_by_its_court() {
+fn the_desk_groups_every_project_by_its_assignee() {
     let sb = desk_library();
     let out = sb.ok(&["desk", "--plain"]);
     assert_eq!(
         headings(&out),
-        ["unowned", "with @claude", "with @sales", "nothing planned"],
+        ["no owner", "@claude", "@sales", "no open todos"],
         "{out}"
     );
     let rows: Vec<&str> = out.lines().filter(|l| l.starts_with("    ")).collect();
@@ -67,60 +67,60 @@ fn the_desk_groups_every_project_by_its_court() {
     );
     assert!(
         rows[3].contains("ID0003") && !rows[3].contains("everything"),
-        "nothing planned has no ball: {out}"
+        "a project with no open todo shows none: {out}"
     );
     assert!(
         rows[0].contains(" min") || rows[0].contains(" h"),
         "how long quiet: {out}"
     );
 
-    let worn = sb.ok(&["desk", "--as", "@sales", "--plain"]);
+    let as_sales = sb.ok(&["desk", "--as", "@sales", "--plain"]);
     assert_eq!(
-        headings(&worn),
-        ["your court", "unowned", "with @claude", "nothing planned"],
-        "{worn}"
+        headings(&as_sales),
+        ["yours", "no owner", "@claude", "no open todos"],
+        "{as_sales}"
     );
     sb.ok(&["hat", "claude"]);
-    let worn = sb.ok(&["desk", "--plain"]);
+    let configured = sb.ok(&["desk", "--plain"]);
     assert_eq!(
-        headings(&worn)[0],
-        "your court",
-        "the configured hat: {worn}"
+        headings(&configured)[0],
+        "yours",
+        "the configured hat: {configured}"
     );
 }
 
-/// The cuts: one court at a time, the quiet ones, a random pick, and the
-/// refusals that name their rule.
+/// The flags: one group at a time, the quiet projects, a random pick, and
+/// the refusals that name their rule.
 #[test]
-fn the_desk_cuts_to_one_court_and_picks_one() {
+fn the_desk_narrows_to_one_group_and_picks_one() {
     let sb = desk_library();
     let claude = sb.ok(&["desk", "--owner", "claude", "--plain"]);
-    assert_eq!(headings(&claude), ["with @claude"], "{claude}");
+    assert_eq!(headings(&claude), ["@claude"], "{claude}");
     assert!(
         claude.contains("ID0001") && !claude.contains("ID0002"),
         "{claude}"
     );
-    let unowned = sb.ok(&["desk", "--unowned", "--plain"]);
-    assert_eq!(headings(&unowned), ["unowned"], "{unowned}");
-    let planned = sb.ok(&["desk", "--nothing-planned", "--plain"]);
+    let no_owner = sb.ok(&["desk", "--no-owner", "--plain"]);
+    assert_eq!(headings(&no_owner), ["no owner"], "{no_owner}");
+    let planned = sb.ok(&["desk", "--no-open-todos", "--plain"]);
     assert!(
         planned.contains("ID0003") && !planned.contains("ID0001"),
         "{planned}"
     );
     let mine = sb.ok(&["desk", "--as", "sales", "--mine", "--plain"]);
-    assert_eq!(headings(&mine), ["your court"], "{mine}");
+    assert_eq!(headings(&mine), ["yours"], "{mine}");
     assert!(mine.contains("ID0004"), "{mine}");
 
     let err = sb.fails(&["desk", "--mine"]);
     assert!(err.contains("needs a hat"), "{err}");
-    let err = sb.fails(&["desk", "--owner", "a", "--unowned"]);
+    let err = sb.fails(&["desk", "--owner", "a", "--no-owner"]);
     assert!(err.contains("pass one"), "{err}");
     let err = sb.fails(&["desk", "--order", "bogus"]);
     assert!(err.contains("quiet, recent, name or id"), "{err}");
 
     // Nothing has been quiet for a decade; the random pick is one line.
     let quiet = sb.ok(&["desk", "--quiet", "3650", "--plain"]);
-    assert!(quiet.contains("Nothing on the desk matches"), "{quiet}");
+    assert!(quiet.contains("No project matches"), "{quiet}");
     let one = sb.ok(&["desk", "--random", "--owner", "claude", "--plain"]);
     let rows: Vec<&str> = one.lines().filter(|l| l.starts_with("    ")).collect();
     assert_eq!(rows.len(), 1, "{one}");
@@ -132,25 +132,25 @@ fn the_desk_cuts_to_one_court_and_picks_one() {
     let rows = rows.as_array().unwrap();
     assert_eq!(rows.len(), 4);
     let alpha = rows.iter().find(|r| r["id"] == "ID0001").unwrap();
-    assert_eq!(alpha["court"], "owner");
+    assert_eq!(alpha["group"], "owner");
     assert_eq!(alpha["owner"], "claude");
-    assert_eq!(alpha["ball"]["number"], 2);
-    assert_eq!(alpha["ball"]["text"], "cut the first minute");
+    assert_eq!(alpha["next_todo"]["number"], 2);
+    assert_eq!(alpha["next_todo"]["text"], "cut the first minute");
     assert_eq!(alpha["open"], 1);
     assert_eq!(alpha["done"], 1);
     assert!(alpha["quiet_since"].is_string() && alpha["quiet_for"].is_string());
     let gamma = rows.iter().find(|r| r["id"] == "ID0003").unwrap();
-    assert_eq!(gamma["court"], "nothing-planned");
-    assert!(gamma["ball"].is_null());
+    assert_eq!(gamma["group"], "no-open-todos");
+    assert!(gamma["next_todo"].is_null());
     let delta = rows.iter().find(|r| r["id"] == "ID0004").unwrap();
-    assert_eq!(delta["ball"]["phase"], "Launch");
+    assert_eq!(delta["next_todo"]["phase"], "Launch");
 }
 
-/// `peek` is the glance at one project: the ball and its court, how the
-/// todos stand, who is in the folder, what last moved, the repository's
-/// head when it is one, the last note, how long quiet.
+/// `peek` prints one project's summary: the next todo and its owner, the
+/// todo counts, which programs work in the folder, the newest file, the
+/// repository's head when it is one, the last note, how long quiet.
 #[test]
-fn peek_is_the_glance_at_one_project() {
+fn peek_prints_one_projects_summary() {
     let sb = desk_library();
     let dir = sb.base.join("Alpha");
     let git = dir.join(".git");
@@ -187,15 +187,16 @@ fn peek_is_the_glance_at_one_project() {
             .to_string()
     };
     assert!(
-        field("ball").contains("cut the first minute") && field("ball").contains("with @claude"),
+        field("next todo").contains("cut the first minute")
+            && field("next todo").contains("@claude"),
         "{out}"
     );
     assert!(
-        field("ball").contains("todo 2"),
+        field("next todo").contains("todo 2"),
         "the number `todo done` takes: {out}"
     );
     assert!(
-        field("todos").contains("1 open · 1 done") && field("todos").contains("with @claude 1"),
+        field("todos").contains("1 open · 1 done") && field("todos").contains("@claude 1"),
         "{out}"
     );
     assert!(
@@ -213,11 +214,11 @@ fn peek_is_the_glance_at_one_project() {
     assert!(field("last note").contains("treatment approved"), "{out}");
     assert!(field("quiet for").contains("since 20"), "{out}");
 
-    // No repository, no head row; nothing planned says so.
+    // No repository, no head row; no open todo says so.
     let gamma = sb.ok(&["peek", "ID0003"]);
     assert!(
         !gamma.lines().any(|l| l.trim_start().starts_with("head")),
         "{gamma}"
     );
-    assert!(gamma.contains("nothing planned"), "{gamma}");
+    assert!(gamma.contains("no open todos"), "{gamma}");
 }

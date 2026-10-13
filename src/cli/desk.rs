@@ -1,33 +1,32 @@
-//! `fastf desk` — the work across every project, one line each, grouped by
-//! whose court the ball is in.
+//! `fastf desk`: every project as one line, grouped by who its next open
+//! todo is assigned to.
 //!
-//! The overseer's question is not "what are all the todos" but "what is
-//! waiting on me, what is moving without me, and what has gone quiet". So
-//! each project is one line — its first open todo, who holds it, how long
-//! the project has been quiet, whether a program is working in it — under
-//! the court the ball is in: yours, an agent's, somebody you are waiting
-//! on, nobody's, or nothing planned at all. The cuts narrow it: one court,
-//! the quiet ones, a random pick.
+//! Each line shows the project's first open todo, its phase, how long the
+//! project has been quiet, and whether a program is working in it. The
+//! groups are: yours (the hat's owner name), each other owner, projects
+//! whose next todo has no owner, and projects with no open todo. The flags
+//! narrow the list to one group, to the quiet projects, or to one random
+//! line.
 //!
 //! ```bash
-//! fastf desk                        # every court, the hat's own first
-//! fastf desk --mine                 # the hat's court alone
-//! fastf desk --owner claude         # one court
-//! fastf desk --unowned              # the pile to assign from
-//! fastf desk --quiet 7              # nothing written for a week
-//! fastf desk --random               # pick me one
+//! fastf desk                        # every group, yours first
+//! fastf desk --mine                 # only the todos assigned to the hat
+//! fastf desk --owner claude         # only the todos assigned to @claude
+//! fastf desk --no-owner             # only the projects whose next todo has no owner
+//! fastf desk --quiet 7              # only the projects nothing has written in for a week
+//! fastf desk --random               # one project, picked at random
 //! fastf desk --json
 //! ```
 //!
 //! On a terminal, `fastf desk` opens the app on its desk tab, carrying the
-//! court, the order, the hat and the random pick; `--plain` and `--json`
-//! keep the list in the terminal, as do the cuts the tab has no key for
+//! group, the order, the hat and the random pick. `--plain` and `--json`
+//! print the list instead, as do the flags the tab has no key for
 //! (`--quiet`, `--template`, `--tag`, `--base`) and a pipe.
 //!
 //! What it reads: every project's `PROJECT_INFO.md` (the todos), the file's
-//! and the folder's times (`touched`), and on Linux `/proc` for who is
-//! working where. `core::desk` is the grouping, pure; this is the reading
-//! and the printing.
+//! and the folder's times (`touched`), and on Linux `/proc` for which
+//! programs are working in which folder. `core::desk` does the grouping;
+//! this module reads and prints.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,23 +37,23 @@ use colored::Colorize;
 use serde::Serialize;
 
 use crate::core::config::Config;
-use crate::core::desk::{self, Card, Court, Group, Order};
+use crate::core::desk::{self, Assignee, Card, Group, Order};
 use crate::core::library::{self, Project};
 
 pub struct DeskArgs {
-    /// Wear this hat for the run, over the configured one.
+    /// Use this owner name as the hat for this run, instead of the configured one.
     pub as_hat: Option<String>,
-    /// The hat's court alone.
+    /// Only the projects whose next todo is assigned to the hat.
     pub mine: bool,
-    /// One owner's court alone.
+    /// Only the projects whose next todo is assigned to this owner.
     pub owner: Option<String>,
-    /// The unowned pile alone.
-    pub unowned: bool,
-    /// The projects with nothing planned alone.
-    pub nothing_planned: bool,
+    /// Only the projects whose next todo has no owner.
+    pub no_owner: bool,
+    /// Only the projects with no open todo.
+    pub no_open_todos: bool,
     /// Only projects nothing has written in for this many days.
     pub quiet: Option<u64>,
-    /// One line, picked at random from what the cuts leave.
+    /// One line, picked at random from what the other flags leave.
     pub random: bool,
     pub template: Option<String>,
     pub tag: Option<String>,
@@ -72,9 +71,9 @@ struct CardJson {
     name: String,
     path: String,
     base_label: String,
-    court: &'static str,
+    group: &'static str,
     owner: Option<String>,
-    ball: Option<BallJson>,
+    next_todo: Option<NextTodoJson>,
     open: usize,
     done: usize,
     quiet_since: Option<String>,
@@ -83,7 +82,7 @@ struct CardJson {
 }
 
 #[derive(Serialize)]
-struct BallJson {
+struct NextTodoJson {
     /// The number `fastf todo done` takes, counted from one.
     number: usize,
     text: String,
@@ -115,7 +114,7 @@ pub fn run(args: DeskArgs) -> Result<()> {
         None => cfg.resolve_hat(),
     };
     if args.mine && hat.is_none() {
-        anyhow::bail!("--mine needs a hat — `fastf hat <name>` wears one, or pass --as <name>");
+        anyhow::bail!("--mine needs a hat: `fastf hat <name>` sets one, or pass --as <name>");
     }
     let owner_cut = args
         .owner
@@ -126,22 +125,22 @@ pub fn run(args: DeskArgs) -> Result<()> {
     let cuts = [
         args.mine,
         owner_cut.is_some(),
-        args.unowned,
-        args.nothing_planned,
+        args.no_owner,
+        args.no_open_todos,
     ]
     .iter()
     .filter(|on| **on)
     .count();
     if cuts > 1 {
         anyhow::bail!(
-            "--mine, --owner, --unowned and --nothing-planned each show one court — pass one"
+            "--mine, --owner, --no-owner and --no-open-todos each show one group; pass one of them"
         );
     }
 
-    // Two questions, both of which must say yes, as `recent` asks them:
+    // Two checks, both of which must pass, the same ones `recent` makes:
     // stdout decides the format (a pipe gets the list), and stderr whether
-    // the app can be drawn at all. A cut the tab has no key for keeps the
-    // list in the terminal too.
+    // the app can be drawn at all. A flag the tab has no key for prints the
+    // list too.
     let printing = args.plain
         || args.json
         || args.quiet.is_some()
@@ -152,19 +151,19 @@ pub fn run(args: DeskArgs) -> Result<()> {
         && std::io::IsTerminal::is_terminal(&std::io::stdout())
         && crate::util::tty::prompt_available();
     if interactive {
-        let court = if args.mine {
-            hat.clone().map(Court::Owner)
+        let group = if args.mine {
+            hat.clone().map(Assignee::Owner)
         } else if let Some(owner) = &owner_cut {
-            Some(Court::Owner(owner.clone()))
-        } else if args.unowned {
-            Some(Court::Unowned)
-        } else if args.nothing_planned {
-            Some(Court::NothingPlanned)
+            Some(Assignee::Owner(owner.clone()))
+        } else if args.no_owner {
+            Some(Assignee::NoOwner)
+        } else if args.no_open_todos {
+            Some(Assignee::NoOpenTodo)
         } else {
             None
         };
         return crate::tui::run(crate::tui::Entry::Desk {
-            court,
+            group,
             order: args.order.as_deref().map(|_| order),
             hat: args.as_hat.as_ref().and(hat),
             random: args.random,
@@ -175,7 +174,7 @@ pub fn run(args: DeskArgs) -> Result<()> {
     if projects.is_empty() {
         println!(
             "{}",
-            "No projects yet — create one with `fastf new`.".dimmed()
+            "No projects yet. Create one with `fastf new`.".dimmed()
         );
         return Ok(());
     }
@@ -191,23 +190,23 @@ pub fn run(args: DeskArgs) -> Result<()> {
     let cards = read_cards(&scoped);
     let mut groups = desk::group(cards, hat.as_deref(), order);
 
-    // The cuts.
-    let wanted = |court: &Court| -> bool {
+    // The group flags.
+    let wanted = |assignee: &Assignee| -> bool {
         if args.mine {
-            return court.owner() == hat.as_deref();
+            return assignee.owner() == hat.as_deref();
         }
         if let Some(owner) = &owner_cut {
-            return court.owner() == Some(owner.as_str());
+            return assignee.owner() == Some(owner.as_str());
         }
-        if args.unowned {
-            return *court == Court::Unowned;
+        if args.no_owner {
+            return *assignee == Assignee::NoOwner;
         }
-        if args.nothing_planned {
-            return *court == Court::NothingPlanned;
+        if args.no_open_todos {
+            return *assignee == Assignee::NoOpenTodo;
         }
         true
     };
-    groups.retain(|group| wanted(&group.court));
+    groups.retain(|group| wanted(&group.assignee));
     if let Some(days) = args.quiet {
         for group in &mut groups {
             group
@@ -243,9 +242,9 @@ pub fn run(args: DeskArgs) -> Result<()> {
                 || args.tag.is_some()
                 || args.base.is_some()
             {
-                "Nothing on the desk matches those cuts."
+                "No project matches those flags."
             } else {
-                "Nothing on the desk."
+                "No project has a todo yet."
             }
             .dimmed()
         );
@@ -255,10 +254,10 @@ pub fn run(args: DeskArgs) -> Result<()> {
     Ok(())
 }
 
-/// Every project's card: its todos read on the pool — several files at
-/// once, which is what a network base needs — and who is working in it,
-/// from one pass over the processes. A file that will not read is a
-/// project with nothing planned, named once by discovery's own warning.
+/// Every project's card. The todos are read on the pool, several files at
+/// once, which a network base needs; which programs work in each folder
+/// comes from one pass over the processes. A file that will not read is a
+/// project with no open todo, and discovery's own warning names it once.
 fn read_cards(projects: &[&Project]) -> Vec<Card> {
     let paths: Vec<PathBuf> = projects.iter().map(|p| p.path.clone()).collect();
     let active = crate::core::holders::working_in_all(&paths);
@@ -281,8 +280,8 @@ fn read_cards(projects: &[&Project]) -> Vec<Card> {
     cards.into_iter().map(|(_, card)| card).collect()
 }
 
-/// One card, at random, under its court: the one thing that beats a
-/// stalled eye. The clock's nanoseconds are as random as a pick needs.
+/// One card, at random, under its group. The clock's nanoseconds are as
+/// random as a pick needs.
 fn pick_one(groups: Vec<Group>) -> Vec<Group> {
     let total: usize = groups.iter().map(|g| g.cards.len()).sum();
     if total == 0 {
@@ -296,7 +295,7 @@ fn pick_one(groups: Vec<Group>) -> Vec<Group> {
         if at < group.cards.len() {
             let card = group.cards.into_iter().nth(at).expect("in range");
             return vec![Group {
-                court: group.court,
+                assignee: group.assignee,
                 cards: vec![card],
             }];
         }
@@ -311,14 +310,14 @@ fn card_json(card: &Card, group: &Group, now: &str) -> CardJson {
         name: card.project.name.clone(),
         path: crate::util::paths::display_path(&card.project.path),
         base_label: library::base_label(&card.project.base),
-        court: group.court.kind(),
-        owner: group.court.owner().map(str::to_string),
-        ball: card.ball.as_ref().map(|ball| BallJson {
-            number: ball.index + 1,
-            text: ball.todo.text.clone(),
-            phase: ball.todo.phase.clone(),
-            owner: ball.todo.owner.clone(),
-            added: ball.todo.added.clone(),
+        group: group.assignee.kind(),
+        owner: group.assignee.owner().map(str::to_string),
+        next_todo: card.next_todo.as_ref().map(|next| NextTodoJson {
+            number: next.index + 1,
+            text: next.todo.text.clone(),
+            phase: next.todo.phase.clone(),
+            owner: next.todo.owner.clone(),
+            added: next.todo.added.clone(),
         }),
         open: card.open,
         done: card.done,
@@ -331,9 +330,9 @@ fn card_json(card: &Card, group: &Group, now: &str) -> CardJson {
     }
 }
 
-/// One heading per court with its count, one row per project under it:
-/// the id, the name, the ball (its phase before it), how long the project
-/// has been quiet, and `active` when a program is working in it.
+/// One heading per group with its count, one row per project under it:
+/// the id, the name, the next todo (its phase before it), how long the
+/// project has been quiet, and `active` when a program is working in it.
 fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
     use unicode_width::UnicodeWidthStr;
     let cards = groups.iter().flat_map(|g| g.cards.iter());
@@ -347,7 +346,10 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
         .map(|c| c.project.name.width())
         .max()
         .unwrap_or(0);
-    let ball_w = cards.map(|c| c.ball_line(" · ").width()).max().unwrap_or(0);
+    let todo_w = cards
+        .map(|c| c.next_todo_line(" · ").width())
+        .max()
+        .unwrap_or(0);
     let mut first = true;
     for group in groups {
         if !first {
@@ -356,11 +358,11 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
         first = false;
         println!(
             "  {} {}",
-            group.court.label(hat).bold(),
+            group.assignee.label(hat).bold(),
             format!("· {}", group.cards.len()).dimmed()
         );
         for card in &group.cards {
-            let ball = card.ball_line(" · ");
+            let next = card.next_todo_line(" · ");
             let age = card
                 .quiet_since
                 .as_deref()
@@ -372,28 +374,28 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
                 format!("  active: {}", card.active.join(", "))
             };
             println!(
-                "    {:<id_w$}  {:<name_w$}  {:<ball_w$}  {:>6}{}",
+                "    {:<id_w$}  {:<name_w$}  {:<todo_w$}  {:>6}{}",
                 card.project.id.green().bold(),
                 card.project.name,
-                ball,
+                next,
                 age.dimmed(),
                 active.cyan(),
                 id_w = id_w,
                 name_w = name_w,
-                ball_w = ball_w,
+                todo_w = todo_w,
             );
         }
     }
 }
 
-/// Which owners the open todos of `cards` name, each with how many balls it
-/// holds across the desk — the courts' counts, for `peek` and a heading.
-pub fn courts_of(cards: &[Card]) -> Vec<(Court, usize)> {
-    let mut counts: HashMap<Court, usize> = HashMap::new();
+/// Every assignee the cards name, each with how many projects have their
+/// next todo assigned to it. `peek` prints these counts.
+pub fn assignees_of(cards: &[Card]) -> Vec<(Assignee, usize)> {
+    let mut counts: HashMap<Assignee, usize> = HashMap::new();
     for card in cards {
-        *counts.entry(card.court()).or_default() += 1;
+        *counts.entry(card.assignee()).or_default() += 1;
     }
-    let mut out: Vec<(Court, usize)> = counts.into_iter().collect();
+    let mut out: Vec<(Assignee, usize)> = counts.into_iter().collect();
     out.sort();
     out
 }

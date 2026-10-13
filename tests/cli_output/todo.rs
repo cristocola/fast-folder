@@ -204,7 +204,7 @@ fn todo_edit_rewords_and_remove_removes_by_number() {
     );
 }
 
-/// A todo's court: `add` takes `--owner`, a trailing `@name` in the text, or
+/// A todo's owner: `add` takes `--owner`, a trailing `@name` in the text, or
 /// `--mine` under a hat; `owner` prints it, hands the todo over, or takes it
 /// away with `--none`; `list` shows the owner and the day beside the text;
 /// and an owner is one word, refused by name otherwise.
@@ -234,14 +234,14 @@ fn todo_owner_is_set_by_add_and_owner_and_shown_by_list() {
         "{body}"
     );
 
-    // No hat, no `--mine`; a hat worn, and it is the owner.
+    // No hat, no `--mine`; with a hat set, it is the owner.
     let err = sb.fails(&["todo", "add", "ID0001", "call back", "--mine"]);
     assert!(
-        err.contains("no hat is worn") && err.contains("fastf hat"),
+        err.contains("no hat is set") && err.contains("fastf hat"),
         "{err}"
     );
-    let worn = sb.ok(&["hat", "@sales"]);
-    assert!(worn.contains("hat = sales"), "{worn}");
+    let set = sb.ok(&["hat", "@sales"]);
+    assert!(set.contains("hat = sales"), "{set}");
     assert!(sb.ok(&["hat"]).contains("@sales"));
     sb.ok(&["todo", "add", "ID0001", "call back", "--mine"]);
     assert!(

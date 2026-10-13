@@ -1,14 +1,15 @@
-//! The desk tab's list: one line per project under the court its ball is
-//! in, drawn in the library table's place with the library's pane beside it.
+//! The desk tab's list: one line per project under the group its next open
+//! todo puts it in, drawn in the library table's place with the library's
+//! pane beside it.
 //!
-//! A heading is a row — `your court · 3`, with a rule to the border — and a
-//! card is the cursor cell, the id, the name whole, the ball (its phase
+//! A heading is a row (`yours · 3`, with a rule to the border) and a card
+//! is the cursor cell, the id, the name whole, the next todo (its phase
 //! before it), how long the project has been quiet, and `active` when a
 //! program is working in it. The id and the name are measured over the
 //! library in view as the table measures them, so a card never moves when a
-//! court is shown alone; the ball takes what is left and is cut from the
-//! right. Projects not read yet sit dim under `reading`, with no claim made
-//! about them.
+//! group is shown alone; the next todo takes what is left and is cut from
+//! the right. Projects not read yet sit dim under `reading`, with no claim
+//! made about them.
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -17,14 +18,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, ScrollbarState};
 use unicode_width::UnicodeWidthStr;
 
-use crate::core::desk::Court;
+use crate::core::desk::Assignee;
 use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, DeskRow};
 use crate::tui::app::{App, Focus};
 use crate::tui::view::{fit, fit_spans};
 
-/// How many days a ball may sit in an owner's court with nothing written and
-/// nobody working before the row wears the warning: the stuck agent, said
-/// in facts.
+/// How many days a todo assigned to an owner may wait with nothing written
+/// in the folder and no program working in it before the row shows the
+/// warning glyph.
 const STUCK_AFTER_DAYS: u64 = 3;
 
 pub fn table(app: &App, frame: &mut Frame, area: Rect) {
@@ -65,11 +66,11 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
             )
         } else if desk.filter.is_some() {
             format!(
-                "Nothing in this court: {} shows every court again.",
+                "Nothing in this group: {} shows every group again.",
                 crate::tui::command::key_of(crate::tui::command::CommandId::ClearFilters)
             )
         } else {
-            "Nothing on the desk matches the search.".to_string()
+            "No project matches the search.".to_string()
         };
         frame.render_widget(
             Paragraph::new(Span::styled(fit(&sentence, width, g.ellipsis), theme.dim())),
@@ -80,9 +81,9 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
 
     let (id_w, name_w) = app.library.widths;
     // The cursor cell, the id, the name, each followed by a space; the age
-    // and the active cell at the right; the ball has the rest.
+    // and the active cell at the right; the next todo has the rest.
     let fixed = 2 + 1 + id_w + 1 + name_w + 1 + 1 + AGE_CELL + 1 + ACTIVE_CELL;
-    let ball_w = width.saturating_sub(fixed);
+    let todo_w = width.saturating_sub(fixed);
     let hat = app.hat();
     let now = (app.now)();
 
@@ -93,11 +94,11 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
         let bar = Rect::new(inner.x, y, inner.width, 1);
         let row = &desk.rows[index];
         let line = match row {
-            DeskRow::Heading { court, count } => {
-                heading_line(app, court.as_ref(), *count, hat.as_deref(), width)
+            DeskRow::Heading { group, count } => {
+                heading_line(app, group.as_ref(), *count, hat.as_deref(), width)
             }
             DeskRow::Card { card, read } => {
-                card_line(app, card, *read, id_w, name_w, ball_w, Some(now.as_str()))
+                card_line(app, card, *read, id_w, name_w, todo_w, Some(now.as_str()))
             }
         };
         // A row a verb has just changed wears the wash, under the cursor,
@@ -131,20 +132,20 @@ pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// `your court · 3 ────`: the court's name in the text colour, bold, its
-/// count dim, and a rule to the border. The heading over the unread rows is
+/// `yours · 3 ────`: the group's name in the text colour, bold, its count
+/// dim, and a rule to the border. The heading over the unread rows is
 /// `reading`, dim throughout.
 fn heading_line(
     app: &App,
-    court: Option<&Court>,
+    group: Option<&Assignee>,
     count: usize,
     hat: Option<&str>,
     width: usize,
 ) -> Line<'static> {
     let theme = &app.theme;
     let g = theme.glyphs;
-    let (label, style) = match court {
-        Some(court) => (court.label(hat), theme.text().add_modifier(Modifier::BOLD)),
+    let (label, style) = match group {
+        Some(group) => (group.label(hat), theme.text().add_modifier(Modifier::BOLD)),
         None => (format!("reading {}", g.spin(app.elapsed_ms)), theme.dim()),
     };
     let head = format!("  {label} {} {count} ", g.sep);
@@ -165,7 +166,7 @@ fn card_line(
     read: bool,
     id_w: usize,
     name_w: usize,
-    ball_w: usize,
+    todo_w: usize,
     now: Option<&str>,
 ) -> Line<'static> {
     let theme = &app.theme;
@@ -179,12 +180,12 @@ fn card_line(
     let text = if dim_all { theme.dim() } else { theme.text() };
     let id_style = if dim_all { theme.dim() } else { theme.accent() };
 
-    let ball = if !read {
+    let next = if !read {
         String::new()
     } else {
-        card.ball_line(&format!(" {} ", g.sep))
+        card.next_todo_line(&format!(" {} ", g.sep))
     };
-    let ball_style = if card.ball.is_none() || dim_all {
+    let next_style = if card.next_todo.is_none() || dim_all {
         theme.dim()
     } else {
         theme.text()
@@ -194,13 +195,13 @@ fn card_line(
         (Some(since), None) if read => since.get(..10).unwrap_or(since).to_string(),
         _ => String::new(),
     };
-    // `active` when a program is working in the folder; the warning when a
-    // ball sits in an owner's court with nothing written for days and
-    // nobody working — the stuck agent, in facts.
+    // `active` when a program is working in the folder; the warning when
+    // the next todo is assigned to an owner, nothing has been written in the
+    // folder for days, and no program is working in it.
     let (active, active_style) = if !card.active.is_empty() {
         ("active".to_string(), theme.accent_alt())
     } else if read
-        && matches!(card.court(), Court::Owner(_))
+        && matches!(card.assignee(), Assignee::Owner(_))
         && now.is_some_and(|now| {
             crate::core::desk::quiet_for_days(card.quiet_since.as_deref(), now, STUCK_AFTER_DAYS)
         })
@@ -216,8 +217,8 @@ fn card_line(
         Span::styled(format!("{:<name_w$} ", card.project.name), text),
     ];
     spans.extend(fit_spans(
-        vec![Span::styled(format!("{ball:<ball_w$}"), ball_style)],
-        ball_w,
+        vec![Span::styled(format!("{next:<todo_w$}"), next_style)],
+        todo_w,
         g.ellipsis,
     ));
     spans.push(Span::styled(format!(" {age:>AGE_CELL$} "), theme.dim()));
@@ -228,9 +229,9 @@ fn card_line(
     Line::from(spans)
 }
 
-/// The bar's report for the desk: how many projects are under a court out
+/// The bar's report for the desk: how many projects are under a group out
 /// of the library in view, `reading n` while records are still landing,
-/// the court shown alone, the order, and the library's own filters. The
+/// the group shown alone, the order, and the library's own filters. The
 /// order goes first when the bar is narrow, as the sort does on the library.
 pub fn report(app: &App, width: usize) -> Vec<Span<'static>> {
     let theme = &app.theme;
@@ -256,11 +257,11 @@ pub fn report(app: &App, width: usize) -> Vec<Span<'static>> {
         4,
         Span::styled(format!(" {} {}", g.sep, desk.order.label()), theme.dim()),
     ));
-    if let Some(court) = &desk.filter {
+    if let Some(group) = &desk.filter {
         parts.push((
             2,
             Span::styled(
-                format!(" {} {}", g.sep, court.label(app.hat().as_deref())),
+                format!(" {} {}", g.sep, group.label(app.hat().as_deref())),
                 theme.accent_alt(),
             ),
         ));

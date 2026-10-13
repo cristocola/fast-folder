@@ -1,10 +1,11 @@
-//! `fastf peek <query>` — what is going on in a project, without opening it.
+//! `fastf peek <query>`: a short summary of one project, without opening
+//! its folder.
 //!
-//! The card a hand would assemble by glancing into the folder: the ball and
-//! whose court it is in, how the todos stand, who is working in the folder
-//! right now, what last moved under it, the repository's head when it is
-//! one, the last note, and how long the project has been quiet. `fastf show`
-//! is everything fastf knows; this is the glance.
+//! It prints the next open todo and who it is assigned to, the todo counts,
+//! which programs are working in the folder right now, the newest file under
+//! it, the repository's head when the folder is one, the last note, and how
+//! long the project has been quiet. `fastf show` prints everything fastf
+//! knows about the project; `peek` prints what changed and what is next.
 
 use std::sync::atomic::AtomicBool;
 
@@ -68,24 +69,24 @@ pub fn run(query: &str) -> Result<()> {
     println!();
     let field = |label: &str, value: String| println!("  {:<11} {value}", label.dimmed());
 
-    let court = card.court();
-    match &card.ball {
-        Some(ball) => {
+    let assignee = card.assignee();
+    match &card.next_todo {
+        Some(next) => {
             let mut line = format!(
                 "{}  {}",
-                card.ball_line(" · "),
-                format!("({})", court.label(cfg.resolve_hat().as_deref())).dimmed()
+                card.next_todo_line(" · "),
+                format!("({})", assignee.label(cfg.resolve_hat().as_deref())).dimmed()
             );
-            if let Some(day) = ball.todo.added_day() {
+            if let Some(day) = next.todo.added_day() {
                 line.push_str(&format!("  {}", format!("added {day}").dimmed()));
             }
             line.push_str(&format!(
                 "  {}",
-                format!("todo {}", ball.index + 1).dimmed()
+                format!("todo {}", next.index + 1).dimmed()
             ));
-            field("ball", line);
+            field("next todo", line);
         }
-        None => field("ball", "nothing planned".dimmed().to_string()),
+        None => field("next todo", "no open todos".dimmed().to_string()),
     }
     field(
         "todos",
@@ -93,7 +94,7 @@ pub fn run(query: &str) -> Result<()> {
             "{} open · {} done{}",
             card.open,
             card.done,
-            courts_line(&todos)
+            owners_line(&todos)
         ),
     );
     field(
@@ -148,14 +149,14 @@ pub fn run(query: &str) -> Result<()> {
     Ok(())
 }
 
-/// ` · with @claude 2 · unowned 1`: the open todos by whose court each is
-/// in, after the counts.
-fn courts_line(todos: &[crate::core::body::Todo]) -> String {
+/// ` · @claude 2 · no owner 1`: how many open todos each owner has, after
+/// the counts.
+fn owners_line(todos: &[crate::core::body::Todo]) -> String {
     let mut counts: Vec<(String, usize)> = Vec::new();
     for todo in todos.iter().filter(|t| !t.done) {
         let key = match &todo.owner {
-            Some(owner) => format!("with @{owner}"),
-            None => "unowned".to_string(),
+            Some(owner) => format!("@{owner}"),
+            None => "no owner".to_string(),
         };
         match counts.iter_mut().find(|(k, _)| *k == key) {
             Some((_, n)) => *n += 1,

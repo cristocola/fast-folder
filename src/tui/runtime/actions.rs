@@ -54,7 +54,7 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
                     path: project.path.clone(),
                 },
                 match owner {
-                    Some(owner) => format!("In @{owner}'s court."),
+                    Some(owner) => format!("Owner: @{owner}."),
                     None => "Nobody's now.".to_string(),
                 },
             ))

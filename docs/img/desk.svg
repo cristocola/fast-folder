@@ -260,10 +260,10 @@
 <line x1="12.2" y1="98.0" x2="12.2" y2="107.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="107.0" x2="12.2" y2="116.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="98.0" width="16.8" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="98.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="33.2" y="111.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">unowned</text>
-<rect x="92.0" y="98.0" width="604.8" height="18.0" fill="#282c34"/>
-<text x="92.0" y="111.5" xml:space="preserve" fill="#9ca0a4"> · 2 ───────────────────────────────────────────────────────────────────</text>
+<rect x="33.2" y="98.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="33.2" y="111.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">no owner</text>
+<rect x="100.4" y="98.0" width="596.4" height="18.0" fill="#282c34"/>
+<text x="100.4" y="111.5" xml:space="preserve" fill="#9ca0a4"> · 2 ──────────────────────────────────────────────────────────────────</text>
 <rect x="696.8" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="705.2" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="709.4" y1="98.0" x2="709.4" y2="107.0" stroke="#51afef" stroke-width="1"/>
@@ -328,10 +328,10 @@
 <line x1="12.2" y1="152.0" x2="12.2" y2="161.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="161.0" x2="12.2" y2="170.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="152.0" width="16.8" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="152.0" width="100.8" height="18.0" fill="#282c34"/>
-<text x="33.2" y="165.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">with @claude</text>
-<rect x="134.0" y="152.0" width="562.8" height="18.0" fill="#282c34"/>
-<text x="134.0" y="165.5" xml:space="preserve" fill="#9ca0a4"> · 3 ──────────────────────────────────────────────────────────────</text>
+<rect x="33.2" y="152.0" width="58.8" height="18.0" fill="#282c34"/>
+<text x="33.2" y="165.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">@claude</text>
+<rect x="92.0" y="152.0" width="604.8" height="18.0" fill="#282c34"/>
+<text x="92.0" y="165.5" xml:space="preserve" fill="#9ca0a4"> · 3 ───────────────────────────────────────────────────────────────────</text>
 <rect x="696.8" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="705.2" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="709.4" y1="152.0" x2="709.4" y2="161.0" stroke="#51afef" stroke-width="1"/>
@@ -428,10 +428,10 @@
 <line x1="12.2" y1="224.0" x2="12.2" y2="233.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="233.0" x2="12.2" y2="242.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="224.0" width="16.8" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="224.0" width="84.0" height="18.0" fill="#282c34"/>
-<text x="33.2" y="237.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">with @acme</text>
-<rect x="117.2" y="224.0" width="579.6" height="18.0" fill="#282c34"/>
-<text x="117.2" y="237.5" xml:space="preserve" fill="#9ca0a4"> · 2 ────────────────────────────────────────────────────────────────</text>
+<rect x="33.2" y="224.0" width="42.0" height="18.0" fill="#282c34"/>
+<text x="33.2" y="237.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">@acme</text>
+<rect x="75.2" y="224.0" width="621.6" height="18.0" fill="#282c34"/>
+<text x="75.2" y="237.5" xml:space="preserve" fill="#9ca0a4"> · 2 ─────────────────────────────────────────────────────────────────────</text>
 <rect x="696.8" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="705.2" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="709.4" y1="224.0" x2="709.4" y2="233.0" stroke="#51afef" stroke-width="1"/>
@@ -501,10 +501,10 @@
 <line x1="12.2" y1="278.0" x2="12.2" y2="287.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="287.0" x2="12.2" y2="296.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="278.0" width="16.8" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="278.0" width="92.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="291.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">with @sales</text>
-<rect x="125.6" y="278.0" width="571.2" height="18.0" fill="#282c34"/>
-<text x="125.6" y="291.5" xml:space="preserve" fill="#9ca0a4"> · 2 ───────────────────────────────────────────────────────────────</text>
+<rect x="33.2" y="278.0" width="50.4" height="18.0" fill="#282c34"/>
+<text x="33.2" y="291.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">@sales</text>
+<rect x="83.6" y="278.0" width="613.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="291.5" xml:space="preserve" fill="#9ca0a4"> · 2 ────────────────────────────────────────────────────────────────────</text>
 <rect x="696.8" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="705.2" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="709.4" y1="278.0" x2="709.4" y2="287.0" stroke="#51afef" stroke-width="1"/>
@@ -573,10 +573,10 @@
 <line x1="12.2" y1="332.0" x2="12.2" y2="341.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="341.0" x2="12.2" y2="350.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="332.0" width="16.8" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="332.0" width="126.0" height="18.0" fill="#282c34"/>
-<text x="33.2" y="345.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">nothing planned</text>
-<rect x="159.2" y="332.0" width="537.6" height="18.0" fill="#282c34"/>
-<text x="159.2" y="345.5" xml:space="preserve" fill="#9ca0a4"> · 3 ───────────────────────────────────────────────────────────</text>
+<rect x="33.2" y="332.0" width="109.2" height="18.0" fill="#282c34"/>
+<text x="33.2" y="345.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">no open todos</text>
+<rect x="142.4" y="332.0" width="554.4" height="18.0" fill="#282c34"/>
+<text x="142.4" y="345.5" xml:space="preserve" fill="#9ca0a4"> · 3 ─────────────────────────────────────────────────────────────</text>
 <rect x="696.8" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="705.2" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="709.4" y1="332.0" x2="709.4" y2="341.0" stroke="#51afef" stroke-width="1"/>
@@ -1178,7 +1178,7 @@
 <rect x="100.4" y="710.0" width="8.4" height="18.0" fill="#282c34"/>
 <text x="100.4" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">f</text>
 <rect x="108.8" y="710.0" width="109.2" height="18.0" fill="#282c34"/>
-<text x="108.8" y="723.5" xml:space="preserve" fill="#9ca0a4"> this court  </text>
+<text x="108.8" y="723.5" xml:space="preserve" fill="#9ca0a4"> this group  </text>
 <rect x="218.0" y="710.0" width="8.4" height="18.0" fill="#282c34"/>
 <text x="218.0" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">z</text>
 <rect x="226.4" y="710.0" width="92.4" height="18.0" fill="#282c34"/>

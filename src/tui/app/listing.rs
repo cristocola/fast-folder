@@ -135,7 +135,7 @@ impl App {
 
     /// After anything that changed which rows are shown.
     pub(super) fn after_rows_changed(&mut self) -> Vec<Effect> {
-        // The desk's rows are the library's, read by court: rebuilt first,
+        // The desk's rows are the library's, grouped by assignee: rebuilt first,
         // so the selection the rest of this follows is the desk's.
         if self.screen == Screen::Desk {
             self.rebuild_desk();
@@ -339,7 +339,7 @@ impl App {
     pub(super) fn clear_filters(&mut self) -> Vec<Effect> {
         self.library.template_filter = None;
         self.library.base_filter = None;
-        // On the desk the court shown alone is a filter like the other two.
+        // On the desk the group shown alone is a filter like the other two.
         if self.screen == Screen::Desk {
             self.desk.filter = None;
         }

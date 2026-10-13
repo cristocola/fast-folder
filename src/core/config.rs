@@ -107,9 +107,9 @@ pub struct Config {
     #[serde(default)]
     pub agent: String,
 
-    /// The hat worn: the owner whose court is yours. Empty = none. Shown in
-    /// the app's header, and what `fastf todo add --mine` assigns to;
-    /// `FASTF_HAT` wears one for a shell. It never changes what a file says.
+    /// The hat: the owner name the desk lists as yours and `fastf todo add
+    /// --mine` assigns to. Empty = none. Shown in the app's header;
+    /// `FASTF_HAT` sets it for one shell. It never changes what a file says.
     ///
     /// Never read raw — see [`Config::resolve_hat`].
     #[serde(default)]
@@ -399,16 +399,16 @@ impl Config {
         (!line.is_empty()).then(|| line.to_string())
     }
 
-    /// The hat worn: `FASTF_HAT` for this shell, else the `hat` key, else
-    /// none. The `@` a hand may have typed is not part of the name.
+    /// The hat: `FASTF_HAT` for this shell, else the `hat` key, else none.
+    /// A `@` typed in front of the name is not part of it.
     pub fn resolve_hat(&self) -> Option<String> {
-        let worn = match std::env::var("FASTF_HAT") {
+        let hat = match std::env::var("FASTF_HAT") {
             Ok(hat) => hat,
             Err(_) => self.hat.clone(),
         };
-        let worn = worn.trim();
-        let worn = worn.strip_prefix('@').unwrap_or(worn).trim();
-        (!worn.is_empty()).then(|| worn.to_string())
+        let hat = hat.trim();
+        let hat = hat.strip_prefix('@').unwrap_or(hat).trim();
+        (!hat.is_empty()).then(|| hat.to_string())
     }
 
     /// The editor to start: the `editor` key, else `$EDITOR`, else a fallback.

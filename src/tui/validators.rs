@@ -144,7 +144,7 @@ pub fn tag(value: &str) -> Result<String, String> {
 }
 
 /// The owner picker's "a name you type…" prompt.
-pub const OWNER_PROMPT: &str = "Whose court? (a name, written @name on the todo)";
+pub const OWNER_PROMPT: &str = "Owner (a name, written @name at the end of the todo)";
 
 /// An owner, by the owner's own rule (`validated::Owner`): one word, with
 /// or without its `@`.

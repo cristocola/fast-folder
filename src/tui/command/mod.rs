@@ -215,9 +215,9 @@ pub enum CommandId {
     // The desk tab
     /// `w`: the desk, and `w` back to the library.
     ShowDesk,
-    /// `f` on the desk: the cursor's court alone.
-    DeskCourt,
-    /// `s` / `S` on the desk: the order within each court.
+    /// `f` on the desk: only the selected project's group.
+    DeskGroupOnly,
+    /// `s` / `S` on the desk: the order within each group.
     DeskOrder,
     DeskOrderPick,
     /// `z`: the cursor on a card picked at random.
@@ -349,7 +349,7 @@ impl CommandId {
         CommandId::Reconcile,
         CommandId::Attention,
         CommandId::ShowDesk,
-        CommandId::DeskCourt,
+        CommandId::DeskGroupOnly,
         CommandId::DeskOrder,
         CommandId::DeskOrderPick,
         CommandId::DeskRandom,

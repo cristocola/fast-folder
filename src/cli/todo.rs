@@ -9,7 +9,7 @@
 //! fastf todo list ID0047                              # the list, numbered
 //! fastf todo add ID0047 "colour grade"                # at the end
 //! fastf todo add ID0047 "cut" --phase "Main Edit"     # under a label
-//! fastf todo add ID0047 "cut @claude"                 # in @claude's court
+//! fastf todo add ID0047 "cut @claude"                 # assigned to @claude
 //! fastf todo add ID0047 "call back" --mine            # in the hat's
 //! fastf todo owner ID0047 3 claude                    # hand number 3 over
 //! fastf todo owner ID0047 3 --none                    # to nobody
@@ -32,11 +32,11 @@ use crate::core::body::Todo;
 use crate::core::library::{self, Project};
 use crate::core::{config::Config, project_info};
 
-/// The hat worn, or the refusal `--mine` gets without one.
+/// The hat, or the refusal `--mine` gets without one.
 fn hat_or_refuse(cfg: &Config) -> Result<String> {
     cfg.resolve_hat().ok_or_else(|| {
         anyhow::anyhow!(
-            "no hat is worn — `fastf hat <name>` wears one, or name the owner with --owner"
+            "no hat is set: `fastf hat <name>` sets one, or name the owner with --owner"
         )
     })
 }
@@ -199,9 +199,9 @@ pub struct AddArgs {
     pub text: String,
     /// The `###` label to put it under, opening one if the list has none.
     pub phase: Option<String>,
-    /// Whose court it goes in, over any `@owner` typed at the end of the text.
+    /// Who it is assigned to, over any `@owner` typed at the end of the text.
     pub owner: Option<String>,
-    /// The hat's court.
+    /// Assign it to the hat.
     pub mine: bool,
 }
 
@@ -220,18 +220,18 @@ pub fn add(args: AddArgs) -> Result<()> {
         args.phase.as_deref(),
     )
     .with_context(|| format!("adding a todo to {}", project.id))?;
-    let court = owner
+    let assigned = owner
         .map(|owner| format!(" for @{owner}"))
         .unwrap_or_default();
     match &args.phase {
         Some(phase) => println!(
-            "{}  Todo added to {} under {}{court}",
+            "{}  Todo added to {} under {}{assigned}",
             "✓".green().bold(),
             project.id.green().bold(),
             phase.bold()
         ),
         None => println!(
-            "{}  Todo added to {}{court}",
+            "{}  Todo added to {}{assigned}",
             "✓".green().bold(),
             project.id.green().bold()
         ),
@@ -248,11 +248,11 @@ pub struct OwnerArgs {
     /// the todo away from everybody; `None` without it prints the owner.
     pub owner: Option<String>,
     pub none: bool,
-    /// The hat's court.
+    /// Assign it to the hat.
     pub mine: bool,
 }
 
-/// `fastf todo owner`: whose court a todo is in, or hand it to somebody.
+/// `fastf todo owner`: who a todo is assigned to, or assign it to somebody.
 pub fn owner(args: OwnerArgs) -> Result<()> {
     let (cfg, project) = project(&args.query)?;
     let todos = crate::core::body::read_todos(&project.path)?;

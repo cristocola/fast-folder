@@ -172,7 +172,7 @@ impl Tag {
     }
 }
 
-/// A todo's owner: whose court it is in, written as `@owner` at the end of
+/// A todo's owner: who it is assigned to, written as `@owner` at the end of
 /// the todo's line.
 ///
 /// One word, by the rule a tag keeps and for the same reason — it goes on

@@ -501,10 +501,10 @@ fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
             .replace("tags: []", &tags);
         // The first project carries notes and todos, so the pane shows what a
         // project's record looks like: a note of more than one line, and a
-        // list in two phases, the first of them finished. The rest carry a
-        // ball each in a court of its own — an agent's, a client's, the
-        // hat's, nobody's, or nothing planned — so the desk shows every
-        // heading it can wear.
+        // list in two phases, the first of them finished. The rest each have
+        // a next todo with a different assignee (an agent, a client, the
+        // hat's owner name, no owner, or no open todo at all), so the desk
+        // shows every heading it can.
         let raw = if i == 0 {
             raw.replace(
                 "## Notes\n",

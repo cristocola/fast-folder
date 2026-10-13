@@ -264,8 +264,8 @@ pub(super) fn has_search(app: &App) -> Availability {
 }
 
 pub(super) fn has_row_filter(app: &App) -> Availability {
-    let court = app.screen == crate::tui::app::Screen::Desk && app.desk.filter.is_some();
-    if app.library.template_filter.is_some() || app.library.base_filter.is_some() || court {
+    let group = app.screen == crate::tui::app::Screen::Desk && app.desk.filter.is_some();
+    if app.library.template_filter.is_some() || app.library.base_filter.is_some() || group {
         Availability::Enabled
     } else {
         Availability::Hidden
@@ -273,7 +273,7 @@ pub(super) fn has_row_filter(app: &App) -> Availability {
 }
 
 /// `f` on the desk needs a card under the cursor that has been read: a
-/// project not read yet is in no court to show alone.
+/// project not read yet is in no group to show alone.
 pub(super) fn desk_card_under_cursor(app: &App) -> Availability {
     if app.desk.selected_is_read() {
         Availability::Enabled

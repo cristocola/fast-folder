@@ -235,7 +235,7 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::Templates => "templates",
         CommandId::ShowDesk if app.screen == crate::tui::app::Screen::Desk => "library",
         CommandId::ShowDesk => "desk",
-        CommandId::DeskCourt => "this court",
+        CommandId::DeskGroupOnly => "this group",
         CommandId::DeskRandom => "pick one",
         CommandId::StripFilter => "its projects",
         CommandId::ActionsRun => "run",

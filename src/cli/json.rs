@@ -63,7 +63,7 @@ pub struct TodoJson {
     pub done: bool,
     pub text: String,
     pub phase: Option<String>,
-    /// Whose court it is in, without the `@`; `null` for nobody's.
+    /// Who it is assigned to, without the `@`; `null` when nobody is.
     pub owner: Option<String>,
     /// When it was added, as its line says; `null` when the line does not.
     pub added: Option<String>,

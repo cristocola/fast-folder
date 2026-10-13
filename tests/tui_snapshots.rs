@@ -619,9 +619,10 @@ fn detail_pane_glance_120x40() {
     snap("detail_pane_glance_120x40", frame);
 }
 
-/// The desk at the standard size: every court heading with its count, one
-/// line per project — the ball, how long quiet, `active` or the warning — the
-/// unread project under `reading`, the pane in the list's place.
+/// The desk at the standard size: every group heading with its count, one
+/// line per project (the next todo, how long since it was written in,
+/// `active` or the warning), the unread project under `reading`, the pane
+/// in the list's place.
 #[test]
 fn desk_80x24() {
     let mut app = desk_fixture(12, 80, 24);
@@ -630,7 +631,7 @@ fn desk_80x24() {
     let _ = update(&mut app, Msg::Tick);
     let frame = render_to_string(&app, 80, 24);
     assert!(
-        frame.contains("unowned") && frame.contains("with @claude"),
+        frame.contains("no owner") && frame.contains("@claude ·"),
         "{frame}"
     );
     snap("desk_80x24", frame);
@@ -642,15 +643,15 @@ fn desk_120x40() {
     let app = desk_fixture(12, 120, 40);
     let frame = render_to_string(&app, 120, 40);
     assert!(
-        frame.contains("nothing planned") && frame.contains("reading"),
+        frame.contains("no open todos") && frame.contains("reading"),
         "{frame}"
     );
     snap("desk_120x40", frame);
 }
 
-/// One court shown alone: the heading, its cards, the bar naming the cut.
+/// One group shown alone: the heading, its cards, the bar naming the filter.
 #[test]
-fn desk_court_alone_80x24() {
+fn desk_group_alone_80x24() {
     let mut app = desk_fixture(12, 80, 24);
     let _ = update(&mut app, Msg::Key(Key::ch('j')));
     let _ = update(&mut app, Msg::Key(Key::ch('j')));
@@ -658,10 +659,10 @@ fn desk_court_alone_80x24() {
     let _ = update(&mut app, Msg::Key(Key::ch('f')));
     let frame = render_to_string(&app, 80, 24);
     assert!(
-        frame.contains("with @claude") && !frame.contains("unowned"),
+        frame.contains("@claude ·") && !frame.contains("no owner"),
         "{frame}"
     );
-    snap("desk_court_alone_80x24", frame);
+    snap("desk_group_alone_80x24", frame);
 }
 
 /// The desk's pane is the library's: `→` goes into it in the list's place.
@@ -1707,7 +1708,7 @@ fn detail_pane_groups_todos_by_phase_120x40() {
 
 /// A todo's owner and its day sit at the right of its row, dim, and a long
 /// todo wraps short of them; a todo with neither keeps its whole row; a
-/// ticked one shows the day it was ticked; the hat worn shows after the
+/// ticked one shows the day it was ticked; the hat shows after the
 /// tabs.
 #[test]
 fn detail_pane_shows_the_owner_and_the_day_120x40() {
@@ -2059,7 +2060,7 @@ fn every_state_draws_at_every_size() {
             press_key(&mut app, Key::ch('G'));
             app
         }),
-        ("a court alone", || {
+        ("a group alone", || {
             let mut app = desk_fixture(12, 120, 40);
             press_key(&mut app, Key::ch('f'));
             app

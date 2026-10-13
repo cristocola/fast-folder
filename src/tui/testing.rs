@@ -175,9 +175,9 @@ pub fn fixture(n: usize, width: u16, height: u16) -> App {
     app
 }
 
-/// The records the desk's fixture hands every project but the last — a mix
-/// of courts, so every heading the desk can wear is on it: an agent's ball
-/// with a phase, a colleague's, an unowned one, nothing planned — each with
+/// The records the desk's fixture hands every project but the last: a mix
+/// of assignees, so every heading the desk can show is on it (an agent's todo
+/// with a phase, a colleague's, one with no owner, no open todo), each with
 /// a `touched` of its own, so the ages differ. The last project stays unread.
 pub fn desk_records(projects: &[Project]) -> Vec<(PathBuf, crate::tui::app::data::ProjectDetail)> {
     use crate::core::body::{Note, Todo};
@@ -224,7 +224,7 @@ pub fn desk_records(projects: &[Project]) -> Vec<(PathBuf, crate::tui::app::data
 }
 
 /// `fixture`, with the desk's records delivered and the desk tab on screen:
-/// every court heading, one project still `reading`.
+/// every heading, one project still `reading`.
 pub fn desk_fixture(n: usize, width: u16, height: u16) -> App {
     let mut app = fixture(n, width, height);
     let records = desk_records(&sample_projects(n));

@@ -1,37 +1,38 @@
-//! The desk tab: the library read by whose court each project's ball is in.
+//! The desk tab: the library grouped by who each project's next open todo
+//! is assigned to.
 
 use crate::harness::*;
-use fastf::core::desk::{Court, Order};
+use fastf::core::desk::{Assignee, Order};
 use fastf::tui::app::Screen;
 use fastf::tui::app::desk::DeskRow;
 
-fn headings(app: &App) -> Vec<Option<Court>> {
+fn headings(app: &App) -> Vec<Option<Assignee>> {
     app.desk
         .rows
         .iter()
         .filter_map(|row| match row {
-            DeskRow::Heading { court, .. } => Some(court.clone()),
+            DeskRow::Heading { group, .. } => Some(group.clone()),
             DeskRow::Card { .. } => None,
         })
         .collect()
 }
 
-/// `w` opens the desk on the library's rows: the courts in the desk's order
-/// — unowned first with no hat worn, the owners by how many balls each
-/// holds, nothing planned — and the projects not read yet under `reading`.
+/// `w` opens the desk on the library's rows: the groups in the desk's
+/// order (no owner first when no hat is set, the owners by how many projects
+/// each has, no open todos) and the projects not read yet under `reading`.
 /// The cursor is on a card, never a heading, and the library's selection is
 /// that card's project.
 #[test]
-fn w_opens_the_desk_grouped_by_court() {
+fn w_opens_the_desk_grouped_by_assignee() {
     let app = desk_fixture(12, 120, 40);
     assert_eq!(app.screen, Screen::Desk);
     assert_eq!(
         headings(&app),
         [
-            Some(Court::Unowned),
-            Some(Court::Owner("claude".into())),
-            Some(Court::Owner("sales".into())),
-            Some(Court::NothingPlanned),
+            Some(Assignee::NoOwner),
+            Some(Assignee::Owner("claude".into())),
+            Some(Assignee::Owner("sales".into())),
+            Some(Assignee::NoOpenTodo),
             None,
         ]
     );
@@ -99,7 +100,7 @@ fn the_cursor_walks_the_cards_and_the_pane_follows() {
         )),
         "the pane reads the project under the desk's cursor: {effects:?}"
     );
-    // Over a heading: `j` lands on the next court's first card.
+    // Over a heading: `j` lands on the next group's first card.
     press(&mut app, Key::ch('G'));
     let last = app.desk.selected.unwrap();
     assert!(matches!(app.desk.rows[last], DeskRow::Card { .. }));
@@ -116,16 +117,16 @@ fn the_cursor_walks_the_cards_and_the_pane_follows() {
     assert_eq!(app.desk.selected_path().unwrap(), second.as_path());
 }
 
-/// `f` shows the cursor's court alone and `F` (or Esc) shows every court
-/// again; `s` cycles the order within a court; the search bar narrows the
+/// `f` shows the cursor's group alone and `F` (or Esc) shows every group
+/// again; `s` cycles the order within a group; the search bar narrows the
 /// desk as it narrows the library.
 #[test]
-fn the_cuts_narrow_the_desk_and_esc_takes_them_off_in_order() {
+fn the_filters_narrow_the_desk_and_esc_takes_them_off_in_order() {
     let mut app = desk_fixture(12, 120, 40);
-    // The cursor opens on the first unowned card.
+    // The cursor opens on the first card with no owner.
     press(&mut app, Key::ch('f'));
-    assert_eq!(app.desk.filter, Some(Court::Unowned));
-    assert_eq!(headings(&app), [Some(Court::Unowned)]);
+    assert_eq!(app.desk.filter, Some(Assignee::NoOwner));
+    assert_eq!(headings(&app), [Some(Assignee::NoOwner)]);
     assert!(
         app.desk.selected_card().is_some(),
         "the cursor stays on a card"
@@ -151,7 +152,7 @@ fn the_cuts_narrow_the_desk_and_esc_takes_them_off_in_order() {
             .all(|c| c.project.name.contains("Lullaby")),
         "the query narrows the desk's rows"
     );
-    // Esc's ladder: the query, then the court, then the library.
+    // Esc's order: the query, then the group filter, then the library.
     press(&mut app, Key::plain(KeyCode::Esc));
     assert!(app.search.input.is_empty());
     assert_eq!(app.screen, Screen::Desk);
@@ -249,9 +250,9 @@ fn the_tabs_lead_to_one_another() {
     assert_eq!(Screen::ALL.len(), 3);
 }
 
-/// The session remembers the desk: the tab, the court shown alone, the
+/// The session remembers the desk: the tab, the group shown alone, the
 /// order, and when the desk was last open; `fastf desk` opens on it with
-/// its cuts.
+/// its flags.
 #[test]
 fn the_session_and_the_entry_bring_the_desk_back() {
     use fastf::tui::session::Session;
@@ -260,7 +261,7 @@ fn the_session_and_the_entry_bring_the_desk_back() {
     press(&mut app, Key::ch('s'));
     let session = Session::capture(&app, &Session::default());
     assert_eq!(session.tab.as_deref(), Some("desk"));
-    assert_eq!(session.desk_court.as_deref(), Some("unowned"));
+    assert_eq!(session.desk_group.as_deref(), Some("no owner"));
     assert_eq!(session.desk_order.as_deref(), Some("recent"));
     assert!(session.desk_seen_at.is_some(), "the desk was looked at");
 
@@ -275,13 +276,13 @@ fn the_session_and_the_entry_bring_the_desk_back() {
         },
     );
     assert_eq!(next.screen, Screen::Desk);
-    assert_eq!(next.desk.filter, Some(Court::Unowned));
+    assert_eq!(next.desk.filter, Some(Assignee::NoOwner));
     assert_eq!(next.desk.order, Order::Recent);
     assert_eq!(next.desk_seen_at, session.desk_seen_at);
 
     let mut entered = App::new(
         Entry::Desk {
-            court: Some(Court::Owner("claude".into())),
+            group: Some(Assignee::Owner("claude".into())),
             order: Some(Order::Name),
             hat: Some("sales".into()),
             random: false,
@@ -291,7 +292,7 @@ fn the_session_and_the_entry_bring_the_desk_back() {
     );
     let _ = entered.start();
     assert_eq!(entered.screen, Screen::Desk);
-    assert_eq!(entered.desk.filter, Some(Court::Owner("claude".into())));
+    assert_eq!(entered.desk.filter, Some(Assignee::Owner("claude".into())));
     assert_eq!(entered.hat().as_deref(), Some("sales"));
 }
 

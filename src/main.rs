@@ -658,10 +658,10 @@ enum Commands {
             tasks alone — a `###` phase label is not a task and takes no number.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
-            A todo's line carries whose court it is in and its dates, as\n\
+            A todo's line carries who it is assigned to and its dates, as\n\
             `- [ ] cut @claude added:2026-10-12T14:02:11Z`: `add` stamps\n\
             `added:`, `done` stamps `done:` and `--undo` takes it off, and a\n\
-            trailing `@name` is the owner. A line a hand wrote without them\n\
+            trailing `@name` is the owner. A line written by hand without them\n\
             is a todo with no owner and no dates, and nothing fills them in.\n\n\
             Examples:\n  \
             fastf todo list ID0047\n  \
@@ -680,64 +680,66 @@ enum Commands {
         action: TodoAction,
     },
 
-    /// The hat worn — the owner whose court is yours — or wear another
+    /// Print or set the hat: the owner name the desk and `todo add --mine` treat as yours
     #[command(
-        after_help = "A hat is an owner's name: @sales when you talk to people, @technician\n\
-        when you edit. Wearing one, `fastf todo add --mine` assigns to it and\n\
-        the app's header shows it. It is the `hat` configuration key;\n\
-        FASTF_HAT wears one for a shell without writing anything.\n\n\
+        after_help = "The hat is an owner name, for example @sales. When it is set, the desk\n\
+        lists the todos assigned to that name under `yours`, `fastf todo add --mine`\n\
+        assigns new todos to it, and the app's header shows it. It is the `hat`\n\
+        configuration key; FASTF_HAT sets it for one shell without writing the\n\
+        config file.\n\n\
         Examples:\n  \
-            fastf hat                 # which hat\n  \
-            fastf hat sales           # wear @sales\n  \
-            fastf hat --off           # wear none"
+            fastf hat                 # print the hat\n  \
+            fastf hat sales           # set the hat to @sales\n  \
+            fastf hat --off           # unset it"
     )]
     Hat {
-        /// The hat to wear, with or without its `@`
+        /// The owner name to set, with or without its `@`
         #[arg(conflicts_with = "off")]
         name: Option<String>,
-        /// Take the hat off
+        /// Unset the hat
         #[arg(long)]
         off: bool,
     },
 
-    /// The work across every project: one line each, grouped by whose court the ball is in
+    /// List every project as one line, grouped by who its next open todo is assigned to
     #[command(
-        after_help = "Each project is one line — its first open todo, who holds it, how long the\n\
-        project has been quiet, `active` when a program is working in it — under\n\
-        the court the ball is in: yours (the hat worn), an agent's, somebody you\n\
-        wait on, nobody's, or nothing planned. Never every todo.\n\n\
-        On a terminal it opens the guided app on its desk tab, carrying the court,\n\
+        after_help = "Each project is one line: its first open todo, how long since anything in\n\
+        the project was written, and `active` when a program is working in it. The\n\
+        lines are grouped by who that todo is assigned to: the hat (yours), each\n\
+        other owner, no owner, and no open todo at all. Only the first open todo\n\
+        of each project is listed, never every todo.\n\n\
+        On a terminal it opens the guided app on its desk tab, carrying the group,\n\
         the order, the hat and --random; --plain and --json keep the list in the\n\
         terminal, as do --quiet, --template, --tag and --base, and so does a pipe.\n\n\
         Examples:\n  \
             fastf desk                              # the app on its desk tab\n  \
-            fastf desk --mine                       # the hat's court alone\n  \
-            fastf desk --owner claude               # what @claude holds\n  \
-            fastf desk --unowned                    # the pile to assign from\n  \
+            fastf desk --mine                       # only the todos assigned to the hat\n  \
+            fastf desk --owner claude               # only the todos assigned to @claude\n  \
+            fastf desk --no-owner                   # only the todos nobody is assigned to\n  \
             fastf desk --quiet 7                    # nothing written for a week\n  \
-            fastf desk --random                     # pick me one\n  \
+            fastf desk --random                     # one project, picked at random\n  \
             fastf desk --as sales --json"
     )]
     Desk {
-        /// Wear this hat for the run, over the configured one
+        /// Use this owner name as the hat for this run, instead of the configured one
         #[arg(long = "as", value_name = "NAME")]
         as_hat: Option<String>,
-        /// The hat's court alone
+        /// Only the projects whose next todo is assigned to the hat
         #[arg(long)]
         mine: bool,
-        /// One owner's court alone
+        /// Only the projects whose next todo is assigned to this owner
         #[arg(long, value_name = "NAME")]
         owner: Option<String>,
-        /// The unowned pile alone
-        #[arg(long)]
-        unowned: bool,
-        /// The projects with nothing planned alone
-        #[arg(long = "nothing-planned")]
-        nothing_planned: bool,
+        /// Only the projects whose next todo has no owner
+        #[arg(long = "no-owner")]
+        no_owner: bool,
+        /// Only the projects with no open todo
+        #[arg(long = "no-open-todos")]
+        no_open_todos: bool,
         /// Only projects nothing has written in for this many days
         #[arg(long, value_name = "DAYS")]
         quiet: Option<u64>,
-        /// One line, picked at random from what the cuts leave
+        /// One line, picked at random from what the other flags leave
         #[arg(long)]
         random: bool,
         /// Only projects made from this template
@@ -749,7 +751,7 @@ enum Commands {
         /// Only projects in this base, by its label or its full path
         #[arg(long)]
         base: Option<String>,
-        /// The order within a court: quiet (stalest first, the default), recent, name or id
+        /// The order within a group: quiet (longest since anything was written first, the default), recent, name or id
         #[arg(long, value_name = "ORDER")]
         order: Option<String>,
         /// The plain list in the terminal, rather than the app
@@ -760,12 +762,13 @@ enum Commands {
         json: bool,
     },
 
-    /// What is going on in a project, without opening it
+    /// Print a short summary of one project without opening its folder
     #[command(
-        after_help = "The glance: the ball and whose court it is in, how the todos stand, who\n\
-        is working in the folder right now, what last moved under it, the\n\
-        repository's head when it is one, the last note, and how long the\n\
-        project has been quiet. `fastf show` is everything; this is the glance.\n\n\
+        after_help = "The next open todo and who it is assigned to, how many todos are open\n\
+        and done, which programs are working in the folder right now, the newest\n\
+        file under it, the repository's branch and last commit when the folder is\n\
+        one, the last note, and how long the project has been quiet. `fastf show`\n\
+        prints everything fastf knows about the project.\n\n\
         Examples:\n  \
             fastf peek ID0047\n  \
             fastf peek lullaby"
@@ -929,7 +932,7 @@ enum ConfigAction {
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
             agent                       The agent `fastf agent` starts in a project's folder, as one shell line (default: none)\n  \
-            hat                         The hat worn: the owner whose court is yours (default: none; FASTF_HAT wears one for a shell)\n  \
+            hat                         The owner name you work under; todos assigned to it count as yours (default: none; FASTF_HAT sets one for a shell)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
@@ -1019,23 +1022,23 @@ enum TodoAction {
         #[arg(long)]
         open: bool,
     },
-    /// Add an open task — one line, dated, in somebody's court or nobody's
+    /// Add an open task: one line, dated, assigned to somebody or to nobody
     Add {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The task text; a trailing `@name` puts it in that owner's court
+        /// The task text; a trailing `@name` assigns it to that owner
         text: String,
         /// Put it under this `###` phase label, opening one if there is none
         #[arg(long)]
         phase: Option<String>,
-        /// Whose court it goes in (over a `@name` in the text)
+        /// Who it is assigned to (over a `@name` at the end of the text)
         #[arg(long, value_name = "NAME", conflicts_with = "mine")]
         owner: Option<String>,
-        /// The hat's court (`fastf hat`)
+        /// Assign it to the hat (`fastf hat`)
         #[arg(long)]
         mine: bool,
     },
-    /// Show whose court a task is in, or hand it to somebody
+    /// Show who a task is assigned to, or assign it to somebody
     Owner {
         /// Project ID, ID prefix, or name substring
         query: String,
@@ -1044,10 +1047,10 @@ enum TodoAction {
         /// The new owner, with or without its `@`
         #[arg(conflicts_with_all = ["none", "mine"])]
         owner: Option<String>,
-        /// Nobody's: take the owner off
+        /// Remove the owner
         #[arg(long, conflicts_with = "mine")]
         none: bool,
-        /// The hat's court (`fastf hat`)
+        /// Assign it to the hat (`fastf hat`)
         #[arg(long)]
         mine: bool,
     },
@@ -1470,8 +1473,8 @@ fn run() -> Result<()> {
             as_hat,
             mine,
             owner,
-            unowned,
-            nothing_planned,
+            no_owner,
+            no_open_todos,
             quiet,
             random,
             template,
@@ -1484,8 +1487,8 @@ fn run() -> Result<()> {
             as_hat,
             mine,
             owner,
-            unowned,
-            nothing_planned,
+            no_owner,
+            no_open_todos,
             quiet,
             random,
             template,

@@ -1281,8 +1281,8 @@ fn the_desk_reads_each_record_once_and_a_stalled_base_not_at_all() {
 
     assert_eq!(code, 0, "{text}");
     assert!(
-        text.contains("nothing planned"),
-        "the desk drew its courts:\n{screen}"
+        text.contains("no open todos"),
+        "the desk drew its groups:\n{screen}"
     );
     assert!(
         !text.contains("Stuck_Project"),

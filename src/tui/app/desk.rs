@@ -1,5 +1,6 @@
-//! The desk tab's own state: the rows the courts make of the library, the
-//! cursor over them, the court shown alone and the order within a court.
+//! The desk tab's own state: the library's rows grouped by who each
+//! project's next open todo is assigned to, the cursor over them, the group
+//! shown alone and the order within a group.
 //!
 //! The desk is a second reading of the library, not a second library: its
 //! cards are the library's rows in view — the same bases' view, the same
@@ -15,25 +16,28 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::core::desk::{self, Card, Court, Order};
+use crate::core::desk::{self, Assignee, Card, Order};
 use crate::tui::app::data::ProjectDetail;
 use crate::tui::app::library::LibraryState;
 use crate::tui::widgets::nav;
 
-/// The least the ball's column may have before the desk claims no room
+/// The least the next-todo column may have before the desk claims no room
 /// beside its pane: a phase and a few words.
-pub const BALL_MIN: usize = 18;
+pub const NEXT_TODO_MIN: usize = 18;
 /// The age cell: `12 d`, `3 mo`, right-aligned.
 pub const AGE_CELL: usize = 6;
 /// The cell after the age: `active`, or the warning glyph.
 pub const ACTIVE_CELL: usize = 6;
 
-/// One row of the desk: a court's heading, or a project's card under it.
+/// One row of the desk: a group's heading, or a project's card under it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeskRow {
-    /// A court's heading with how many projects sit under it; `None` is the
+    /// A group's heading with how many projects sit under it; `None` is the
     /// heading over the projects not read yet. Never selectable.
-    Heading { court: Option<Court>, count: usize },
+    Heading {
+        group: Option<Assignee>,
+        count: usize,
+    },
     /// One project. `read` is false under the `reading` heading, where the
     /// card holds no todos because none have been read.
     Card { card: Box<Card>, read: bool },
@@ -59,15 +63,15 @@ pub struct DeskState {
     /// The index into `rows` of the card under the cursor; never a heading.
     pub selected: Option<usize>,
     pub offset: usize,
-    /// The court shown alone, if one is (`f`); every court otherwise.
-    pub filter: Option<Court>,
+    /// The group shown alone, if one is (`f`); every group otherwise.
+    pub filter: Option<Assignee>,
     pub order: Order,
     /// Whether the pass over the processes has ever been asked for.
     pub active_asked: bool,
     /// Records asked for and not landed yet, so a second discovery of the
     /// same rows asks for none of them again.
     pub pending: BTreeSet<PathBuf>,
-    /// How many cards sit under a court, and how many wait to be read —
+    /// How many cards sit under a group, and how many wait to be read:
     /// the bar's count and its `reading` chip.
     pub placed: usize,
     pub unread: usize,
@@ -78,8 +82,8 @@ pub struct DeskState {
 
 impl DeskState {
     /// The rows from the library in view and the records read so far, the
-    /// cursor kept on the card it was on. `hat` decides which court leads
-    /// and is called `your court`.
+    /// cursor kept on the card it was on. `hat` decides which group leads
+    /// and is called `yours`.
     pub fn rebuild(
         &mut self,
         library: &LibraryState,
@@ -117,13 +121,13 @@ impl DeskState {
         self.placed = cards.len();
         self.unread = unread.len();
         let mut groups = desk::group(cards, hat, self.order);
-        if let Some(court) = &self.filter {
-            groups.retain(|group| group.court == *court);
+        if let Some(only) = &self.filter {
+            groups.retain(|group| group.assignee == *only);
         }
         self.rows.clear();
         for group in groups {
             self.rows.push(DeskRow::Heading {
-                court: Some(group.court),
+                group: Some(group.assignee),
                 count: group.cards.len(),
             });
             for card in group.cards {
@@ -133,11 +137,11 @@ impl DeskState {
                 });
             }
         }
-        // What is not read yet is listed only when every court is: a court
+        // What is not read yet is listed only when every group is: a group
         // shown alone is a claim, and an unread project is not yet in one.
         if !unread.is_empty() && self.filter.is_none() {
             self.rows.push(DeskRow::Heading {
-                court: None,
+                group: None,
                 count: unread.len(),
             });
             for card in unread {
@@ -187,11 +191,11 @@ impl DeskState {
         self.selected_row().and_then(DeskRow::path)
     }
 
-    /// The court the cursor's card sits in: the heading above it.
-    pub fn selected_court(&self) -> Option<Court> {
+    /// The group the cursor's card sits in: the heading above it.
+    pub fn selected_group(&self) -> Option<Assignee> {
         let at = self.selected?;
         self.rows[..at].iter().rev().find_map(|row| match row {
-            DeskRow::Heading { court, .. } => Some(court.clone()),
+            DeskRow::Heading { group, .. } => Some(group.clone()),
             DeskRow::Card { .. } => None,
         })?
     }
@@ -247,7 +251,7 @@ impl DeskState {
     }
 
     /// Keep the cursor on screen for a list `rows` high — with the heading
-    /// above it when the cursor is the first card under one, so a court is
+    /// above it when the cursor is the first card under one, so a group is
     /// never scrolled to without its name.
     pub fn clamp_viewport(&mut self, rows: usize) {
         self.offset = nav::viewport_offset(self.offset, self.selected, self.rows.len(), rows);
@@ -276,14 +280,14 @@ impl DeskState {
         out
     }
 
-    /// The courts the rows hold, in their order, for a picker.
-    pub fn courts(&self) -> Vec<Court> {
+    /// The groups the rows hold, in their order, for a picker.
+    pub fn groups(&self) -> Vec<Assignee> {
         self.rows
             .iter()
             .filter_map(|row| match row {
                 DeskRow::Heading {
-                    court: Some(court), ..
-                } => Some(court.clone()),
+                    group: Some(group), ..
+                } => Some(group.clone()),
                 _ => None,
             })
             .collect()
@@ -328,7 +332,7 @@ mod tests {
     }
 
     /// Projects not read yet wait under their own heading at the end, and a
-    /// court shown alone lists none of them.
+    /// group shown alone lists none of them.
     #[test]
     fn unread_projects_wait_under_their_own_heading() {
         let library = library(3);
@@ -339,18 +343,18 @@ mod tests {
         );
         let mut desk = DeskState::default();
         desk.rebuild(&library, &details, &HashMap::new(), None);
-        let headings: Vec<Option<Court>> = desk
+        let headings: Vec<Option<Assignee>> = desk
             .rows
             .iter()
             .filter_map(|row| match row {
-                DeskRow::Heading { court, .. } => Some(court.clone()),
+                DeskRow::Heading { group, .. } => Some(group.clone()),
                 _ => None,
             })
             .collect();
-        assert_eq!(headings, [Some(Court::Unowned), None]);
+        assert_eq!(headings, [Some(Assignee::NoOwner), None]);
         assert_eq!((desk.placed, desk.unread), (1, 2));
 
-        desk.filter = Some(Court::Unowned);
+        desk.filter = Some(Assignee::NoOwner);
         desk.rebuild(&library, &details, &HashMap::new(), None);
         assert_eq!(desk.rows.len(), 2, "the heading and its one card");
     }
@@ -382,10 +386,14 @@ mod tests {
         assert_eq!(desk.selected, Some(4), "over the next heading");
         let on = desk.selected_path().unwrap().to_path_buf();
 
-        // The hat worn moves @claude's court first; the cursor stays on its card.
+        // With the hat set to claude, @claude's group comes first; the cursor
+        // stays on its card.
         desk.rebuild(&library, &details, &HashMap::new(), Some("claude"));
         assert_eq!(desk.selected_path(), Some(on.as_path()));
-        assert_eq!(desk.selected_court(), Some(Court::Owner("claude".into())));
+        assert_eq!(
+            desk.selected_group(),
+            Some(Assignee::Owner("claude".into()))
+        );
 
         // Its card gone, the cursor is on the nearest card that is left.
         details.remove(&on);
@@ -402,9 +410,9 @@ mod tests {
         assert_ne!(desk.selected_path(), Some(on.as_path()));
     }
 
-    /// The viewport keeps a court's heading with its first card.
+    /// The viewport keeps a group's heading with its first card.
     #[test]
-    fn a_court_is_never_scrolled_to_without_its_heading() {
+    fn a_group_is_never_scrolled_to_without_its_heading() {
         let library = library(6);
         let mut details = HashMap::new();
         for index in 0..6 {
@@ -417,7 +425,7 @@ mod tests {
         let mut desk = DeskState::default();
         desk.rebuild(&library, &details, &HashMap::new(), None);
         // Rows: heading, 3 cards, heading, 3 cards. Move onto the first card
-        // of the second court with a window of three rows.
+        // of the second group with a window of three rows.
         desk.select_last();
         desk.step(-2);
         let at = desk.selected.unwrap();
@@ -430,7 +438,7 @@ mod tests {
             desk.offset
         );
         // Scrolled down past it and back up onto the first card of the
-        // court, the heading comes back with the card.
+        // group, the heading comes back with the card.
         desk.select_last();
         desk.clamp_viewport(3);
         desk.step(-2);

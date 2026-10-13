@@ -536,7 +536,7 @@ fn project_basics(s: &Settings) -> Vec<Row> {
             "Hat",
             "hat",
             or(&s.hat, "(none)"),
-            "the owner whose court is yours: `fastf todo add --mine` assigns to it",
+            "the owner name you work under: the desk lists its todos as yours, and `fastf todo add --mine` assigns to it",
         ),
         text(
             "Register pattern",

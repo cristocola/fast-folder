@@ -265,7 +265,7 @@ todo:
   - phase: "Other"
 ```
 
-Each block is a phase. A block with no `phase` writes its tasks bare, which the list keeps above its first label; a block with no `tasks` writes the label alone, which is how you hand out an empty `### Other` for whatever comes up. Tasks are interpolated like everything else, so `{title}` and `{id}` resolve. A task may end in `@owner` — `"scaffold the crate @claude"` — and every project from the template is born with that ball in that court; a starter carries no `added:` stamp, since the project's `created` is its date.
+Each block is a phase. A block with no `phase` writes its tasks bare, which the list keeps above its first label; a block with no `tasks` writes the label alone, which is how you hand out an empty `### Other` for whatever comes up. Tasks are interpolated like everything else, so `{title}` and `{id}` resolve. A task may end in `@owner`, for example `"scaffold the crate @claude"`, and every project made from the template then starts with that todo assigned to that owner. A starter todo carries no `added:` stamp, since the project's `created` is its date.
 
 That produces, in the new project's `PROJECT_INFO.md`:
 

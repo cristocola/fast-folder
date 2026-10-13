@@ -44,7 +44,7 @@ impl App {
                 }),
             CommandId::BackToLibrary => self.show_screen(Screen::Library),
             CommandId::ShowDesk => self.toggle_desk(),
-            CommandId::DeskCourt => self.show_court_alone(),
+            CommandId::DeskGroupOnly => self.show_group_alone(),
             CommandId::DeskOrder => self.cycle_desk_order(),
             CommandId::DeskOrderPick => self.open_desk_order_picker(),
             CommandId::DeskRandom => self.desk_random(),
@@ -322,7 +322,7 @@ impl App {
             self.set_focus(Focus::Projects);
             return Vec::new();
         }
-        // On the desk the ladder is the query, the court shown alone, the
+        // On the desk the ladder is the query, the group shown alone, the
         // library's own filters, and then the library: a tab is a level.
         if self.screen == Screen::Desk {
             if !self.search.input.is_empty() {
@@ -330,7 +330,7 @@ impl App {
                 return self.after_query_change();
             }
             if self.desk.filter.is_some() {
-                return self.set_court_filter(None);
+                return self.set_group_filter(None);
             }
             if self.library.template_filter.is_some() || self.library.base_filter.is_some() {
                 return self.clear_filters();

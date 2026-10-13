@@ -59,20 +59,24 @@ A new project starts with an empty `## Notes` and no `## Todo`. The two notes an
 
 A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
 
-**A todo's line carries whose court it is in, and its dates**, at its end,
-after the task: `@claude` is the **owner** — the one the ball is with, a
-hat of your own (`@sales`), an agent, a client you are waiting on — and
-`added:` and `done:` are when it was added and when it was ticked, the same
-stamps the notes carry. The text comes first, so a person reads the task;
-the three tokens are self-describing, so an agent reading the raw file
-needs no documentation. `fastf todo add` stamps `added:`, `done` stamps
-`done:` and `--undo` takes it off again, and a trailing `@name` in the text
-you type is the owner; `fastf todo owner` and the pane's `O` hand a todo
-over. A line a hand wrote without any of it — `- [ ] fix the thing` — is a
-todo with no owner and no dates, shown as such and **never filled in**:
-fastf does not know when a hand wrote it. A `@word` in the middle of the
-text is text; only the run of tokens at the very end is read, in any order
-and any case, and the first owner of the run is the owner. See
+**A todo's owner and its dates are at the end of its line**, after the
+task. `@claude` is the **owner**: the person, agent or client the todo is
+assigned to, or a hat of your own (`@sales`). `added:` and `done:` are when
+it was added and when it was ticked, the same stamps the notes carry. The
+text comes first, so a person reads the task; the three tokens name
+themselves, so an agent reading the raw file needs no documentation. `fastf
+todo add` writes `added:`, `done` writes `done:` and `--undo` removes it. A
+`@name` at the end of the text you type is the owner; `fastf todo owner` and
+the pane's `O` change it. A line written by hand without any of these, such
+as `- [ ] fix the thing`, is a todo with no owner and no dates, shown as such
+and **never filled in**: fastf does not know when it was written.
+
+**Only the end of the line is read for the owner.** fastf takes the run of
+`@name`, `added:` and `done:` tokens at the end of the line, in any order and
+any case, and treats everything before it as the text. A `@word` in the
+middle of the text stays text, so a todo like `- [ ] mail @acme the invoice`
+has no owner, and `- [ ] mail the invoice @acme` is assigned to acme. When
+two `@names` end the line, the first is the owner. See
 [docs/cli.md](cli.md#todos).
 
 The frontmatter `id` is authoritative. The folder name is cosmetic, so renaming a folder never breaks tracking. Only `id` and `template` are required to read the file; the rest is repaired from the folder when it is missing (see below).
@@ -125,16 +129,16 @@ from when anything wrote the file.
 
 ### What the desk reads
 
-`fastf desk` and the app's desk tab put every project on one line by whose
-court its **ball** — the first open todo in file order — is in, with how long
-the project has been quiet. All of it is read: the owner from the todo's own
-`@owner`, the age from `touched` and from the newest file a walk of the folder
-finds (never one under a dot-folder such as `.git`, which is bookkeeping),
-"active" from the operating system's own process table (Linux). Nothing
-is stored for it, nothing is inferred, and a project with no `## Todo` at all
-is simply one with **nothing planned**. There is no lifecycle state to set:
-what the desk calls a project is what its file and its folder say right now.
-See [docs/cli.md](cli.md#the-desk).
+`fastf desk` and the app's desk tab list every project as one line, grouped
+by who its first open todo is assigned to, with how long the project has been
+quiet. All of it is read from the folder: the owner from the todo's own
+`@name`, the age from `touched` and from the newest file a walk of the folder
+finds (never one under a dot-folder such as `.git`), and `active` from the
+operating system's process table (Linux). Nothing is stored for it and
+nothing is inferred. A project with no `## Todo` at all is listed under
+`no open todos`. There is no lifecycle state to set: what the desk says about
+a project is what its file and its folder say right now. See
+[docs/cli.md](cli.md#the-desk).
 
 ### A project as memory
 

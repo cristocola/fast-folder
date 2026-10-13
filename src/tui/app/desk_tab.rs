@@ -14,12 +14,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{App, Focus, Screen};
-use crate::core::desk::{Court, Order};
+use crate::core::desk::{Assignee, Order};
 use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
 use crate::tui::effect::Effect;
 use crate::tui::layout;
 
-use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, BALL_MIN};
+use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, NEXT_TODO_MIN};
 
 /// How many journal entries the page holds at most.
 const JOURNAL_ROWS: usize = 500;
@@ -219,21 +219,21 @@ impl App {
         self.refresh_activity_journal();
     }
 
-    /// `f`: the court the cursor's card sits in, alone; `F` and Esc take it
+    /// `f`: the group the cursor's card sits in, alone; `F` and Esc take it
     /// off again.
-    pub(super) fn show_court_alone(&mut self) -> Vec<Effect> {
-        let Some(court) = self.desk.selected_court() else {
+    pub(super) fn show_group_alone(&mut self) -> Vec<Effect> {
+        let Some(group) = self.desk.selected_group() else {
             return Vec::new();
         };
-        self.set_court_filter(Some(court))
+        self.set_group_filter(Some(group))
     }
 
-    pub(super) fn set_court_filter(&mut self, court: Option<Court>) -> Vec<Effect> {
-        self.desk.filter = court;
+    pub(super) fn set_group_filter(&mut self, group: Option<Assignee>) -> Vec<Effect> {
+        self.desk.filter = group;
         self.reordered()
     }
 
-    /// `s`: the next order within each court.
+    /// `s`: the next order within each group.
     pub(super) fn cycle_desk_order(&mut self) -> Vec<Effect> {
         self.desk.order = self.desk.order.next();
         self.info(format!("desk order: {}", self.desk.order.label()));
@@ -274,7 +274,7 @@ impl App {
     }
 
     /// What the desk's list asks of the body: the id and the name whole,
-    /// as the table measures them over the library in view, the ball's
+    /// as the table measures them over the library in view, the next todo's
     /// minimum, the age and the active cell, and how many rows there are.
     pub fn desk_needs(&self) -> layout::TableNeeds {
         let (id_w, name_w) = self.library.widths;
@@ -285,7 +285,7 @@ impl App {
                 + 1
                 + name_w
                 + 1
-                + BALL_MIN
+                + NEXT_TODO_MIN
                 + 1
                 + AGE_CELL
                 + 1

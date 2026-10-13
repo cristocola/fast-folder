@@ -103,11 +103,11 @@ pub enum Entry {
     /// `fastf template new` / `fastf template edit <slug>`: the app, opened
     /// straight into the studio or the builder, so there is one editor.
     Studio { open: StudioEntry },
-    /// `fastf desk`: the app on its desk tab, with the court the flags cut
-    /// to, the order, a hat worn for the run, and whether to land on a
+    /// `fastf desk`: the app on its desk tab, with the group the flags cut
+    /// to, the order, a hat for this run only, and whether to land on a
     /// random card.
     Desk {
-        court: Option<crate::core::desk::Court>,
+        group: Option<crate::core::desk::Assignee>,
         order: Option<crate::core::desk::Order>,
         hat: Option<String>,
         random: bool,

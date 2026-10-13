@@ -65,11 +65,11 @@ fastf config set terminal none                   # never relaunch (fastf term st
 fastf config set agent claude
 fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
 
-# The hat worn: the owner whose court is yours. `fastf todo add --mine`
+# The hat: the owner name the desk lists as yours. `fastf todo add --mine`
 # assigns to it and the app's header shows it. `fastf hat sales` is the
-# short way; FASTF_HAT wears one for a shell without writing anything.
+# short way; FASTF_HAT sets it for one shell without writing the file.
 fastf config set hat sales
-fastf config set hat ""                          # wear none
+fastf config set hat ""                          # no hat
 
 # The app's palette. auto is Doom One wherever the terminal announces 24-bit
 # colour, and the sixteen ANSI colours elsewhere; pin one for a terminal that

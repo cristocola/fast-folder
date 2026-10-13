@@ -921,7 +921,7 @@ fn phase_line(theme: &Theme, name: &str, done: usize, total: usize, width: usize
 /// The markdown's own marker, which every terminal can draw. An
 /// open todo reads in the text colour — the accent is for focus,
 /// and a list of accented boxes is a list shouting — and a done
-/// one recedes with its text. Whose court it is in and its day sit
+/// one recedes with its text. Who it is assigned to and its day sit
 /// at the right, dim, the way a phase carries its count; the text
 /// was wrapped to leave them the room (`pane::todo_rows`).
 fn todo_first_line(

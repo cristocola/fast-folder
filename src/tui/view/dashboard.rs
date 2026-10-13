@@ -68,7 +68,7 @@ fn tabs_line(
                 },
             ));
         }
-        // The hat worn, after the tabs: whose court the desk opens on. It
+        // The hat, after the tabs: the owner name whose todos the desk lists as yours. It
         // goes with the tabs, since it says where you are as much as they do.
         if let Some(hat) = app.hat() {
             left.push(Span::raw(gap.to_string()));

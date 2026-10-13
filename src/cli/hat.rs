@@ -1,14 +1,16 @@
-//! `fastf hat` — the hat worn: the owner whose court is yours.
+//! `fastf hat`: print or set the hat, the owner name the desk and
+//! `todo add --mine` treat as yours.
 //!
 //! ```bash
-//! fastf hat                 # which hat, if any
-//! fastf hat sales           # wear one: @sales
-//! fastf hat --off           # wear none
+//! fastf hat                 # print the hat, if one is set
+//! fastf hat sales           # set it to @sales
+//! fastf hat --off           # unset it
 //! ```
 //!
 //! The hat is the `hat` configuration key, so `config show` prints it and the
 //! settings screen has its row; this is the short way to change it. `FASTF_HAT`
-//! wears one for a shell without writing anything, and wins while it is set.
+//! sets it for one shell without writing the config file, and wins while it
+//! is set.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -16,9 +18,10 @@ use colored::Colorize;
 use crate::core::config::Config;
 
 pub struct HatArgs {
-    /// The hat to wear, with or without its `@`. `None` prints the one worn.
+    /// The owner name to set, with or without its `@`. `None` prints the
+    /// current hat.
     pub name: Option<String>,
-    /// Take the hat off.
+    /// Unset the hat.
     pub off: bool,
 }
 
@@ -40,7 +43,7 @@ pub fn run(args: HatArgs) -> Result<()> {
                     println!("@{}  {}", hat.bold(), "(from $FASTF_HAT)".dimmed());
                 }
                 Some(hat) => println!("@{}", hat.bold()),
-                None => println!("{}", "no hat — `fastf hat <name>` wears one".dimmed()),
+                None => println!("{}", "no hat is set: `fastf hat <name>` sets one".dimmed()),
             }
         }
     }

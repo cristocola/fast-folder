@@ -35,7 +35,7 @@ pub enum MessageLevel {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Then {
     SortPick,
-    /// The picked value is the desk's order within each court.
+    /// The picked value is the desk's order within each group.
     DeskOrder,
     TemplateFilter,
     /// The picked value is a tag to add to these projects, or `NEW_TAG` to

@@ -1,17 +1,18 @@
-//! The desk: every project as one line, grouped by whose court its ball is
-//! in — what `fastf desk` prints and the app's desk tab shows.
+//! The desk: every project as one line, grouped by who its next open todo is
+//! assigned to. `fastf desk` prints it and the app's desk tab shows it.
 //!
-//! **The ball** is a project's first open todo in file order; **the court**
-//! is who holds it: the todo's `@owner`, nobody when it has none, and no
-//! court at all when nothing is planned. Grouped under their courts, with how
-//! long each project has been quiet, N projects are N lines — never every
-//! todo. Nothing here is inferred: the owner is on the line, the age is the
-//! file's and the folder's own time, and "active" is a program the operating
-//! system says is working in the folder.
+//! The **next todo** is the project's first open todo in file order. The
+//! **assignee** is who that todo is assigned to: the `@owner` at the end of
+//! its line, nobody when it has none, and no open todo at all when every todo
+//! is done. Each project is one line under its assignee, with how long since
+//! anything in the project was last written. Nothing here is inferred: the
+//! owner is on the todo's line, the age is the file's and the folder's own
+//! modification time, and "active" means the operating system reports a
+//! program whose working folder is inside the project.
 //!
 //! Pure: this module reads nothing and prints nothing. The command line and
-//! the app read the todos, the holders and the times and hand them in, so
-//! both group the same way.
+//! the app read the todos, the process table and the times and hand them in,
+//! so both group the same way.
 
 use std::cmp::Ordering;
 
@@ -20,72 +21,72 @@ use crate::core::library::Project;
 
 /// A project's first open todo, and where it sits in the file's list.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Ball {
+pub struct NextTodo {
     pub todo: Todo,
-    /// Its ordinal among the file's todos — what `fastf todo done` numbers
-    /// from one, so a reader can act on it.
+    /// Its position among the file's todos, from zero. `fastf todo done`
+    /// numbers the same list from one.
     pub index: usize,
 }
 
-/// Whose court a project's ball is in.
+/// Who a project's next open todo is assigned to.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Court {
-    /// Somebody's: the owner the ball names, without its `@`.
+pub enum Assignee {
+    /// The owner the todo names, without its `@`.
     Owner(String),
-    /// A ball nobody was named for — the one on top's, until handed off.
-    Unowned,
-    /// No open todo at all: add one, or close the project.
-    NothingPlanned,
+    /// The next open todo has no owner.
+    NoOwner,
+    /// Every todo is done, or there are none.
+    NoOpenTodo,
 }
 
-impl Court {
-    /// The heading a group wears: `your court` for the hat worn, `with
-    /// @claude` for anybody else's, and the two piles by name.
+impl Assignee {
+    /// The heading a group is listed under: `yours` for the hat, `@name` for
+    /// any other owner, `no owner`, `no open todos`.
     pub fn label(&self, hat: Option<&str>) -> String {
         match self {
-            Court::Owner(owner) if hat == Some(owner.as_str()) => "your court".to_string(),
-            Court::Owner(owner) => format!("with @{owner}"),
-            Court::Unowned => "unowned".to_string(),
-            Court::NothingPlanned => "nothing planned".to_string(),
+            Assignee::Owner(owner) if hat == Some(owner.as_str()) => "yours".to_string(),
+            Assignee::Owner(owner) => format!("@{owner}"),
+            Assignee::NoOwner => "no owner".to_string(),
+            Assignee::NoOpenTodo => "no open todos".to_string(),
         }
     }
 
-    /// The word `--json` says for the kind of court.
+    /// The word `--json` writes in the `group` field.
     pub fn kind(&self) -> &'static str {
         match self {
-            Court::Owner(_) => "owner",
-            Court::Unowned => "unowned",
-            Court::NothingPlanned => "nothing-planned",
+            Assignee::Owner(_) => "owner",
+            Assignee::NoOwner => "no-owner",
+            Assignee::NoOpenTodo => "no-open-todos",
         }
     }
 
-    /// The owner, for a court that has one.
+    /// The owner, when there is one.
     pub fn owner(&self) -> Option<&str> {
         match self {
-            Court::Owner(owner) => Some(owner),
+            Assignee::Owner(owner) => Some(owner),
             _ => None,
         }
     }
 
-    /// The one word a court is written down as — in the app's session file,
-    /// on its search bar: `@claude`, `unowned`, `nothing planned`.
+    /// The text the app's session file and its search bar use for one
+    /// assignee: `@claude`, `no owner`, `no open todos`.
     pub fn key(&self) -> String {
         match self {
-            Court::Owner(owner) => format!("@{owner}"),
-            Court::Unowned => "unowned".to_string(),
-            Court::NothingPlanned => "nothing planned".to_string(),
+            Assignee::Owner(owner) => format!("@{owner}"),
+            Assignee::NoOwner => "no owner".to_string(),
+            Assignee::NoOpenTodo => "no open todos".to_string(),
         }
     }
 
-    /// The court `key` names, or `None` for a word that names none.
-    pub fn parse_key(key: &str) -> Option<Court> {
+    /// The assignee `key` names, or `None` when it names none.
+    pub fn parse_key(key: &str) -> Option<Assignee> {
         let key = key.trim();
         if let Some(owner) = key.strip_prefix('@') {
-            return (!owner.is_empty()).then(|| Court::Owner(owner.to_string()));
+            return (!owner.is_empty()).then(|| Assignee::Owner(owner.to_string()));
         }
         match key {
-            "unowned" => Some(Court::Unowned),
-            "nothing planned" | "nothing-planned" => Some(Court::NothingPlanned),
+            "no owner" | "no-owner" => Some(Assignee::NoOwner),
+            "no open todos" | "no-open-todos" => Some(Assignee::NoOpenTodo),
             _ => None,
         }
     }
@@ -95,15 +96,16 @@ impl Court {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Card {
     pub project: Project,
-    pub ball: Option<Ball>,
+    pub next_todo: Option<NextTodo>,
     /// How many todos are open, and how many done.
     pub open: usize,
     pub done: usize,
-    /// When anything last wrote in the project, as a stamp: `touched`, or
-    /// the newest file under the folder when a walk has found it. `None`
-    /// where nothing could be read.
+    /// When anything in the project was last written, as a timestamp: the
+    /// newer of `PROJECT_INFO.md` and the folder, or the newest file under
+    /// the folder when a walk has found one. `None` where nothing could be
+    /// read.
     pub quiet_since: Option<String>,
-    /// Programs the operating system says are working in the folder, by
+    /// Programs the operating system reports as working in the folder, by
     /// name, each once.
     pub active: Vec<String>,
 }
@@ -117,17 +119,18 @@ impl Card {
         active: Vec<String>,
         quiet_since: Option<String>,
     ) -> Self {
-        let ball = todos
-            .iter()
-            .enumerate()
-            .find(|(_, todo)| !todo.done)
-            .map(|(index, todo)| Ball {
-                todo: todo.clone(),
-                index,
-            });
+        let next_todo =
+            todos
+                .iter()
+                .enumerate()
+                .find(|(_, todo)| !todo.done)
+                .map(|(index, todo)| NextTodo {
+                    todo: todo.clone(),
+                    index,
+                });
         Self {
             project,
-            ball,
+            next_todo,
             open: todos.iter().filter(|todo| !todo.done).count(),
             done: todos.iter().filter(|todo| todo.done).count(),
             quiet_since,
@@ -135,38 +138,38 @@ impl Card {
         }
     }
 
-    /// Whose court the ball is in.
-    pub fn court(&self) -> Court {
-        match &self.ball {
-            None => Court::NothingPlanned,
-            Some(ball) => match &ball.todo.owner {
-                Some(owner) => Court::Owner(owner.clone()),
-                None => Court::Unowned,
+    /// Who the next open todo is assigned to.
+    pub fn assignee(&self) -> Assignee {
+        match &self.next_todo {
+            None => Assignee::NoOpenTodo,
+            Some(next) => match &next.todo.owner {
+                Some(owner) => Assignee::Owner(owner.clone()),
+                None => Assignee::NoOwner,
             },
         }
     }
 
-    /// The ball as one line: `Post · colour grade`, the phase before the
-    /// text when it has one; empty with nothing planned.
-    pub fn ball_line(&self, sep: &str) -> String {
-        match &self.ball {
+    /// The next todo as one line: `Post · colour grade`, the phase before
+    /// the text when it has one; empty when there is no open todo.
+    pub fn next_todo_line(&self, sep: &str) -> String {
+        match &self.next_todo {
             None => String::new(),
-            Some(ball) => match &ball.todo.phase {
-                Some(phase) => format!("{phase}{sep}{}", ball.todo.text),
-                None => ball.todo.text.clone(),
+            Some(next) => match &next.todo.phase {
+                Some(phase) => format!("{phase}{sep}{}", next.todo.text),
+                None => next.todo.text.clone(),
             },
         }
     }
 }
 
-/// How the cards under one court are ordered.
+/// How the cards under one assignee are ordered.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Order {
-    /// Stalest first: the longest since anything wrote in the project, which
-    /// is what makes a decision. A project with no time at all comes last.
+    /// The project nothing has written in for the longest comes first. A
+    /// project with no known time comes last.
     #[default]
     Quiet,
-    /// Most recently written first.
+    /// The most recently written project comes first.
     Recent,
     /// By folder name.
     Name,
@@ -195,8 +198,8 @@ impl Order {
     /// What the order means, for a picker's second column.
     pub fn detail(self) -> &'static str {
         match self {
-            Order::Quiet => "the longest since anything wrote in the project first",
-            Order::Recent => "the most recently written first",
+            Order::Quiet => "the project nothing has written in for the longest first",
+            Order::Recent => "the most recently written project first",
             Order::Name => "by folder name",
             Order::Id => "the highest ID first",
         }
@@ -226,26 +229,26 @@ impl Order {
     }
 }
 
-/// The cards under one court, in order.
+/// The cards under one assignee, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Group {
-    pub court: Court,
+    pub assignee: Assignee,
     pub cards: Vec<Card>,
 }
 
-/// Every card under its court, the courts in the order the desk shows
-/// them: the hat's own first when one is worn, then `unowned` — the one on
-/// top's pile until handed off, and first of all when no hat is worn — then
-/// the other owners by how many projects each holds, then what has nothing
-/// planned. A court with no card is not listed.
+/// Every card under its assignee, the groups in the order the desk shows
+/// them: the hat's own group first when a hat is set, then the todos with no
+/// owner (first of all when no hat is set), then the other owners by how
+/// many projects each has, then the projects with no open todo. A group
+/// with no card is not listed.
 pub fn group(cards: Vec<Card>, hat: Option<&str>, order: Order) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     for card in cards {
-        let court = card.court();
-        match groups.iter_mut().find(|group| group.court == court) {
+        let assignee = card.assignee();
+        match groups.iter_mut().find(|group| group.assignee == assignee) {
             Some(group) => group.cards.push(card),
             None => groups.push(Group {
-                court,
+                assignee,
                 cards: vec![card],
             }),
         }
@@ -254,11 +257,11 @@ pub fn group(cards: Vec<Card>, hat: Option<&str>, order: Order) -> Vec<Group> {
         group.cards.sort_by(|a, b| order.compare(a, b));
     }
     let rank = |group: &Group| -> (u8, usize, String) {
-        match &group.court {
-            Court::Owner(owner) if hat == Some(owner.as_str()) => (0, 0, String::new()),
-            Court::Unowned => (1, 0, String::new()),
-            Court::Owner(owner) => (2, usize::MAX - group.cards.len(), owner.clone()),
-            Court::NothingPlanned => (3, 0, String::new()),
+        match &group.assignee {
+            Assignee::Owner(owner) if hat == Some(owner.as_str()) => (0, 0, String::new()),
+            Assignee::NoOwner => (1, 0, String::new()),
+            Assignee::Owner(owner) => (2, usize::MAX - group.cards.len(), owner.clone()),
+            Assignee::NoOpenTodo => (3, 0, String::new()),
         }
     };
     groups.sort_by_key(rank);
@@ -266,8 +269,8 @@ pub fn group(cards: Vec<Card>, hat: Option<&str>, order: Order) -> Vec<Group> {
 }
 
 /// How long since `since`, as a person reads it beside a line: `20 min`,
-/// `6 h`, `12 d`, `3 mo`; `now` is handed in so a test can fix it, and a
-/// stamp that will not parse reads as its first ten characters, the day.
+/// `6 h`, `12 d`, `3 mo`. `now` is handed in so a test can fix it, and a
+/// timestamp that will not parse reads as its first ten characters, the day.
 pub fn age_label(since: &str, now: &str) -> String {
     let (Ok(since), Ok(now)) = (
         chrono::DateTime::parse_from_rfc3339(since),
@@ -288,7 +291,7 @@ pub fn age_label(since: &str, now: &str) -> String {
 }
 
 /// Whether `since` is at least `days` days before `now`: the `--quiet`
-/// cut. A card with no time at all is not quiet; it is unknown.
+/// filter. A card with no known time does not count as quiet.
 pub fn quiet_for_days(since: Option<&str>, now: &str, days: u64) -> bool {
     let (Some(since), Ok(now)) = (
         since.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()),
@@ -301,20 +304,20 @@ pub fn quiet_for_days(since: Option<&str>, now: &str, days: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// A court written down reads back as itself, and a word that names
+    /// An assignee written down reads back as itself, and a word that names
     /// none is nothing rather than a guess.
     #[test]
-    fn a_court_round_trips_through_its_key() {
-        use super::Court;
-        for court in [
-            Court::Owner("claude".to_string()),
-            Court::Unowned,
-            Court::NothingPlanned,
+    fn an_assignee_round_trips_through_its_key() {
+        use super::Assignee;
+        for assignee in [
+            Assignee::Owner("claude".to_string()),
+            Assignee::NoOwner,
+            Assignee::NoOpenTodo,
         ] {
-            assert_eq!(Court::parse_key(&court.key()), Some(court));
+            assert_eq!(Assignee::parse_key(&assignee.key()), Some(assignee));
         }
-        assert_eq!(Court::parse_key("@"), None);
-        assert_eq!(Court::parse_key("somewhere"), None);
+        assert_eq!(Assignee::parse_key("@"), None);
+        assert_eq!(Assignee::parse_key("somewhere"), None);
     }
 
     use super::*;
@@ -354,10 +357,10 @@ mod tests {
         )
     }
 
-    /// The ball is the first open todo in file order, whatever is ticked
-    /// above it; a list with every todo done has nothing planned.
+    /// The next todo is the first open todo in file order, whatever is
+    /// ticked above it; a list with every todo done has no open todo.
     #[test]
-    fn the_ball_is_the_first_open_todo() {
+    fn the_next_todo_is_the_first_open_todo() {
         let c = card(
             "ID0001",
             &[
@@ -368,24 +371,27 @@ mod tests {
             None,
         );
         assert_eq!(
-            c.ball.as_ref().map(|b| (b.index, b.todo.text.as_str())),
+            c.next_todo
+                .as_ref()
+                .map(|n| (n.index, n.todo.text.as_str())),
             Some((1, "grade"))
         );
-        assert_eq!(c.court(), Court::Owner("claude".to_string()));
+        assert_eq!(c.assignee(), Assignee::Owner("claude".to_string()));
         assert_eq!((c.open, c.done), (2, 1));
         let c = card("ID0002", &[todo(true, "shoot", None)], None);
-        assert_eq!(c.court(), Court::NothingPlanned);
-        assert_eq!(c.ball_line(" · "), "");
+        assert_eq!(c.assignee(), Assignee::NoOpenTodo);
+        assert_eq!(c.next_todo_line(" · "), "");
         let c = card("ID0003", &[todo(false, "deliver", None)], None);
-        assert_eq!(c.court(), Court::Unowned);
+        assert_eq!(c.assignee(), Assignee::NoOwner);
     }
 
-    /// Yours first when a hat is worn, then unowned, then the other owners
-    /// by how many projects each holds, then nothing planned; without a
-    /// hat the unowned pile leads. Within a court the stalest comes first,
-    /// and a card with no time at all last.
+    /// The hat's group first when a hat is set, then the todos with no owner,
+    /// then the other owners by how many projects each has, then the projects
+    /// with no open todo; without a hat the todos with no owner come first.
+    /// Within a group the project written in longest ago comes first, and a
+    /// card with no known time last.
     #[test]
-    fn courts_are_ordered_for_the_one_on_top() {
+    fn groups_are_ordered_by_assignee() {
         let cards = vec![
             card(
                 "ID0001",
@@ -417,36 +423,24 @@ mod tests {
         let groups = group(cards.clone(), Some("sales"), Order::Quiet);
         let labels: Vec<String> = groups
             .iter()
-            .map(|g| g.court.label(Some("sales")))
+            .map(|g| g.assignee.label(Some("sales")))
             .collect();
         assert_eq!(
             labels,
-            [
-                "your court",
-                "unowned",
-                "with @claude",
-                "with @acme",
-                "nothing planned"
-            ]
+            ["yours", "no owner", "@claude", "@acme", "no open todos"]
         );
         let claude: Vec<&str> = groups[2]
             .cards
             .iter()
             .map(|c| c.project.id.as_str())
             .collect();
-        assert_eq!(claude, ["ID0004", "ID0001"], "stalest first");
+        assert_eq!(claude, ["ID0004", "ID0001"], "written in longest ago first");
 
         let groups = group(cards, None, Order::Quiet);
-        let labels: Vec<String> = groups.iter().map(|g| g.court.label(None)).collect();
+        let labels: Vec<String> = groups.iter().map(|g| g.assignee.label(None)).collect();
         assert_eq!(
             labels,
-            [
-                "unowned",
-                "with @claude",
-                "with @acme",
-                "with @sales",
-                "nothing planned"
-            ]
+            ["no owner", "@claude", "@acme", "@sales", "no open todos"]
         );
         assert_eq!(Order::Quiet.next(), Order::Recent);
         assert_eq!(Order::parse("Name"), Some(Order::Name));

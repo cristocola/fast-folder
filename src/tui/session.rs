@@ -55,10 +55,10 @@ pub struct Session {
     /// a bare `fastf` opens there again. Absent is the library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<String>,
-    /// The court the desk showed alone (`Court::key`), if one.
+    /// The group the desk showed alone (`Assignee::key`), if one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desk_court: Option<String>,
-    /// The desk's order within a court (`Order::label`); absent is `quiet`.
+    pub desk_group: Option<String>,
+    /// The desk's order within a group (`Order::label`); absent is `quiet`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desk_order: Option<String>,
     /// When a run that had the desk on screen last ended: the journal page
@@ -140,7 +140,7 @@ impl Session {
             session.tab = (app.screen == crate::tui::app::Screen::Desk)
                 .then(|| crate::tui::app::Screen::Desk.label().to_string());
         }
-        session.desk_court = app.desk.filter.as_ref().map(|court| court.key());
+        session.desk_group = app.desk.filter.as_ref().map(|group| group.key());
         session.desk_order = (app.desk.order != crate::core::desk::Order::default())
             .then(|| app.desk.order.label().to_string());
         // The desk was looked at this run: the next run's journal rules at
@@ -151,11 +151,11 @@ impl Session {
         session
     }
 
-    /// The court the desk showed alone, if the session names one.
-    pub fn desk_court(&self) -> Option<crate::core::desk::Court> {
-        self.desk_court
+    /// The group the desk showed alone, if the session names one.
+    pub fn desk_group(&self) -> Option<crate::core::desk::Assignee> {
+        self.desk_group
             .as_deref()
-            .and_then(crate::core::desk::Court::parse_key)
+            .and_then(crate::core::desk::Assignee::parse_key)
     }
 
     /// The desk's order, if the session names a real one.
@@ -203,15 +203,15 @@ mod tests {
             bases_view: Some("active".to_string()),
             inactive_bases: vec!["/mnt/projects/archive".to_string()],
             tab: Some("desk".to_string()),
-            desk_court: Some("@claude".to_string()),
+            desk_group: Some("@claude".to_string()),
             desk_order: Some("name".to_string()),
             desk_seen_at: Some("2026-10-12T18:30:00Z".to_string()),
         };
         let text = toml::to_string(&session).unwrap();
         assert_eq!(Session::parse(&text).unwrap(), session);
         assert_eq!(
-            session.desk_court(),
-            Some(crate::core::desk::Court::Owner("claude".to_string()))
+            session.desk_group(),
+            Some(crate::core::desk::Assignee::Owner("claude".to_string()))
         );
         assert_eq!(session.desk_order(), Some(crate::core::desk::Order::Name));
         assert_eq!(session.sort_order(), Some(Sort::new(Order::Name)));

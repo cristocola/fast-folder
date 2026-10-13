@@ -28,10 +28,10 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf journal` | Every dated note across every project, newest first |
-| `fastf desk` | The guided app on its desk tab: every project, one line each, by whose court the ball is in (`--plain` for a list) |
-| `fastf peek <query>` | What is going on in a project, without opening it |
+| `fastf desk` | Every project as one line, grouped by who its next open todo is assigned to. On a terminal it opens the guided app on its desk tab; `--plain` prints the list |
+| `fastf peek <query>` | A short summary of one project: next todo, todo counts, programs working in it, newest file, git head, last note |
 | `fastf todo list/add/done/edit/remove/owner <id>` | A project's task list |
-| `fastf hat [name]` | The hat worn — the owner whose court is yours — or wear another |
+| `fastf hat [name]` | Print or set the hat: the owner name the desk lists as yours and `todo add --mine` assigns to |
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf desc <query> [text]` | Show or set a project's one-line description |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
@@ -254,11 +254,12 @@ it does for a note in `$EDITOR` and coming back when the agent exits — the
 pane re-reads the file, so what the agent ticked and noted is there. Without
 an `agent` configured both verbs say so, and with no display `x` does.
 
-What fastf does **not** do is run the agent for you: no registry of agents,
-no polling, no transcript. The folder's trace is the agent's status — the
-todos it ticked, the notes it wrote, what it changed — and fastf reads the
-trace. An agent that leaves none is a matter for its own prompt;
-`FASTF_PROJECT_PATH` and the raw `PROJECT_INFO.md` are all it needs.
+fastf does **not** run or supervise the agent: it keeps no list of agents,
+polls no process and records no transcript. What the agent did is read from
+the folder afterwards: the todos it ticked, the notes it wrote, the files it
+changed. An agent that writes none of these leaves nothing for fastf to show,
+which its own prompt has to fix; `FASTF_PROJECT_PATH` and the raw
+`PROJECT_INFO.md` are all it needs.
 
 ### Ambiguous queries
 
@@ -482,13 +483,13 @@ the word, case-insensitively, which is how a `lesson:` written months ago is
 read again. Undated notes — the free text above the first entry, and a line
 whose "timestamp" is not a date — have no place on a timeline and are left out.
 
-**`--todos` puts the todos' events on the timeline** by their own dates: every
-todo ticked, where its `done:` stamp says it was, its owner after its text —
-which is how a morning reads what the agents finished — and with `--todos
-all` every todo added too, by its `added:`. A column before the text says
-which each entry is (`done`, `added`; a note's is blank), and `--since` and
-`--grep` apply to them as to a note. A todo a hand ticked without a stamp has
-no date to stand on and is left out, as an undated note is.
+**`--todos` adds the todo events to the timeline** by their own dates: every
+ticked todo at the time its `done:` stamp names, with its owner after its
+text. This is how you read in the morning what the agents finished overnight.
+`--todos all` also lists every added todo, by its `added:` stamp. A column
+before the text says what each entry is (`done`, `added`; a note's is blank),
+and `--since` and `--grep` apply to them as to a note. A todo ticked by hand
+without a stamp has no date and is left out, as an undated note is.
 
 `--json` prints a bare array, one object per entry: `id`, `name`, `path`,
 `timestamp`, `text` and `kind` — `note`, `done` or `added`; without `--todos`
@@ -497,78 +498,75 @@ every row is a `note`.
 ## The desk
 
 ```bash
-fastf desk                        # every project, one line each, by court
-fastf desk --mine                 # the hat's court alone
-fastf desk --as sales             # wear a hat for this run
-fastf desk --owner claude         # what @claude holds
-fastf desk --unowned              # the pile to assign from
-fastf desk --nothing-planned      # the projects with no open todo
-fastf desk --quiet 7              # nothing written for a week
-fastf desk --random               # pick me one
+fastf desk                        # every project, one line each, grouped by assignee
+fastf desk --mine                 # only the projects whose next todo is assigned to the hat
+fastf desk --as sales             # use @sales as the hat for this run
+fastf desk --owner claude         # only the projects whose next todo is assigned to @claude
+fastf desk --no-owner             # only the projects whose next todo has no owner
+fastf desk --no-open-todos        # only the projects with no open todo
+fastf desk --quiet 7              # only the projects nothing has written in for a week
+fastf desk --random               # one project, picked at random
 fastf desk --order name           # quiet (the default), recent, name or id
 fastf desk --template music-video --tag client/Acme --base projects
 fastf desk --json
 ```
 
-The overseer's question is not "what are all my todos" but **what is waiting
-on me, what is moving without me, and what has gone quiet**. The desk answers
-it with one line per project — never every todo — grouped by whose court the
-project's **ball** is in. The ball is the project's first open todo in file
-order; the court is its owner: your own hat, an agent you handed it to,
-somebody you are waiting on. A ball nobody was named for is **unowned** — the
-one on top's, until handed off — and a project with no open todo at all has
-**nothing planned**: add one, or close it.
+The desk lists every project as one line and groups the lines by who the
+project's next open todo is assigned to. The next open todo is the first
+unticked todo in the file, in file order. Its owner is the `@name` at the end
+of the todo's line. A project whose next todo has no `@name` is under
+`no owner`. A project with no unticked todo at all is under `no open todos`.
+Only one todo per project is listed, never the whole list.
 
 ```
-  your court · 2
+  yours · 2
     ID0247  2026-09-01_Client_Acme_ID0247   Post · send the invoice           4 d
     ID0231  2026-08-14_Spring_Campaign      sign off the treatment            1 d
-  unowned · 1
+  no owner · 1
     ID0212  2026-05-02_Tax_2026              gather the receipts              31 d
-  with @claude · 2
+  @claude · 2
     ID0248  2026-09-01_Lullaby_Remix         Main Edit · cut the first minute  2 h  active: claude
     ID0240  2026-08-20_Api_Rewrite           migrate the auth tables           3 d
-  nothing planned · 4
+  no open todos · 4
 ```
 
-The courts come in the order the one on top reads them: yours first when a hat
-is worn (`fastf hat`, or `--as` for one run), then `unowned`, then the other
-owners by how many balls each holds, then what has nothing planned; with no hat
-worn the unowned pile leads, so a library that never named an owner lands whole
-on the desk. Within a court the **stalest project comes first** — the longest
-since anything wrote in it, which is what makes a decision; `--order recent`,
-`name` or `id` reorder it. The column after the ball is how long the project
-has been quiet (`touched`: the newer of its `PROJECT_INFO.md` and its folder),
-and **`active: claude`** says a program with that name is working in the folder
-right now — on Linux, read from the process table, a fact and not a guess; on
-other systems the column is absent. The desk never asks for a due date and
-never computes one: a commitment with a date belongs to your calendar; the age
-of a ball in a court is the thing a calendar cannot tell you.
+The groups come in this order: `yours` first when a hat is set (`fastf hat`,
+or `--as` for one run), then `no owner`, then the other owners, the one with
+the most projects first, then `no open todos`. With no hat set, `no owner`
+comes first, so a library that never named an owner is listed whole. Within a
+group, the project nothing has written in for the longest comes first;
+`--order recent`, `name` or `id` change that. The column after the todo is how
+long the project has been quiet, counted from `touched` (the newer of its
+`PROJECT_INFO.md` and its folder). `active: claude` means a program with that
+name has its working folder inside the project right now. On Linux this is
+read from the process table; on other systems the column is absent. The desk
+has no due dates: it shows how long a todo has waited, and your calendar holds
+the dates.
 
-The cuts each show one court, or less: `--mine`, `--owner`, `--unowned` and
-`--nothing-planned` (one of them at a time), `--quiet N` for the projects
-nothing has written in for N days, and `--random`, which picks one line from
-what the cuts leave — the one thing that beats a stalled eye. `--template`,
-`--tag` and `--base` choose the projects as `recent`'s do. A hidden project is
-a project in a base you took out of `bases`; there is no state to set.
+Each of `--mine`, `--owner`, `--no-owner` and `--no-open-todos` shows one
+group alone, and only one of them can be passed. `--quiet N` keeps the
+projects nothing has written in for N days. `--random` picks one line from
+what the other flags leave. `--template`, `--tag` and `--base` choose the
+projects as `recent`'s do. A project in a base you removed from `bases` is not
+listed; there is no hidden state to set on a project.
 
 **On a terminal, `fastf desk` opens the [guided app](app.md#the-desk) on its
-desk tab**, where the same lines are live — the pane beside them, every verb
-on them, the records re-read as agents tick things — carrying the court the
-flags cut to, the order, a hat worn with `--as`, and `--random` as the key
-`z`. The list stays in the terminal when stdout is a pipe, with `--plain` or
-`--json`, and with a cut the tab has no key for: `--quiet`, `--template`,
-`--tag` and `--base`. From a desktop launcher it opens a terminal window for
-itself, as the app does.
+desk tab.** The tab shows the same lines, with the pane beside them, every
+project verb on them, and the files re-read as todos are ticked. The flags
+carry over: the group shown alone, the order, the hat from `--as`, and
+`--random` as the key `z`. The list is printed instead when stdout is a pipe,
+with `--plain` or `--json`, and with a flag the tab has no key for:
+`--quiet`, `--template`, `--tag` and `--base`. From a desktop launcher it
+opens a terminal window for itself, as the app does.
 
-What it reads: every project's `PROJECT_INFO.md`, several at once on a network
-base, so a library of a hundred is a hundred reads and no more. A file fastf
-cannot read is a project with nothing planned, named once by the warning every
-walk of the library gives. `--json` prints one object per project: `id`,
-`name`, `path`, `base_label`, `court` (`owner`, `unowned`, `nothing-planned`),
-`owner`, `ball` (`number` — the one `fastf todo done` takes — `text`, `phase`,
-`owner`, `added`) or `null`, `open`, `done`, `quiet_since`, `quiet_for` and
-`active`.
+What it reads: every project's `PROJECT_INFO.md`, several at once on a
+network base, so a library of a hundred projects is a hundred reads and no
+more. A file fastf cannot read is listed under `no open todos`, and the
+warning every walk of the library gives names it once. `--json` prints one
+object per project: `id`, `name`, `path`, `base_label`, `group` (`owner`,
+`no-owner` or `no-open-todos`), `owner`, `next_todo` (`number`, the one
+`fastf todo done` takes, `text`, `phase`, `owner`, `added`) or `null`,
+`open`, `done`, `quiet_since`, `quiet_for` and `active`.
 
 ### Peek
 
@@ -577,16 +575,16 @@ fastf peek ID0047
 fastf peek lullaby
 ```
 
-What a hand reaches for when it opens a project's folder to see what is going
-on, read from the folder itself:
+A short summary of one project, read from its folder, so you do not have to
+open the folder to see what is going on:
 
 ```
   → ID0248 2026-09-01_Lullaby_Remix_ID0248
     /mnt/projects/2026-09-01_Lullaby_Remix_ID0248
     A Fiverr music video: treatment approved, shoot booked
 
-  ball        Main Edit · cut the first minute  (with @claude)  added 2026-10-12  todo 3
-  todos       3 open · 1 done · with @claude 2 · unowned 1
+  next todo   Main Edit · cut the first minute  (@claude)  added 2026-10-12  todo 3
+  todos       3 open · 1 done · @claude 2 · no owner 1
   working     claude (pid 4242), bash (pid 11201)
   last moved  02_Edit/cut_v03.prproj  2026-10-13T09:41:05Z
   head        main @ a1b2c3d  Rough cut of the first minute  2026-10-13T09:40:12Z
@@ -594,18 +592,19 @@ on, read from the folder itself:
   quiet for   2 h  since 2026-10-13T09:41:05Z
 ```
 
-`ball` is the first open todo and whose court it is in, with the number
-`fastf todo done` takes; `working` is who has their working folder in the
-project right now (Linux; `nobody` otherwise); `last moved` is the newest
-file under the folder, found by one walk of it — the honest "quiet for", since
-`touched` sees only the top level and the walk sees the tree; a folder whose
-name starts with a dot (`.git`, `.venv`) is bookkeeping and never what last
-moved, so a commit does not name `.git/index` over the file that was worked
-on; `head` is the
-repository's branch and last commit, read from `.git/HEAD` and the reflog as
-files — no `git` is started — and absent when the folder is not a repository;
-`last note` is the newest dated note. `fastf show` is everything fastf knows
-about a project; `peek` is the glance.
+`next todo` is the first unticked todo, its owner, and the number `fastf todo
+done` takes. `todos` counts the open and done todos, and how many open ones
+each owner has. `working` lists the programs whose working folder is inside
+the project right now (Linux; `nobody` on other systems). `last moved` is the
+newest file under the folder, found by one walk of it. `touched` only looks
+at the top level, so this walk is the more accurate "quiet for". A folder
+whose name starts with a dot (`.git`, `.venv`) is skipped, so a commit does
+not name `.git/index` over the file you worked on. `head` is the repository's
+branch and last commit, read from `.git/HEAD` and the reflog as files; no
+`git` process is started, and the row is absent when the folder is not a
+repository. `last note` is the newest dated note. `fastf show` prints
+everything fastf knows about a project; `peek` prints what changed and what
+is next.
 
 ## Registering existing folders
 
@@ -912,12 +911,12 @@ fastf todo list ID0047                            # the list, numbered
 fastf todo list ID0047 --open                     # only what is left
 fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
-fastf todo add ID0047 "cut @claude"               # in @claude's court
+fastf todo add ID0047 "cut @claude"               # assigned to @claude
 fastf todo add ID0047 "cut" --owner claude        # the same, as a flag
-fastf todo add ID0047 "call the label" --mine     # in the hat's court
-fastf todo owner ID0047 3                         # whose court number 3 is in
-fastf todo owner ID0047 3 acme                    # hand it to @acme
-fastf todo owner ID0047 3 --none                  # to nobody
+fastf todo add ID0047 "call the label" --mine     # assigned to the hat
+fastf todo owner ID0047 3                         # print who number 3 is assigned to
+fastf todo owner ID0047 3 acme                    # assign it to @acme
+fastf todo owner ID0047 3 --none                  # remove the owner
 fastf todo done ID0047 3                          # tick number 3
 fastf todo done ID0047 3 --undo                   # untick it again
 fastf todo edit ID0047 3 "grade the colour"       # reword number 3
@@ -928,32 +927,35 @@ Todos live under a `## Todo` heading in the project's `PROJECT_INFO.md`, as
 `- [ ] text` and `- [x] text`, in any indent. The app's detail pane shows the
 same list and toggles it with Enter.
 
-**A todo carries whose court it is in, and its dates**, at the end of its
-line, after the task:
+**A todo's owner and its dates are at the end of its line**, after the task:
 
 ```markdown
 - [ ] cut the first minute @claude added:2026-10-12T14:02:11Z
 - [x] shoot @sales added:2026-09-20T10:00:00Z done:2026-09-28T18:30:00Z
 ```
 
-`@claude` is the **owner**: who the ball is with — an agent you handed the
-todo to, a hat of your own, a client whose answer you are waiting on. `add`
-stamps `added:` with the moment of the write, `done` stamps `done:` and
-`--undo` takes it off again; `edit` rewords the text and leaves all three
-where they were. The owner is a trailing `@name` in the text you type,
-`--owner`, or `--mine` for the hat you wear (`fastf hat`); nothing is assigned
-in silence, so a todo you type is nobody's until you say whose. `owner` prints
-a todo's court, hands it over, or takes it away with `--none`. An owner is one
-word, by the rule a tag keeps. `list` shows the owner and the day — added, or
-done once it is — in two columns after the text, and leaves both out of a list
-that has neither.
+`@claude` is the **owner**: the person, agent or client the todo is assigned
+to. `add` writes `added:` with the time of the write; `done` writes `done:`
+and `--undo` removes it; `edit` replaces the text and leaves all three where
+they were. To assign a todo, end the text you type with `@name`, pass
+`--owner`, or pass `--mine` to assign it to the hat (`fastf hat`). A todo
+without any of these has no owner. `owner` prints a todo's owner, assigns it
+to someone else, or removes the owner with `--none`. An owner is one word, by
+the rule a tag keeps. `list` shows the owner and the day (added, or done once
+it is) in two columns after the text, and leaves both out of a list that has
+neither.
 
-A todo a hand wrote without any of it is a todo with no owner and no dates,
-and stays so: fastf never fills in what it does not know. The reader takes the
-tokens in any order and any case, reads a day (`added:2026-10-12`) as well as
-a stamp, treats a `@word` in the middle of the text as text, and takes the
-first owner of the run when a line names two. A file an older fastf reads
-shows the tokens as the end of the text, which is the accepted cost.
+**The owner is read from the end of the line only.** fastf takes the run of
+`@name`, `added:` and `done:` tokens at the end of the line as the todo's
+record and everything before it as the text. A `@word` in the middle of the
+text stays text, so a todo that mentions an address or a handle is not
+assigned to it. When two `@names` end the line, the first is the owner.
+
+A todo written by hand without any of these tokens has no owner and no
+dates, and stays that way: fastf never fills in what it does not know. The
+reader takes the tokens in any order and any case, and reads a day
+(`added:2026-10-12`) as well as a full stamp. An older fastf reads the tokens
+as the end of the text, which is the accepted cost.
 
 A `###` line inside the section is a **phase**: every task under it belongs to
 it, until the next one.
@@ -996,19 +998,19 @@ when the last task under it goes, because the label is a line of your own.
 ## The hat
 
 ```bash
-fastf hat                        # which hat is worn
-fastf hat sales                  # wear @sales
-fastf hat --off                  # wear none
-FASTF_HAT=technician fastf …     # one shell's hat, written nowhere
+fastf hat                        # print the hat
+fastf hat sales                  # set it to @sales
+fastf hat --off                  # unset it
+FASTF_HAT=technician fastf …     # the hat for one shell, written nowhere
 ```
 
-A hat is an owner's name: `@sales` when you talk to people, `@technician`
-when you edit. Wearing one, `fastf todo add --mine` assigns to it and the app's
-header shows it after the tabs. It is the `hat` configuration key, so
-`config show` prints it and the settings screen has its row; `FASTF_HAT` wears
-one for a shell without writing anything, and wins while it is set, so one
-terminal can wear a hat and the next another. The hat never changes what a
-file says.
+The hat is an owner name, for example `@sales`. When it is set, the desk
+lists the todos assigned to that name under `yours`, `fastf todo add --mine`
+assigns new todos to it, and the app's header shows it after the tabs. It is
+the `hat` configuration key, so `config show` prints it and the settings
+screen has its row. `FASTF_HAT` sets it for one shell without writing the
+config file, and wins while it is set, so two terminals can use two different
+hats. The hat never changes what a file says.
 
 ## Templates
 

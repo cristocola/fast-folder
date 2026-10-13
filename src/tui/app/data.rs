@@ -58,7 +58,7 @@ pub struct Prefs {
     /// Whether a create shows its plan and waits for a yes.
     pub confirm_create: bool,
     pub register_naming_pattern: String,
-    /// The hat worn (`Config::resolve_hat`), which the header shows.
+    /// The hat (`Config::resolve_hat`), which the header shows.
     pub hat: Option<String>,
     /// The agent's shell line (`Config::resolve_agent`), which the agent
     /// verbs need to be offered at all.
@@ -77,7 +77,7 @@ pub struct Settings {
     pub bases: Vec<String>,
     pub editor: String,
     pub terminal: String,
-    /// The hat worn, as the key holds it: an owner's name, or empty.
+    /// The hat, as the key holds it: an owner's name, or empty.
     pub hat: String,
     /// The agent's shell line, as the key holds it, or empty.
     pub agent: String,

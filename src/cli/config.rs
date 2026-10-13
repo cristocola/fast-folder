@@ -108,7 +108,7 @@ fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: St
         ) {
             (Some(hat), true) => format!("@{hat} (from $FASTF_HAT)"),
             (Some(hat), false) => format!("@{hat}"),
-            (None, _) => "(none — `fastf hat <name>` wears one)".to_string(),
+            (None, _) => "(none: `fastf hat <name>` sets one)".to_string(),
         }
     );
 }
@@ -418,7 +418,7 @@ fn set_hat(config: &mut Config, value: &str) -> Result<String> {
     let value = value.strip_prefix('@').unwrap_or(value);
     if value.is_empty() {
         config.hat = String::new();
-        return Ok("Set hat = (none)  — no court is yours until you wear one".to_string());
+        return Ok("Set hat = (none)  — no todo counts as yours until a hat is set".to_string());
     }
     let owner = crate::core::validated::Owner::parse(value)?;
     config.hat = owner.into_string();

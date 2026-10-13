@@ -94,7 +94,7 @@ pub enum Focus {
 ///
 /// **A tab, not a dialog**: a tab keeps its place, and the templates are a
 /// place to work, with their counts, a filter box of their own and their
-/// verbs. The desk is the library read by whose court each project's ball
+/// verbs. The desk is the library grouped by who each project's next todo
 /// is in; its pane is the library's pane.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Screen {
@@ -272,14 +272,14 @@ pub struct App {
     pane_seek: Option<pane::PaneSection>,
     pub focus: Focus,
     pub screen: Screen,
-    /// The desk tab's rows, cursor, court and order.
+    /// The desk tab's rows, cursor, group filter and order.
     pub desk: desk::DeskState,
     /// Who is working in which project, by name, from the last pass over
     /// the process table — for every project when the desk asked, for the
     /// selected one while the pane shows it. A project with no entry has not
     /// been asked about; one with an empty list has nobody in it.
     pub working: HashMap<PathBuf, Vec<String>>,
-    /// A hat worn for this run alone (`fastf desk --as`), over the
+    /// A hat for this run alone (`fastf desk --as`), used instead of the
     /// configured one.
     pub hat_override: Option<String>,
     /// Whether the desk has been on screen this run: the session then
@@ -472,12 +472,12 @@ impl App {
             }
             Entry::Studio { open } => app.studio_entry = Some(open),
             Entry::Desk {
-                court,
+                group,
                 order,
                 hat,
                 random,
             } => {
-                app.desk.filter = court;
+                app.desk.filter = group;
                 if let Some(order) = order {
                     app.desk.order = order;
                 }
@@ -490,8 +490,8 @@ impl App {
         app
     }
 
-    /// The hat worn: the one this run was given, else the configured one
-    /// once the summary has read it.
+    /// The hat: the one this run was given, else the configured one once
+    /// the summary has read it.
     pub fn hat(&self) -> Option<String> {
         self.hat_override.clone().or_else(|| {
             self.summary
@@ -525,7 +525,7 @@ impl App {
             self.desk.order = order;
         }
         if self.desk.filter.is_none() {
-            self.desk.filter = session.desk_court();
+            self.desk.filter = session.desk_group();
         }
         if !self.is_menu {
             self.recompute();

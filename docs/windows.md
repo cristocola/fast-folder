@@ -101,7 +101,7 @@ in, and the app's `x` starts one in a new console of its own.
 The desk and the pane say who is working in a project from the process
 table, which fastf reads on Linux alone: on Windows the `active` column and
 the pane's `working` row are simply absent, never a guess. Everything else on
-the desk — the courts, the ages, what last moved, the repository's head — is
+the desk (the groups, the ages, what last moved, the repository's head) is
 read from the files and works the same here.
 
 ## The guided app in the old console

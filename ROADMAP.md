@@ -41,9 +41,10 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   window), plus `fastf term`. A person at a desktop has to say whether the right
   window appeared.
 - The desk over a real library of thirty projects with three owners, at 80×24
-  and 120×40: the courts, the ages, `active` beside a folder a shell sits in,
-  the `⚠` on a stale handed-off ball, `f`/`F`, `s`, `z`, and a todo ticked in
-  another window moving its project to its court within ten seconds.
+  and 120×40: the groups, the ages, `active` beside a folder a shell sits in,
+  the `⚠` on an assigned todo nobody has touched for days, `f`/`F`, `s`, `z`,
+  and a todo ticked in another window moving its project to the right group
+  within ten seconds.
 - `fastf agent` from a shell, from the app (`x` opens a window per agent, `X`
   steps the app aside and brings it back with the pane re-read) and from a
   launcher (the window runs the agent, then closes when it exits).

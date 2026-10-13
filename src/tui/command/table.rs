@@ -563,9 +563,9 @@ pub static COMMANDS: &[Command] = &[
     ),
     // --- the desk's own keys -------------------------------------------------
     cmd!(
-        DeskCourt,
-        "Show this court alone",
-        "only the court the cursor's project sits in — F, or Esc, shows every court again",
+        DeskGroupOnly,
+        "Only this group",
+        "only the group the selected project is in: one owner, no owner, or no open todos. F or Esc shows every group again",
         DESK,
         [Key::ch('f')],
         Search,
@@ -576,7 +576,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         DeskOrder,
         "Desk order: next",
-        "in turn within each court: quiet (the stalest first), recent, name, id",
+        "in turn within each group: quiet (longest since anything was written first), recent, name, id",
         DESK,
         [Key::ch('s')],
         Search,
@@ -587,7 +587,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         DeskOrderPick,
         "Desk order: pick one",
-        "pick the order within each court from a list",
+        "pick the order within each group from a list",
         DESK,
         [Key::ch('S')],
         Search,
@@ -597,8 +597,8 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         DeskRandom,
-        "Pick me one",
-        "put the cursor on a project picked at random from what the cuts leave — the one thing that beats a stalled eye",
+        "Pick a project at random",
+        "put the cursor on a project picked at random from the rows shown",
         DESK,
         [Key::ch('z')],
         Library,
@@ -755,7 +755,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneOwner,
         "Give the todo an owner",
-        "whose court the todo under the cursor is in: an owner the list already names, the hat, nobody, or a name you type",
+        "who the todo under the cursor is assigned to: an owner the list already names, the hat, nobody, or a name you type",
         &[Context::Detail],
         [Key::ch('O')],
         Project,
@@ -1176,7 +1176,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         ShowDesk,
         "The desk",
-        "every project as one line under whose court its ball is in — your own, an agent's, somebody you wait on, nobody's, nothing planned — and how long it has been quiet",
+        "every project as one line, grouped by who its next open todo is assigned to (you, an agent, somebody else, nobody, or no open todo), with how long since anything in it was written",
         TABS,
         [Key::ch('w')],
         Library,

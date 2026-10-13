@@ -385,7 +385,7 @@ impl App {
             value: NEW_OWNER.to_string(),
         });
         self.modals.push(Modal::Pick(PickState::new(
-            " whose court? ",
+            " owner? ",
             items,
             Then::TodoOwner { ordinal, was },
         )));

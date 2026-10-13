@@ -157,3 +157,16 @@ fix is the one `Builder::summary` and `transform_example` took: hand it the
   mode, the wheel and the ASCII alphabet are untested there.
 - An input thread that truly blocks: it polls once a second when idle because
   crossterm's read cannot be cancelled for the suspend handshake.
+- A todo's owner is read at the end of its line only. A line written
+  `- [ ] @editor cut v1`, the owner first, is a todo with no owner and the
+  desk lists it under `no owner`; reading a leading run of `@name` as the
+  owner too would take in lists written that way.
+- `FASTF_PROJECT_PATH` on Windows is the verbatim path (`\\?\C:\…`), which
+  `cmd` and many tools will not `cd` into; `fastf agent` hands it to the
+  agent as a post-create command always got it.
+- The app's journal page prints a stamp's UTC time and `fastf journal` the
+  local one. The page's snapshot fixes the bytes, so local time there needs
+  a clock the test can pin.
+- `fastf agent` exits 1 and prints an error whenever the agent exits
+  non-zero, a Ctrl-C out of it included; its help says it exits with the
+  agent's status.

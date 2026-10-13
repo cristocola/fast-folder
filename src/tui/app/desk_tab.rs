@@ -73,7 +73,7 @@ impl App {
     pub(super) fn rebuild_desk(&mut self) {
         let hat = self.hat();
         self.desk
-            .rebuild(&self.library, &self.details, hat.as_deref());
+            .rebuild(&self.library, &self.details, &self.working, hat.as_deref());
         self.sync_selection_to_desk();
         if self.desk_random_once && self.desk.placed > 0 {
             self.desk_random_once = false;
@@ -180,14 +180,30 @@ impl App {
         effects
     }
 
-    /// Who is working where, from one pass over the processes.
+    /// Who is working where, from one pass over the processes, for the
+    /// projects `asked` about: each gets its answer, an empty one included,
+    /// and nothing is recorded where the platform cannot answer at all.
     pub(super) fn on_working(
         &mut self,
+        asked: Vec<PathBuf>,
         active: std::collections::HashMap<PathBuf, Vec<String>>,
     ) -> Vec<Effect> {
-        if self.desk.active != active {
-            self.desk.active = active;
+        if !crate::core::holders::WORKING_KNOWN {
+            return Vec::new();
+        }
+        let mut changed = false;
+        for path in asked {
+            let names = active.get(&path).cloned().unwrap_or_default();
+            if self.working.get(&path) != Some(&names) {
+                self.working.insert(path, names);
+                changed = true;
+            }
+        }
+        if changed {
             self.after_records_changed();
+            // The pane's glance names who is working: its rows changed
+            // under the cursor, which finds its row again.
+            self.refind_pane();
         }
         Vec::new()
     }

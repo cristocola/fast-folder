@@ -12,10 +12,13 @@ impl App {
             Msg::Tick => self.on_tick(),
             Msg::Sizes(cells) => {
                 let effects = self.on_sizes(cells);
-                // A walk's newest file is part of how quiet a card is.
+                // A walk's newest file is part of how quiet a card is, and
+                // the pane's glance names it: the rows under the cursor may
+                // have gained one.
                 if self.screen == Screen::Desk {
                     self.after_records_changed();
                 }
+                self.refind_pane();
                 effects
             }
             Msg::Summary(summary) => {
@@ -77,7 +80,7 @@ impl App {
                 effects
             }
             Msg::Details(read) => self.on_details(read),
-            Msg::Working(active) => self.on_working(active),
+            Msg::Working { asked, active } => self.on_working(asked, active),
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
                 self.recompute();

@@ -259,6 +259,11 @@ impl App {
             && let Some(project) = self.library.selected()
         {
             effects.push(self.detail_effect(&project.path));
+            // Who is working in it, the first time the pane shows it; the
+            // runtime keeps the answer fresh once a second after that.
+            if crate::core::holders::WORKING_KNOWN && !self.working.contains_key(&project.path) {
+                effects.push(Effect::LoadWorking(vec![project.path.clone()]));
+            }
         }
         effects
     }
@@ -391,7 +396,7 @@ impl App {
                 self.library.remove(&path);
                 self.details.remove(&path);
                 self.rescanning.remove(&path);
-                self.desk.active.remove(&path);
+                self.working.remove(&path);
                 effects.push(Effect::ForgetSizes(vec![path]));
             }
             // Nothing on the row changed, so nothing on the row lights up

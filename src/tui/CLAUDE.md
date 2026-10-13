@@ -954,9 +954,24 @@ zero count there would be a claim. Under the name sits the **description**
 from the detail's metadata once it has landed and from the row before, and the
 identity facts gain `Fact::Touched(String)` from `ProjectDetail.touched`, which
 `loaders::detail` derives from the stamp it already takes. **The order is by
-use**: header, tags, todo, notes, then the reference — variables and the
-folder's top level — so a short pane shows the living sections unscrolled. A pane with more rows than it shows
+use**: header, tags, todo, notes, then the reference — the glance, the
+variables and the folder's top level — so a short pane shows the living
+sections unscrolled. A pane with more rows than it shows
 has the table's scrollbar (`view::scrollbar`, in the theme's alphabet).
+
+**The glance is three facts other workers read, handed to `pane_rows` as
+`pane::Glance`** (`PaneSection::Glance`, `PaneRow::Glance`, read-only rows
+drawn as a variable is): `last moved` from the size walk's newest file
+(`library.sizes`, so it lands as a size does and `Msg::Sizes` re-finds the
+pane's cursor), `head` from `ProjectDetail.head` (`glance::git_head`, read
+with the record in `loaders::detail`), and `working` from `App.working` — the
+one map the desk and the pane share, filled by `Effect::LoadWorking` for every
+project when the desk asks and for the selected one when the pane first shows
+it (`selection_effects`), then on `Runtime::watch_detail`'s beat; a project
+with no entry has not been asked about, and nothing is recorded where
+`holders::WORKING_KNOWN` is false, so no platform shows `nobody` as a guess.
+Each fact is a row only once it is known, and the section only when it has
+one.
 
 **A note is several rows, and so is a long line**: `App::pane_rows` hands
 `pane_rows` the pane's text width, and every line of a note is wrapped to the

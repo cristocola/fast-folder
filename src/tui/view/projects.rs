@@ -665,6 +665,7 @@ fn key_width(rows: &[PaneRow]) -> usize {
     rows.iter()
         .filter_map(|row| match row {
             PaneRow::Variable { label, .. } => Some(label.width()),
+            PaneRow::Glance { key, .. } => Some(key.width()),
             _ => None,
         })
         .max()
@@ -717,6 +718,7 @@ fn pane_line(
             Line::from(Span::styled(format!("warning: {error}"), theme.warn()))
         }
         PaneRow::Variable { label, value, .. } => variable_line(theme, label, value, width, key_w),
+        PaneRow::Glance { key, value } => variable_line(theme, key, value, width, key_w),
         PaneRow::Entry(entry) => entry_line(theme, entry, width),
         PaneRow::More(more) => Line::from(Span::styled(
             format!("  {} {more} more", g.ellipsis),

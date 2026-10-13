@@ -561,6 +561,64 @@ fn activity_journal_page() {
     snap("activity_journal_page", frame);
 }
 
+/// The pane's glance: what last moved under the folder, the repository's
+/// head and who is working in it, each a row once it is known, in the
+/// reference section ahead of the variables.
+#[test]
+fn detail_pane_glance_120x40() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let mut app = fixture(12, 120, 40);
+    let project = app.library.selected().unwrap().clone();
+    let mut record = a_record();
+    record.head = Some(fastf::core::glance::GitHead {
+        branch: Some("main".to_string()),
+        sha: Some("a1b2c3d".to_string()),
+        when: Some("2026-01-09T09:40:12Z".to_string()),
+        subject: Some("Rough cut of the first minute".to_string()),
+    });
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(record),
+        },
+    );
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(
+            project.path.clone(),
+            Some(fastf::util::tree_size::TreeFacts {
+                bytes: 3_355_443,
+                newest: Some((
+                    UNIX_EPOCH + Duration::from_secs(1_767_951_665),
+                    std::path::PathBuf::from("02_Edit/cut_v03.prproj"),
+                )),
+            }),
+        )]),
+    );
+    let _ = update(
+        &mut app,
+        Msg::Working {
+            asked: vec![project.path.clone()],
+            active: [(
+                project.path.clone(),
+                vec!["claude".to_string(), "bash".to_string()],
+            )]
+            .into_iter()
+            .collect(),
+        },
+    );
+    let frame = render_to_string(&app, 120, 40);
+    if fastf::core::holders::WORKING_KNOWN {
+        assert!(frame.contains("claude, bash"), "{frame}");
+    }
+    assert!(
+        frame.contains("cut_v03.prproj") && frame.contains("main @ a1b2c3d"),
+        "{frame}"
+    );
+    snap("detail_pane_glance_120x40", frame);
+}
+
 /// The desk at the standard size: every court heading with its count, one
 /// line per project — the ball, how long quiet, `active` or the warning — the
 /// unread project under `reading`, the pane in the list's place.
@@ -568,7 +626,7 @@ fn activity_journal_page() {
 fn desk_80x24() {
     let mut app = desk_fixture(12, 80, 24);
     let path = app.desk.rows[2].path().unwrap().to_path_buf();
-    app.desk.active.insert(path, vec!["claude".to_string()]);
+    app.working.insert(path, vec!["claude".to_string()]);
     let _ = update(&mut app, Msg::Tick);
     let frame = render_to_string(&app, 80, 24);
     assert!(

@@ -58,6 +58,7 @@ pub enum PaneSection {
     Tags,
     Todo,
     Notes,
+    Glance,
     Variables,
     Inside,
 }
@@ -68,12 +69,24 @@ impl PaneSection {
         match self {
             PaneSection::Header => "",
             PaneSection::Tags => "tags",
+            PaneSection::Glance => "glance",
             PaneSection::Variables => "variables",
             PaneSection::Inside => "inside",
             PaneSection::Notes => "notes",
             PaneSection::Todo => "todo",
         }
     }
+}
+
+/// What a hand reaches for when it opens the folder, read beside the record
+/// by other workers and handed to `pane_rows`: the newest file under the
+/// folder from the size walk — its path relative to the project and the
+/// stamp — once the walk has run, and who is working in the folder, once
+/// the process table has been asked (`None` where it has not, or cannot be).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Glance {
+    pub newest: Option<(String, String)>,
+    pub working: Option<Vec<String>>,
 }
 
 /// The section row `at` belongs to: the nearest rule above it, or the header
@@ -405,6 +418,9 @@ pub enum PaneRow {
     Reading,
     /// A read that failed.
     Warning(String),
+    /// One fact of the glance: what last moved, the repository's head, who
+    /// is working in the folder. `key` is its label, read-only.
+    Glance { key: &'static str, value: String },
     /// One template variable. Enter edits its value.
     Variable {
         slug: String,
@@ -520,7 +536,12 @@ impl PaneRow {
 /// `select` offers its options and nothing else; a variable the metadata
 /// holds that the template no longer declares — or every variable of a
 /// registered project, which has no template — is free text after them.
-pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) -> Vec<PaneRow> {
+pub fn pane_rows(
+    project: &Project,
+    detail: Option<&ProjectDetail>,
+    glance: &Glance,
+    width: usize,
+) -> Vec<PaneRow> {
     let mut rows = header_rows(project, detail, width);
 
     rows.push(PaneRow::Rule(PaneSection::Tags));
@@ -537,8 +558,55 @@ pub fn pane_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize
 
     rows.extend(todo_rows(detail, width));
     rows.extend(note_rows(detail, width));
+    rows.extend(glance_rows(detail, glance));
     rows.extend(variable_rows(detail));
     rows.extend(listing_rows(detail));
+    rows
+}
+
+/// The glance: what last moved under the folder, the repository's head, who
+/// is working in it — each a row only once it is known, and the section only
+/// when it has a row. First among the reference sections, since it is the
+/// one a hand would open the folder for.
+fn glance_rows(detail: &ProjectDetail, glance: &Glance) -> Vec<PaneRow> {
+    let when = |stamp: &str| {
+        format!(
+            "{} {}",
+            stamp.get(..10).unwrap_or(stamp),
+            stamp.get(11..16).unwrap_or("")
+        )
+    };
+    let mut facts = Vec::new();
+    if let Some((stamp, path)) = &glance.newest {
+        facts.push(PaneRow::Glance {
+            key: "last moved",
+            value: format!("{path}  {}", when(stamp)),
+        });
+    }
+    if let Some(head) = &detail.head {
+        facts.push(PaneRow::Glance {
+            key: "head",
+            value: match &head.when {
+                Some(at) => format!("{}  {}", head.line(), when(at)),
+                None => head.line(),
+            },
+        });
+    }
+    if let Some(working) = &glance.working {
+        facts.push(PaneRow::Glance {
+            key: "working",
+            value: if working.is_empty() {
+                "nobody".to_string()
+            } else {
+                working.join(", ")
+            },
+        });
+    }
+    if facts.is_empty() {
+        return facts;
+    }
+    let mut rows = vec![PaneRow::Rule(PaneSection::Glance)];
+    rows.extend(facts);
     rows
 }
 

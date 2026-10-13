@@ -437,6 +437,7 @@ fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
     sb.ok(&["config", "set", "base-dir", &projects.display().to_string()]);
     sb.ok(&["config", "set", "bases", &archive.display().to_string()]);
 
+    let mut aged: Vec<(std::path::PathBuf, &[&str], &str, usize)> = Vec::new();
     for i in 0..n {
         let row = &rows[i % rows.len()];
         // Ascending with the row, so an id sort reads as the order the
@@ -500,7 +501,10 @@ fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
             .replace("tags: []", &tags);
         // The first project carries notes and todos, so the pane shows what a
         // project's record looks like: a note of more than one line, and a
-        // list in two phases, the first of them finished.
+        // list in two phases, the first of them finished. The rest carry a
+        // ball each in a court of its own — an agent's, a client's, the
+        // hat's, nobody's, or nothing planned — so the desk shows every
+        // heading it can wear.
         let raw = if i == 0 {
             raw.replace(
                 "## Notes\n",
@@ -511,19 +515,63 @@ fn plant_showcase(sb: &Sandbox, n: usize, long: bool) {
                    and a quieter music bed\n\n\
                  ## Todo\n\n\
                  ### Shoot\n\n\
-                 - [x] shoot the product close-ups\n\
-                 - [x] rough cut\n\n\
+                 - [x] shoot the product close-ups @sales added:2026-01-03T09:00:00Z done:2026-01-12T17:30:00Z\n\
+                 - [x] rough cut @claude added:2026-01-03T09:00:00Z done:2026-01-15T11:02:40Z\n\n\
                  ### Deliver\n\n\
-                 - [ ] colour and sound mix\n\
+                 - [ ] colour and sound mix @claude added:2026-01-16T18:41:00Z\n\
                  - [ ] deliver the 16:9 and 9:16 masters\n",
             )
         } else {
-            raw
+            let list = match i % 6 {
+                1 => "### Post\n\n- [ ] send the invoice @sales added:2026-02-01T10:00:00Z\n",
+                2 => "- [ ] approve the storyboard @acme added:2026-02-03T15:20:00Z\n",
+                3 => {
+                    "### Main Edit\n\n- [x] sync the audio @claude added:2026-02-05T09:00:00Z done:2026-02-06T19:12:00Z\n- [ ] cut the first minute @claude added:2026-02-06T19:13:00Z\n"
+                }
+                4 => "- [ ] gather the receipts\n",
+                _ => "",
+            };
+            if list.is_empty() {
+                raw
+            } else {
+                raw.replace("## Notes\n", &format!("## Notes\n\n## Todo\n\n{list}"))
+            }
         };
         fs::write(&pinfo, raw).unwrap();
+        aged.push((root, row.folders, note, i));
     }
-    // The index the header reads before discovery answers.
+    // The index the header reads before discovery answers. It also backfills
+    // the records it can, so the ages are set after it.
     sb.ok(&["reindex"]);
+    // Each project was last written a different while ago, so the desk's
+    // ages and the pane's `touched` and `last moved` read as a library does,
+    // not as a sandbox planted a moment ago. The record, the folder and the
+    // payload all wear the date; a folder's time is set last, since writing
+    // into it would move it again.
+    for (root, folders, note, i) in aged {
+        let ago =
+            std::time::Duration::from_secs(60 * 60 * 24 * (1 + (i as u64 * 7) % 45) + 60 * 37);
+        let then = std::time::SystemTime::now() - ago;
+        for file in [
+            root.join("PROJECT_INFO.md"),
+            root.join(folders[0]).join("payload.bin"),
+            root.join(note),
+        ] {
+            fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(then)
+                .unwrap();
+        }
+        for folder in folders
+            .iter()
+            .map(|sub| root.join(sub))
+            .chain([root.clone()])
+        {
+            fs::File::open(&folder).unwrap().set_modified(then).unwrap();
+        }
+    }
 }
 
 /// What `FASTF_SHOT_LEFTOVERS` plants beside the showcase.

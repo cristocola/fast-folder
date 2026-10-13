@@ -62,9 +62,7 @@ pub struct DeskState {
     /// The court shown alone, if one is (`f`); every court otherwise.
     pub filter: Option<Court>,
     pub order: Order,
-    /// Who is working where, from the last pass over the processes.
-    pub active: HashMap<PathBuf, Vec<String>>,
-    /// Whether that pass has ever been asked for.
+    /// Whether the pass over the processes has ever been asked for.
     pub active_asked: bool,
     /// Records asked for and not landed yet, so a second discovery of the
     /// same rows asks for none of them again.
@@ -86,6 +84,7 @@ impl DeskState {
         &mut self,
         library: &LibraryState,
         details: &HashMap<PathBuf, ProjectDetail>,
+        working: &HashMap<PathBuf, Vec<String>>,
         hat: Option<&str>,
     ) {
         let was = self.selected_path().map(Path::to_path_buf);
@@ -96,7 +95,7 @@ impl DeskState {
             let Some(project) = library.row(row) else {
                 continue;
             };
-            let active = self.active.get(&project.path).cloned().unwrap_or_default();
+            let active = working.get(&project.path).cloned().unwrap_or_default();
             match details.get(&project.path) {
                 Some(detail) => {
                     let newest = library
@@ -339,7 +338,7 @@ mod tests {
             record(&[(false, "send the invoice", None)]),
         );
         let mut desk = DeskState::default();
-        desk.rebuild(&library, &details, None);
+        desk.rebuild(&library, &details, &HashMap::new(), None);
         let headings: Vec<Option<Court>> = desk
             .rows
             .iter()
@@ -352,7 +351,7 @@ mod tests {
         assert_eq!((desk.placed, desk.unread), (1, 2));
 
         desk.filter = Some(Court::Unowned);
-        desk.rebuild(&library, &details, None);
+        desk.rebuild(&library, &details, &HashMap::new(), None);
         assert_eq!(desk.rows.len(), 2, "the heading and its one card");
     }
 
@@ -374,7 +373,7 @@ mod tests {
             );
         }
         let mut desk = DeskState::default();
-        desk.rebuild(&library, &details, None);
+        desk.rebuild(&library, &details, &HashMap::new(), None);
         assert!(matches!(desk.rows[0], DeskRow::Heading { .. }));
         assert_eq!(desk.selected, Some(1), "the first card, not its heading");
         desk.step(1);
@@ -384,7 +383,7 @@ mod tests {
         let on = desk.selected_path().unwrap().to_path_buf();
 
         // The hat worn moves @claude's court first; the cursor stays on its card.
-        desk.rebuild(&library, &details, Some("claude"));
+        desk.rebuild(&library, &details, &HashMap::new(), Some("claude"));
         assert_eq!(desk.selected_path(), Some(on.as_path()));
         assert_eq!(desk.selected_court(), Some(Court::Owner("claude".into())));
 
@@ -398,7 +397,7 @@ mod tests {
                 .collect(),
         );
         without.recompute(&Default::default(), &mut crate::tui::fuzzy::Fuzzy::new());
-        desk.rebuild(&without, &details, Some("claude"));
+        desk.rebuild(&without, &details, &HashMap::new(), Some("claude"));
         assert!(desk.selected_card().is_some());
         assert_ne!(desk.selected_path(), Some(on.as_path()));
     }
@@ -416,7 +415,7 @@ mod tests {
             );
         }
         let mut desk = DeskState::default();
-        desk.rebuild(&library, &details, None);
+        desk.rebuild(&library, &details, &HashMap::new(), None);
         // Rows: heading, 3 cards, heading, 3 cards. Move onto the first card
         // of the second court with a window of three rows.
         desk.select_last();

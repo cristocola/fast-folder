@@ -1,6 +1,6 @@
 <h1 align="center">fast-folder</h1>
 
-<p align="center"><b>Template-based project folders, created and managed from your terminal. Start a project in seconds, then find, jump to and organize any of them with a keystroke. Every project is numbered, across all your drives.</b></p>
+<p align="center"><b>Template-based project folders, created and managed from your terminal. Start a project in seconds, then find, jump to and organize any of them with a keystroke. Every project is numbered, across all your drives — and one desk shows whose court each of them is in.</b></p>
 
 <p align="center">
   <a href="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml"><img src="https://github.com/cristocola/fast-folder/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -16,7 +16,9 @@ You describe a folder structure once as a template. Every project you make from 
 
 Day to day you work in a full screen terminal app that shows your whole library at once and acts on it. Everything the app can do also has a command, so the same work fits into a script, a cron job, or a hotkey on your desktop. The command is `fastf`.
 
-<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: two tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, its todo list in two phases with how much of each is done, its dated notes, its template variables and its folder contents" width="960"></p>
+And when the work inside the projects is done by others — an agent in one folder, a colleague in the next, a client who still has to answer — fast-folder is the desk of the one on top: every project as one line under whose court its next step is in, how long it has sat there, and who is working where right now. Nothing is stored for it and nothing is guessed. It is all read from the folders.
+
+<p align="center"><img src="docs/img/dashboard.svg" alt="The fast-folder dashboard: three tabs in the header, the configured bases beneath them, a search bar with the counts and the sort order, a table of projects with their IDs, sizes and bases, and a detail pane showing the selected project's tags, its todo list in two phases with how much of each is done, its dated notes, its template variables and its folder contents" width="960"></p>
 
 ## Quick start
 
@@ -40,32 +42,78 @@ More templates for specific kinds of work live in the [`examples/templates/`](ex
 
 ## What it does
 
+The long list. Every item is a thing you can do today, and each links to the guide that explains it.
+
+### Creating
+
 - **Creates a whole project from a template.** One template describes the folder tree and the starter files. Answering a few questions produces the folder, the subfolders, and files with your answers written into them: a brief with the client's name in it, a shot list titled for the artist, a report header with the right month, a config ready to build. Text files get their placeholders filled in, and binary files such as a logo or a video asset are copied byte for byte.
-- **Finds any project again.** Every project carries a unique ID, a creation date, tags and searchable metadata. `fastf open ID0047` opens the folder, and so does `fastf open 47` or `fastf open lullaby`. In the terminal app the list narrows as you type, matching a name, an ID, a template or a tag, and a typo still finds the project. Precise filters work in both places: `fastf search template=music-video tag:draft created>2026-01-01`.
-- **Stays quick on a large library.** The list appears before a single folder has been measured. Folder sizes are walked on background threads, two at a time, starting with the row you are on, and each one fills in where it belongs as it arrives. Each base keeps a small index beside its projects, so opening the app reads one file instead of walking every drive, and the index rebuilds itself from the folders whenever the two disagree.
+- **Numbers every project, across all your drives.** One counter hands out IDs — `ID0047`, `ID0048` — and every drive that holds projects carries a copy of it, so a dual-boot machine, a USB stick and a network share all count on. A preview and its commit always agree on the next number; losing a counter file is untidy, not harmful, because the projects themselves say how high it got.
+- **Asks everything on one screen.** Creating, adopting a folder and applying a template are one shape in the app: a form with every question on it, a preview of the folders and files it would make, and Enter. A refusal names its field and keeps what you typed.
+- **Runs your own steps after creating a project.** It can open the new folder, start your editor, initialize a git repository, or run any command you give it, per template or for every template. [docs/templates.md](docs/templates.md#post-create-actions)
+- **Reads a template out of a finished project.** `fastf template from-folder` looks at a project you are happy with and writes the template that would produce it, and the app's templates tab has a builder with an explanation panel and a seven-page guide. [docs/templates.md](docs/templates.md)
+- **Adopts folders you already have.** `fastf register` writes the metadata into work that came from somewhere else, one folder at a time or a whole directory at once, keeping an ID it finds in the folder's name. `fastf apply` adds a template's missing folders and files to a folder that already exists, never overwriting. [docs/cli.md](docs/cli.md#registering-existing-folders)
+
+### Finding
+
+- **Finds any project again.** Every project carries a unique ID, a creation date, tags and searchable metadata. `fastf open ID0047` opens the folder, and so does `fastf open 47` or `fastf open lullaby`. In the terminal app the list narrows as you type, matching a name, an ID, a template or a tag, and a typo still finds the project. Precise filters work in both places: `fastf search template=music-video tag:draft created>2026-01-01`. [docs/cli.md](docs/cli.md#search)
+- **Sorts every way, both ways.** Newest, oldest, name, id, template, base, size — and every one but the dates runs reversed too, so the smallest folder or the highest ID is one key away. Filters by template, by base, by tag; marks for a batch; the bases panel to keep an archive out of the daily list and bring it back with one key.
+- **Opens projects in the tools you already use.** Reveal a folder in your file manager, open a terminal inside it, put its path on the clipboard, or print the path on stdout for `cd "$(fastf path api)"`. Bind fast-folder to a hotkey on your desktop and it opens a terminal for itself when a question needs an answer. [docs/cli.md](docs/cli.md#browsing-projects)
+- **Tells you what a project is at a glance.** One line of description shown in every list; `fastf show` for everything fastf knows; `fastf peek` for what a hand opens the folder to see — the next step and whose it is, how the todos stand, who is working in the folder, the newest file under it, the repository's branch and last commit, the last note, how long it has been quiet. [docs/cli.md](docs/cli.md#peek)
+### Overseeing
+
+- **The desk: whose court is the ball in?** `w` in the app or `fastf desk` puts every project on one line under the court its next step is in — *your court*, *with @claude*, *with @acme*, *unowned*, *nothing planned* — the stalest first within each court, with how long the project has been quiet, `active` when a program is working in it right now, and a warning when a ball has sat in an agent's court for days with nobody working. One court alone, a different order, or a random pick, each one key. No due dates, no priorities, no status to maintain: the owner is on the todo's line and the age is the folder's own time. [docs/app.md](docs/app.md#the-desk)
+- **Todos with owners and dates.** A todo's line may end in `@owner added:<when> done:<when>`, written by fastf when you add, assign or tick one and readable by anyone — or any agent — opening the raw file. The pane shows the owner and the day at the row's right; `O` hands a todo over; `fastf todo owner` does the same from a script. A todo nobody dated or assigned stays exactly as it was. [docs/projects.md](docs/projects.md#project_infomd)
+- **Hats.** `fastf hat sales` says which owner's court is yours: the desk opens on it, the header shows it, `todo add --mine` assigns to it, and `FASTF_HAT` wears a different one in another terminal. [docs/cli.md](docs/cli.md#the-hat)
+- **Agents, without a runner.** Set `agent = "claude"` once and `fastf agent lullaby` starts it in that project's folder, in the terminal you are in — from a desktop launcher, in a window of its own; in the app, `x` opens a window per agent so the desk stays up, and `X` runs it here. fastf keeps no registry and polls no process: what the agent ticked, noted and changed is in the folder, and the desk reads it. [docs/cli.md](docs/cli.md#starting-the-agent-there)
+- **What happened while you were not looking.** `fastf journal` is every dated note across every project, newest first, and `--todos` interleaves every todo ticked (and added). In the app, `L`'s journal page draws a rule where the desk was last open, so the morning's news reads above it. [docs/cli.md](docs/cli.md#journal)
+
+### Keeping records
+
+- **Keeps a record of each project.** Tags group projects across templates and bases. Every project keeps dated notes, as many lines as a note needs, and a todo list grouped into phases such as shoot, edit and deliver. Both are plain Markdown in the project's `PROJECT_INFO.md`, so any editor can change them, and the app shows the change within a second. A template can hand every new project the checklist its kind of work always starts with. [docs/projects.md](docs/projects.md)
+- **The pane is an editor you step into.** `→` puts the cursor among the project's tags, todos, notes and variables, read from the file as it is on disk. Enter acts, F2 edits, `+` adds — the same three keys on every surface. A todo list is typed as a list; a checklist pasted from a brief becomes todos in one write; a note opens as a text area over its own lines. [docs/app.md](docs/app.md#what-is-on-screen)
+- **Keeps the filesystem as the single source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` file. Move it with your file manager, rename it, or copy it to another drive, and it stays the same project; `fastf reindex` picks up whatever you did outside the app. Delete the folder and the project goes with it. A hand-edited file that fastf cannot fully read is shown as far as it can be, named, and never dropped in silence.
+
+### Many drives, moved safely
+
+- **Stays quick on a large library.** The list appears before a single folder has been measured. Folder sizes are walked on background threads, two at a time, starting with the row you are on, and each one fills in where it belongs as it arrives — and the walk remembers the newest file it saw, so the pane can say what last moved. Each base keeps a small index beside its projects, so opening the app reads one file instead of walking every drive, and the index rebuilds itself from the folders whenever the two disagree. [docs/projects.md](docs/projects.md#live-folder-sizes)
 - **Holds projects on several drives at once.** You can have different project bases for different reasons. For example a fast internal drive for current work, an external drive for archived projects, a network share, or a folder that another operating system on the same machine also mounts. Point fast-folder at each of them and they become one library, with a column that says which base a project is on. In the terminal app, `b` marks which bases are active, so an archive can stay out of the daily list and come back with one key. When a drive is unplugged, its projects are skipped, and they come back when you plug it in again.
+- **Never freezes on a dead mount.** Every base is asked at once, under one deadline; a drive that stopped answering is named in the header as `unresponsive` and skipped, and every command about a project in another base goes on without it. [docs/projects.md](docs/projects.md#discovery-and-bases)
 - **Moves and copies projects safely.** `fastf move` uses a filesystem rename when both ends are on the same drive, which takes the same instant however large the folder is. Across drives it copies every ordinary file and every link into the new folder, verifies every path, type, byte length and link target against a manifest, confirms the source is unchanged, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then takes the original out of the library in one step and removes it — so an interruption can never leave half a project behind, and anything the new folder turns out to be missing is copied again from the original. Before copying anything it checks that the move could finish: that it can write in the source base, that the target has room, and that every name fits there. `fastf copy-to` does the same work and keeps the original, which is how a project goes onto a backup drive with its ID intact. A move runs in a process of its own and names every step as it counts it — copying 312 of 1473 files, removing the old copy 90 of 1473 entries — so closing the terminal or the app never stops one part of the way, and any other fastf can follow it (`fastf jobs`) or cancel it. `fastf log` keeps every step; `fastf messages` keeps what fastf told you.
-- **Opens projects in the tools you already use.** Reveal a folder in your file manager, open a terminal inside it, put its path on the clipboard, or print the path on stdout for `cd "$(fastf path api)"`. Bind fast-folder to a hotkey on your desktop and it opens a terminal for itself when a question needs an answer.
-- **Keeps the filesystem as the single source of truth.** A folder is a project because it contains a `PROJECT_INFO.md` file. Move it with your file manager, rename it, or copy it to another drive, and it stays the same project; `fastf reindex` picks up whatever you did outside the app. Delete the folder and the project goes with it.
-- **Adopts folders you already have.** `fastf register` writes the metadata into work that came from somewhere else, one folder at a time or a whole directory at once. `fastf apply` adds a template's missing folders and files to a folder that already exists.
-- **Reads a template out of a finished project.** `fastf template from-folder` looks at a project you are happy with and writes the template that would produce it.
-- **Keeps a record of each project.** Tags group projects across templates and bases. Every project keeps dated notes, as many lines as a note needs, and a todo list grouped into phases such as shoot, edit and deliver. Both are plain Markdown in the project's `PROJECT_INFO.md`, so any editor can change them, and the app shows the change within a second. A template can hand every new project the checklist its kind of work always starts with.
-- **Runs your own steps after creating a project.** It can open the new folder, start your editor, initialize a git repository, or run any command you give it.
-- **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to.
+- **Finishes what an interruption left, and asks you only what only you can decide.** `fastf reconcile` resumes or rolls back every move, copy, delete and create that did not finish, and the app does it by itself in the background. What needs a person — two copies that both changed, an old copy that may be the only one — is listed under `!` with the choices that settle it. [docs/cli.md](docs/cli.md#interrupted-operation-recovery)
+
+### The app, the command line, the rest
+
+- **One app for the whole library.** Three tabs — library, desk, templates — over every base, with a pane beside, under or in place of the list depending on the room, a command palette, help for every screen, a settings screen for every key in `config.toml`, and an activity screen with every message, the journal, every job and the log. It draws from 40×12 up, in Doom One wherever the terminal has 24-bit colour, in sixteen colours or in plain ASCII elsewhere, never takes the mouse, and moves only to show what just changed. [docs/app.md](docs/app.md)
+- **Every verb is a command.** Create, find, open, tag, note, todo, describe, move, copy, rename, delete, register, apply, reindex, reconcile — the lists with `--json` for a script, `--plain` for a pipe, and prompts drawn at the cursor rather than on a full screen. From a desktop launcher a command opens a terminal for itself. Shell completions for bash, zsh, fish and PowerShell; man pages. [docs/cli.md](docs/cli.md)
+- **Remembers where you were.** The sort, the pane, the row, the bases' view, the tab — the desk included — come back the next time, from a small state file beside the configuration.
+- **Carries itself.** One binary of a few megabytes; configuration, templates and the counter in one data folder — `~/.config/fastf`, `%APPDATA%\fastf`, or the binary's own folder on a USB stick in portable mode. [docs/config.md](docs/config.md)
+- **Works on Linux and Windows.** Templates use `/` on every platform. Paths are checked before anything is written, so a template can only ever produce files inside the project it belongs to. The Windows build carries its own C runtime and starts on a clean machine; rclone and WinFsp drives are handled as the mounts they are. Who is working in a folder is read from the process table on Linux; elsewhere that one fact is simply absent rather than guessed. [docs/windows.md](docs/windows.md)
 
 fast-folder is a tool for one person, working on ordinary files and directories on one computer. It reads and writes files on the machine it runs on. The terminal app and the command line share the same configuration, templates and counters, so the two stay in step.
 
 ## The terminal app
 
-Running `fastf` on its own opens the app: one full screen dashboard over the whole library, every base, every project, folder sizes filling in as they arrive. Typing narrows the list and a typo still finds the project; every verb has a key, `Enter` opens the action menu, `c` opens a command palette, and `?` lists every key that works where you are. The detail pane is an editor you step into with `→`: tags, a todo list, dated notes and template variables, read from the project's file as it is on disk. It sits beside the list, under it, or in its place, whichever the window has room for. Creating a project, adopting a folder and applying a template are one shape, a form, a preview and Enter, and templates have a tab of their own with a builder and a built-in guide. It runs in any terminal of 40×12 or more, draws in Doom One wherever the terminal has 24-bit colour (or sixteen colours, or plain ASCII), never takes the mouse, and moves only to show what just changed. Every key and every screen is in [docs/app.md](docs/app.md).
+Running `fastf` on its own opens the app: one full screen dashboard over the whole library, every base, every project, folder sizes filling in as they arrive. Typing narrows the list and a typo still finds the project; every verb has a key, `Enter` opens the action menu, `c` opens a command palette, and `?` lists every key that works where you are. The detail pane is an editor you step into with `→`: tags, a todo list, dated notes, a glance at what last moved and who is working there, and template variables, read from the project's file and folder as they are on disk. It sits beside the list, under it, or in its place, whichever the window has room for. Creating a project, adopting a folder and applying a template are one shape, a form, a preview and Enter, and templates have a tab of their own with a builder and a built-in guide. It runs in any terminal of 40×12 or more, draws in Doom One wherever the terminal has 24-bit colour (or sixteen colours, or plain ASCII), never takes the mouse, and moves only to show what just changed. Every key and every screen is in [docs/app.md](docs/app.md).
+
+### The desk
+
+`w` opens the desk: every project in view as one line, under whose court its **ball** — its first open todo — is in. Your own court first when you wear a hat, then the pile nobody was named for, then each agent or client by how many balls they hold, then the projects with nothing planned. Within a court the project that has been quiet the longest comes first, because that is the one that needs a decision. `active` says a program is working in the folder right now; `⚠` says a ball has sat in an owner's court for days with nothing written and nobody working.
+
+<p align="center"><img src="docs/img/desk.svg" alt="The desk tab: projects grouped under the courts their next step is in — with @claude, with @acme, with @sales, unowned, nothing planned — each line with the project's ID and name, its next todo and the phase it belongs to, how long the project has been quiet, and the detail pane beside the list showing the selected project" width="960"></p>
+
+`f` shows the court under the cursor alone, `s` reorders it, `z` picks a project at random when the eye has stalled, and every project verb — open, terminal, agent, a todo, a note, rename, move — works on the row under the cursor. The records are re-read every ten seconds while the desk is open, so a todo an agent ticks moves its project to the right court without a keypress. [docs/app.md](docs/app.md#the-desk) has the whole of it.
 
 ### Todos
 
-Every project's todo list is in its pane, grouped under the phases the file gives it, each phase with how much of it is done. Enter ticks a todo and ticks it back. F2 opens its words where they sit, to fix a typo or to empty and remove it. `+` opens a line inside the list, in the phase the cursor is in, and Enter writes the todo and opens the next line under it, so a whole list is typed in one go. Paste a checklist from a brief or a message onto that line and every line of it becomes a todo, the `- [ ]` boxes and numbers taken off. The same three keys mean the same thing everywhere in the app: Enter acts, F2 edits, `+` adds.
+Every project's todo list is in its pane, grouped under the phases the file gives it, each phase with how much of it is done. Enter ticks a todo and ticks it back, stamping the day. F2 opens its words where they sit, to fix a typo or to empty and remove it. `O` says whose court it is in. `+` opens a line inside the list, in the phase the cursor is in, and Enter writes the todo and opens the next line under it, so a whole list is typed in one go. Paste a checklist from a brief or a message onto that line and every line of it becomes a todo, the `- [ ]` boxes and numbers taken off. The same three keys mean the same thing everywhere in the app: Enter acts, F2 edits, `+` adds.
 
 <p align="center"><img src="docs/img/todos.svg" alt="The detail pane on an 80 by 24 window, drawn in the list's place: the project's name and facts, its tags, then its todo list in two phases, Shoot with two of two done and dimmed, and Deliver with two open todos and a third being typed on a highlighted line at the end of the phase; the key line reads Enter add, Esc done" width="720"></p>
 
 `<` and `>` step to the previous or next project without leaving the pane, staying on its todos, so a morning's review of every open list is a key per project.
+
+### Agents
+
+Set the agent once — `fastf config set agent claude` — and it starts in any project's folder without a `cd`: `fastf agent lullaby` in the terminal you are in, a window of its own from a desktop launcher, `x` in the app for a window per agent while the desk stays up, `X` to run it where the app is. The agent finds `PROJECT_INFO.md` in its working folder and `FASTF_PROJECT_PATH` in its environment, and whatever it ticks, notes or changes is what the desk and the pane show next. fastf is not a runner: it keeps no list of agents and polls nothing. The folder is the status.
 
 ## The command line
 
@@ -79,16 +127,27 @@ fastf search ariana                          # plain text
 fastf search template=music-video tag:draft  # exact filters
 fastf open 47                                # reveal the folder
 cd "$(fastf path api)"                       # the bare path, for a shell
+fastf term 47                                # a terminal window in the folder
+fastf agent 47                               # the configured agent, in the folder
+fastf peek 47                                # what is going on in it, without opening it
+fastf desk --mine                            # the desk, your court alone (--plain for a list)
+fastf desk --owner claude --json             # what the agent holds, for a script
+fastf hat sales                              # wear @sales
 fastf move ID0047 archive                    # into another base
 fastf copy-to ID0047 /mnt/backup             # onto a backup drive, ID kept
 fastf tag add ID0047 delivered
+fastf desc ID0047 "Music video, due in May"  # one line saying what it is
 fastf note add ID0047 "sent the rough cut"   # a dated note; stdin and $EDITOR take several lines
 fastf notes ID0047 --since 2026-07           # every note since July, every line of each
-fastf todo add ID0047 "colour pass" --phase Edit
-fastf todo list ID0047                       # numbered, grouped by phase
-fastf todo done ID0047 3                     # tick it; --undo opens it again
-fastf todo edit ID0047 3 "colour and grade"  # reword it
+fastf journal --todos                        # what was said and ticked, across every project
+fastf todo add ID0047 "colour pass" --phase Edit --owner claude
+fastf todo list ID0047                       # numbered, grouped by phase, with owners and days
+fastf todo done ID0047 3                     # tick it, stamped; --undo opens it again
+fastf todo owner ID0047 3 acme               # hand it over; --none takes the owner off
+fastf todo edit ID0047 3 "colour and grade"  # reword it, trailer kept
 fastf todo remove ID0047 3
+fastf jobs                                   # every move, copy, delete and reconcile, running or done
+fastf reconcile --list                       # what is unfinished, and who finishes it
 ```
 
 The whole tool is one binary of a few megabytes that carries everything it needs. Install it from a package manager, or keep it in a folder on a USB stick and take it with you. The full command reference is [docs/cli.md](docs/cli.md).
@@ -170,12 +229,12 @@ Configuration and templates live together in one data folder: `$FASTF_INSTALL_DI
 
 | Guide | Contents |
 |---|---|
-| [docs/app.md](docs/app.md) | The guided app: the dashboard, every key, search, the flows, the templates tab, settings |
-| [docs/cli.md](docs/cli.md) | The command reference: create, browse, search, tags, notes, register, move, copy, templates |
+| [docs/app.md](docs/app.md) | The guided app: the dashboard, every key, search, the pane, the desk, the flows, the templates tab, settings |
+| [docs/cli.md](docs/cli.md) | The command reference: create, browse, search, the desk, peek, agents, tags, notes, the journal, todos, the hat, register, move, copy, jobs, templates |
 | [docs/config.md](docs/config.md) | Settings, environment variables, where the data lives, the ID counter |
-| [docs/templates.md](docs/templates.md) | Template authoring: `template.yaml`, variables, transforms, tokens, the builder, the guide |
-| [docs/projects.md](docs/projects.md) | The project model: `PROJECT_INFO.md`, discovery, bases, safe moves, copies, crash recovery, what fastf promises |
-| [docs/windows.md](docs/windows.md) | Windows install, PATH setup, the console |
+| [docs/templates.md](docs/templates.md) | Template authoring: `template.yaml`, variables, transforms, tokens, starter todos, the builder, the guide |
+| [docs/projects.md](docs/projects.md) | The project model: `PROJECT_INFO.md`, todos and their trailer, what the desk reads, discovery, bases, safe moves, copies, crash recovery, what fastf promises |
+| [docs/windows.md](docs/windows.md) | Windows install, PATH setup, the console, rclone and WinFsp drives |
 
 ## Contributing
 

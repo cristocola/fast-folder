@@ -5,41 +5,41 @@
 <rect x="108.8" y="8.0" width="25.2" height="18.0" fill="#282c34"/>
 <rect x="134.0" y="8.0" width="58.8" height="18.0" fill="#282c34"/>
 <text x="134.0" y="21.5" xml:space="preserve" fill="#51afef" font-weight="bold" text-decoration="underline">library</text>
-<rect x="192.8" y="8.0" width="100.8" height="18.0" fill="#282c34"/>
-<text x="192.8" y="21.5" xml:space="preserve" fill="#9ca0a4"> │ templates</text>
-<rect x="293.6" y="8.0" width="596.4" height="18.0" fill="#282c34"/>
-<text x="293.6" y="21.5" xml:space="preserve" fill="#bbc2cf">   2 bases                                                             </text>
+<rect x="192.8" y="8.0" width="159.6" height="18.0" fill="#282c34"/>
+<text x="192.8" y="21.5" xml:space="preserve" fill="#9ca0a4"> │ desk │ templates</text>
+<rect x="352.4" y="8.0" width="537.6" height="18.0" fill="#282c34"/>
+<text x="352.4" y="21.5" xml:space="preserve" fill="#bbc2cf">   2 bases                                                      </text>
 <rect x="890.0" y="8.0" width="67.2" height="18.0" fill="#282c34"/>
 <text x="890.0" y="21.5" xml:space="preserve" fill="#9ca0a4">highest </text>
 <rect x="957.2" y="8.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="957.2" y="21.5" xml:space="preserve" fill="#bbc2cf">ID0214 </text>
+<text x="957.2" y="21.5" xml:space="preserve" fill="#bbc2cf">ID0208 </text>
 <rect x="8.0" y="26.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="16.4" y="26.0" width="16.8" height="18.0" fill="#282c34"/>
 <text x="16.4" y="39.5" xml:space="preserve" fill="#9ca0a4">→ </text>
 <rect x="33.2" y="26.0" width="67.2" height="18.0" fill="#282c34"/>
 <text x="33.2" y="39.5" xml:space="preserve" fill="#51afef" font-weight="bold">projects</text>
-<rect x="100.4" y="26.0" width="25.2" height="18.0" fill="#282c34"/>
-<text x="100.4" y="39.5" xml:space="preserve" fill="#9ca0a4"> 10</text>
-<rect x="125.6" y="26.0" width="25.2" height="18.0" fill="#282c34"/>
-<rect x="150.8" y="26.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="150.8" y="39.5" xml:space="preserve" fill="#51afef" font-weight="bold">archive</text>
-<rect x="209.6" y="26.0" width="16.8" height="18.0" fill="#282c34"/>
-<text x="209.6" y="39.5" xml:space="preserve" fill="#9ca0a4"> 4</text>
-<rect x="226.4" y="26.0" width="789.6" height="18.0" fill="#282c34"/>
+<rect x="100.4" y="26.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="100.4" y="39.5" xml:space="preserve" fill="#9ca0a4"> 6</text>
+<rect x="117.2" y="26.0" width="25.2" height="18.0" fill="#282c34"/>
+<rect x="142.4" y="26.0" width="58.8" height="18.0" fill="#282c34"/>
+<text x="142.4" y="39.5" xml:space="preserve" fill="#51afef" font-weight="bold">archive</text>
+<rect x="201.2" y="26.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="201.2" y="39.5" xml:space="preserve" fill="#9ca0a4"> 2</text>
+<rect x="218.0" y="26.0" width="798.0" height="18.0" fill="#282c34"/>
 <rect x="8.0" y="44.0" width="1008.0" height="18.0" fill="#282c34"/>
 <rect x="8.0" y="62.0" width="117.6" height="18.0" fill="#282c34"/>
 <text x="8.0" y="75.5" xml:space="preserve" fill="#9ca0a4"> ⌕ / to search</text>
-<rect x="125.6" y="62.0" width="840.0" height="18.0" fill="#282c34"/>
-<text x="125.6" y="75.5" xml:space="preserve" fill="#bbc2cf">                                                                                               14/14</text>
-<rect x="965.6" y="62.0" width="42.0" height="18.0" fill="#282c34"/>
-<text x="965.6" y="75.5" xml:space="preserve" fill="#9ca0a4"> · id</text>
+<rect x="125.6" y="62.0" width="806.4" height="18.0" fill="#282c34"/>
+<text x="125.6" y="75.5" xml:space="preserve" fill="#bbc2cf">                                                                                             8/8</text>
+<rect x="932.0" y="62.0" width="75.6" height="18.0" fill="#282c34"/>
+<text x="932.0" y="75.5" xml:space="preserve" fill="#9ca0a4"> · newest</text>
 <rect x="1007.6" y="62.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="8.0" y="80.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="89.0" x2="16.4" y2="89.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="89.0" x2="12.2" y2="98.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="80.0" width="84.0" height="18.0" fill="#282c34"/>
 <text x="16.4" y="93.5" xml:space="preserve" fill="#51afef" font-weight="bold"> projects </text>
-<rect x="100.4" y="80.0" width="520.8" height="18.0" fill="#282c34"/>
+<rect x="100.4" y="80.0" width="512.4" height="18.0" fill="#282c34"/>
 <line x1="100.4" y1="89.0" x2="104.6" y2="89.0" stroke="#51afef" stroke-width="1"/>
 <line x1="104.6" y1="89.0" x2="108.8" y2="89.0" stroke="#51afef" stroke-width="1"/>
 <line x1="108.8" y1="89.0" x2="113.0" y2="89.0" stroke="#51afef" stroke-width="1"/>
@@ -161,15 +161,15 @@
 <line x1="596.0" y1="89.0" x2="600.2" y2="89.0" stroke="#51afef" stroke-width="1"/>
 <line x1="600.2" y1="89.0" x2="604.4" y2="89.0" stroke="#51afef" stroke-width="1"/>
 <line x1="604.4" y1="89.0" x2="608.6" y2="89.0" stroke="#51afef" stroke-width="1"/>
-<line x1="608.6" y1="89.0" x2="612.8" y2="89.0" stroke="#51afef" stroke-width="1"/>
-<line x1="612.8" y1="89.0" x2="617.0" y2="89.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="89.0" x2="617.0" y2="98.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="80.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="89.0" x2="629.6" y2="89.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="89.0" x2="625.4" y2="98.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="80.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="629.6" y="93.5" xml:space="preserve" fill="#9ca0a4"> ID0201 </text>
-<rect x="696.8" y="80.0" width="319.2" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="89.0" x2="608.6" y2="98.0" stroke="#51afef" stroke-width="1"/>
+<rect x="612.8" y="80.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="89.0" x2="621.2" y2="89.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="89.0" x2="617.0" y2="98.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="80.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="621.2" y="93.5" xml:space="preserve" fill="#9ca0a4"> ID0208 </text>
+<rect x="688.4" y="80.0" width="327.6" height="18.0" fill="#282c34"/>
+<line x1="688.4" y1="89.0" x2="692.6" y2="89.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="692.6" y1="89.0" x2="696.8" y2="89.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="696.8" y1="89.0" x2="701.0" y2="89.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="701.0" y1="89.0" x2="705.2" y2="89.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="705.2" y1="89.0" x2="709.4" y2="89.0" stroke="#3f444a" stroke-width="1"/>
@@ -249,21 +249,22 @@
 <rect x="8.0" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="98.0" x2="12.2" y2="107.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="107.0" x2="12.2" y2="116.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="98.0" width="588.0" height="18.0" fill="#282c34"/>
-<text x="16.4" y="111.5" xml:space="preserve" fill="#9ca0a4" font-weight="bold">  ID     PROJECT                                         SIZE BASE    </text>
+<rect x="16.4" y="98.0" width="579.6" height="18.0" fill="#282c34"/>
+<text x="16.4" y="111.5" xml:space="preserve" fill="#9ca0a4" font-weight="bold">  ID     PROJECT                                        SIZE BASE    </text>
+<rect x="596.0" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="98.0" x2="608.6" y2="107.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="107.0" x2="608.6" y2="116.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="98.0" x2="617.0" y2="107.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="107.0" x2="617.0" y2="116.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="98.0" x2="617.0" y2="107.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="107.0" x2="617.0" y2="116.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="98.0" x2="625.4" y2="107.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="107.0" x2="625.4" y2="116.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="98.0" width="277.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="111.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">2026-01-02_Spring_Campaign_ID0201</text>
-<rect x="915.2" y="98.0" width="92.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="98.0" width="260.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="111.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold">2026-08-09_Album_Artwork_ID0208</text>
+<rect x="890.0" y="98.0" width="117.6" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="98.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="111.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="98.0" x2="1011.8" y2="107.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="107.0" x2="1011.8" y2="116.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="116.0" x2="12.2" y2="125.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="125.0" x2="12.2" y2="134.0" stroke="#51afef" stroke-width="1"/>
@@ -271,623 +272,597 @@
 <text x="16.4" y="129.5" xml:space="preserve" fill="#51afef" font-weight="bold">▸</text>
 <rect x="24.8" y="116.0" width="8.4" height="18.0" fill="#42454b"/>
 <rect x="33.2" y="116.0" width="50.4" height="18.0" fill="#42454b"/>
-<text x="33.2" y="129.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0201</text>
-<rect x="83.6" y="116.0" width="453.6" height="18.0" fill="#42454b"/>
-<text x="83.6" y="129.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold"> 2026-01-02_Spring_Campaign_ID0201            41.0 GB </text>
-<rect x="537.2" y="116.0" width="67.2" height="18.0" fill="#42454b"/>
-<text x="537.2" y="129.5" xml:space="preserve" fill="#51afef" font-weight="bold">projects</text>
+<text x="33.2" y="129.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0208</text>
+<rect x="83.6" y="116.0" width="445.2" height="18.0" fill="#42454b"/>
+<text x="83.6" y="129.5" xml:space="preserve" fill="#bbc2cf" font-weight="bold"> 2026-08-09_Album_Artwork_ID0208            340.0 MB </text>
+<rect x="528.8" y="116.0" width="67.2" height="18.0" fill="#42454b"/>
+<text x="528.8" y="129.5" xml:space="preserve" fill="#51afef" font-weight="bold">projects</text>
+<rect x="596.0" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="116.0" x2="608.6" y2="125.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="125.0" x2="608.6" y2="134.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="116.0" x2="617.0" y2="125.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="125.0" x2="617.0" y2="134.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="116.0" x2="617.0" y2="125.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="125.0" x2="617.0" y2="134.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="116.0" x2="625.4" y2="125.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="125.0" x2="625.4" y2="134.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="116.0" width="176.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="129.5" xml:space="preserve" fill="#9ca0a4">client-project   ·   </text>
-<rect x="814.4" y="116.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="814.4" y="129.5" xml:space="preserve" fill="#51afef">projects</text>
-<rect x="881.6" y="116.0" width="126.0" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="116.0" width="134.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="129.5" xml:space="preserve" fill="#9ca0a4">(no description)</text>
+<rect x="764.0" y="116.0" width="243.6" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="116.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="129.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="116.0" x2="1011.8" y2="125.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="125.0" x2="1011.8" y2="134.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="134.0" x2="12.2" y2="143.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="143.0" x2="12.2" y2="152.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="134.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="147.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0202</text>
-<rect x="83.6" y="134.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="147.5" xml:space="preserve" fill="#bbc2cf"> 2026-02-03_Documentary_Rough_Cut_ID0202      22.0 GB </text>
-<rect x="537.2" y="134.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="537.2" y="147.5" xml:space="preserve" fill="#51afef">archive</text>
-<rect x="596.0" y="134.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="33.2" y="147.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0207</text>
+<rect x="83.6" y="134.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="147.5" xml:space="preserve" fill="#bbc2cf"> 2026-07-08_Autumn_Lookbook_ID0207          880.0 MB </text>
+<rect x="528.8" y="134.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="528.8" y="147.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="596.0" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="134.0" x2="608.6" y2="143.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="143.0" x2="608.6" y2="152.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="134.0" x2="617.0" y2="143.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="143.0" x2="617.0" y2="152.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="134.0" x2="617.0" y2="143.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="143.0" x2="617.0" y2="152.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="134.0" x2="625.4" y2="143.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="143.0" x2="625.4" y2="152.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="134.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="147.5" xml:space="preserve" fill="#9ca0a4">created </text>
-<rect x="705.2" y="134.0" width="302.4" height="18.0" fill="#282c34"/>
-<text x="705.2" y="147.5" xml:space="preserve" fill="#bbc2cf">2026-01-02                          </text>
+<rect x="629.6" y="134.0" width="151.2" height="18.0" fill="#282c34"/>
+<text x="629.6" y="147.5" xml:space="preserve" fill="#9ca0a4">music-video   ·   </text>
+<rect x="780.8" y="134.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="780.8" y="147.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="848.0" y="134.0" width="159.6" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="134.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="147.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="134.0" x2="1011.8" y2="143.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="143.0" x2="1011.8" y2="152.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="152.0" x2="12.2" y2="161.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="161.0" x2="12.2" y2="170.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="152.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="165.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0203</text>
-<rect x="83.6" y="152.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="165.5" xml:space="preserve" fill="#bbc2cf"> 2026-03-04_Lullaby_Remix_ID0203              12.0 GB </text>
-<rect x="537.2" y="152.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="165.5" xml:space="preserve" fill="#51afef">projects</text>
+<text x="33.2" y="165.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0206</text>
+<rect x="83.6" y="152.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="165.5" xml:space="preserve" fill="#bbc2cf"> 2026-06-07_Live_Session_ID0206               1.3 GB </text>
+<rect x="528.8" y="152.0" width="58.8" height="18.0" fill="#282c34"/>
+<text x="528.8" y="165.5" xml:space="preserve" fill="#51afef">archive</text>
+<rect x="587.6" y="152.0" width="16.8" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="152.0" x2="608.6" y2="161.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="161.0" x2="608.6" y2="170.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="152.0" x2="617.0" y2="161.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="161.0" x2="617.0" y2="170.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="152.0" x2="617.0" y2="161.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="161.0" x2="617.0" y2="170.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="152.0" x2="625.4" y2="161.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="161.0" x2="625.4" y2="170.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="629.6" y="152.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="629.6" y="165.5" xml:space="preserve" fill="#bbc2cf"> 41.0 GB</text>
-<rect x="696.8" y="152.0" width="117.6" height="18.0" fill="#282c34"/>
-<text x="696.8" y="165.5" xml:space="preserve" fill="#9ca0a4">   ·   2 notes</text>
-<rect x="814.4" y="152.0" width="193.2" height="18.0" fill="#282c34"/>
+<text x="629.6" y="165.5" xml:space="preserve" fill="#9ca0a4">created </text>
+<rect x="696.8" y="152.0" width="84.0" height="18.0" fill="#282c34"/>
+<text x="696.8" y="165.5" xml:space="preserve" fill="#bbc2cf">2026-08-09</text>
+<rect x="780.8" y="152.0" width="126.0" height="18.0" fill="#282c34"/>
+<text x="780.8" y="165.5" xml:space="preserve" fill="#9ca0a4">   ·   touched </text>
+<rect x="906.8" y="152.0" width="100.8" height="18.0" fill="#282c34"/>
+<text x="906.8" y="165.5" xml:space="preserve" fill="#bbc2cf">2026-10-08  </text>
 <rect x="1007.6" y="152.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="165.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="152.0" x2="1011.8" y2="161.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="161.0" x2="1011.8" y2="170.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="170.0" x2="12.2" y2="179.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="179.0" x2="12.2" y2="188.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="170.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="183.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0204</text>
-<rect x="83.6" y="170.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="183.5" xml:space="preserve" fill="#bbc2cf"> 2026-04-05_Wedding_Highlights_ID0204          6.4 GB </text>
-<rect x="537.2" y="170.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="183.5" xml:space="preserve" fill="#51afef">projects</text>
+<text x="33.2" y="183.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0205</text>
+<rect x="83.6" y="170.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="183.5" xml:space="preserve" fill="#bbc2cf"> 2026-05-06_Product_Launch_Reel_ID0205        3.2 GB </text>
+<rect x="528.8" y="170.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="528.8" y="183.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="596.0" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="170.0" x2="608.6" y2="179.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="179.0" x2="608.6" y2="188.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="170.0" x2="617.0" y2="179.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="179.0" x2="617.0" y2="188.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="170.0" x2="625.4" y2="179.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="179.0" x2="625.4" y2="188.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="170.0" width="117.6" height="18.0" fill="#282c34"/>
-<text x="638.0" y="183.5" xml:space="preserve" fill="#9ca0a4">2/4 todos done</text>
-<rect x="755.6" y="170.0" width="252.0" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="170.0" x2="617.0" y2="179.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="179.0" x2="617.0" y2="188.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="170.0" width="75.6" height="18.0" fill="#282c34"/>
+<text x="621.2" y="183.5" xml:space="preserve" fill="#bbc2cf"> 340.0 MB</text>
+<rect x="696.8" y="170.0" width="126.0" height="18.0" fill="#282c34"/>
+<text x="696.8" y="183.5" xml:space="preserve" fill="#9ca0a4">   ·   no notes</text>
+<rect x="822.8" y="170.0" width="184.8" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="170.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="183.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="170.0" x2="1011.8" y2="179.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="179.0" x2="1011.8" y2="188.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="188.0" x2="12.2" y2="197.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="197.0" x2="12.2" y2="206.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="188.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="201.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0205</text>
-<rect x="83.6" y="188.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="201.5" xml:space="preserve" fill="#bbc2cf"> 2026-05-06_Product_Launch_Reel_ID0205         3.2 GB </text>
-<rect x="537.2" y="188.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="201.5" xml:space="preserve" fill="#51afef">projects</text>
+<text x="33.2" y="201.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0204</text>
+<rect x="83.6" y="188.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="201.5" xml:space="preserve" fill="#bbc2cf"> 2026-04-05_Wedding_Highlights_ID0204         6.4 GB </text>
+<rect x="528.8" y="188.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="528.8" y="201.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="596.0" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="188.0" x2="608.6" y2="197.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="197.0" x2="608.6" y2="206.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="188.0" x2="617.0" y2="197.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="197.0" x2="617.0" y2="206.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="188.0" x2="617.0" y2="197.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="197.0" x2="617.0" y2="206.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="188.0" x2="625.4" y2="197.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="197.0" x2="625.4" y2="206.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="188.0" width="361.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="201.5" xml:space="preserve" fill="#9ca0a4">── tags ───────────────────────────────────</text>
-<rect x="999.2" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="188.0" width="117.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="201.5" xml:space="preserve" fill="#9ca0a4">0/1 todos done</text>
+<rect x="747.2" y="188.0" width="260.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="188.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="201.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="188.0" x2="1011.8" y2="197.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="197.0" x2="1011.8" y2="206.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="206.0" x2="12.2" y2="215.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="215.0" x2="12.2" y2="224.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="206.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="219.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0206</text>
-<rect x="83.6" y="206.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="219.5" xml:space="preserve" fill="#bbc2cf"> 2026-06-07_Live_Session_ID0206                1.3 GB </text>
-<rect x="537.2" y="206.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="537.2" y="219.5" xml:space="preserve" fill="#51afef">archive</text>
-<rect x="596.0" y="206.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="33.2" y="219.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0203</text>
+<rect x="83.6" y="206.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="219.5" xml:space="preserve" fill="#bbc2cf"> 2026-03-04_Lullaby_Remix_ID0203             12.0 GB </text>
+<rect x="528.8" y="206.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="528.8" y="219.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="596.0" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="206.0" x2="608.6" y2="215.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="215.0" x2="608.6" y2="224.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="206.0" x2="617.0" y2="215.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="215.0" x2="617.0" y2="224.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="206.0" x2="617.0" y2="215.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="215.0" x2="617.0" y2="224.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="206.0" x2="625.4" y2="215.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="215.0" x2="625.4" y2="224.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="206.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="638.0" y="219.5" xml:space="preserve" fill="#98be65">● draft</text>
-<rect x="696.8" y="206.0" width="310.8" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="206.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="219.5" xml:space="preserve" fill="#9ca0a4">── tags ────────────────────────────────────</text>
+<rect x="999.2" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="206.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="219.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="206.0" x2="1011.8" y2="215.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="215.0" x2="1011.8" y2="224.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="224.0" x2="12.2" y2="233.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="233.0" x2="12.2" y2="242.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="224.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="237.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0207</text>
-<rect x="83.6" y="224.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="237.5" xml:space="preserve" fill="#bbc2cf"> 2026-07-08_Autumn_Lookbook_ID0207           880.0 MB </text>
-<rect x="537.2" y="224.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="237.5" xml:space="preserve" fill="#51afef">projects</text>
+<text x="33.2" y="237.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0202</text>
+<rect x="83.6" y="224.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="237.5" xml:space="preserve" fill="#bbc2cf"> 2026-02-03_Documentary_Rough_Cut_ID0202     22.0 GB </text>
+<rect x="528.8" y="224.0" width="58.8" height="18.0" fill="#282c34"/>
+<text x="528.8" y="237.5" xml:space="preserve" fill="#51afef">archive</text>
+<rect x="587.6" y="224.0" width="16.8" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="224.0" x2="608.6" y2="233.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="233.0" x2="608.6" y2="242.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="224.0" x2="617.0" y2="233.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="233.0" x2="617.0" y2="242.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="224.0" x2="617.0" y2="233.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="233.0" x2="617.0" y2="242.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="224.0" x2="625.4" y2="233.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="233.0" x2="625.4" y2="242.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="224.0" width="109.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="237.5" xml:space="preserve" fill="#a9a1e1">● client/Acme</text>
-<rect x="747.2" y="224.0" width="260.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="224.0" width="159.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="237.5" xml:space="preserve" fill="#4db5bd">● client/Aria_Vance</text>
+<rect x="789.2" y="224.0" width="218.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="224.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="237.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="224.0" x2="1011.8" y2="233.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="233.0" x2="1011.8" y2="242.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="242.0" x2="12.2" y2="251.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="251.0" x2="12.2" y2="260.0" stroke="#51afef" stroke-width="1"/>
 <rect x="16.4" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="24.8" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="33.2" y="242.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="255.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0208</text>
-<rect x="83.6" y="242.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="255.5" xml:space="preserve" fill="#bbc2cf"> 2026-08-09_Album_Artwork_ID0208             340.0 MB </text>
-<rect x="537.2" y="242.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="255.5" xml:space="preserve" fill="#51afef">projects</text>
+<text x="33.2" y="255.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0201</text>
+<rect x="83.6" y="242.0" width="445.2" height="18.0" fill="#282c34"/>
+<text x="83.6" y="255.5" xml:space="preserve" fill="#bbc2cf"> 2026-01-02_Spring_Campaign_ID0201           41.0 GB </text>
+<rect x="528.8" y="242.0" width="67.2" height="18.0" fill="#282c34"/>
+<text x="528.8" y="255.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="596.0" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="242.0" x2="608.6" y2="251.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="251.0" x2="608.6" y2="260.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="242.0" x2="617.0" y2="251.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="251.0" x2="617.0" y2="260.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="242.0" x2="617.0" y2="251.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="251.0" x2="617.0" y2="260.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="242.0" x2="625.4" y2="251.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="251.0" x2="625.4" y2="260.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="242.0" width="92.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="255.5" xml:space="preserve" fill="#9ca0a4">· add a tag</text>
-<rect x="730.4" y="242.0" width="277.2" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="242.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="255.5" xml:space="preserve" fill="#9ca0a4">· add a tag</text>
+<rect x="722.0" y="242.0" width="285.6" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="242.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="255.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="242.0" x2="1011.8" y2="251.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="251.0" x2="1011.8" y2="260.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="260.0" x2="12.2" y2="269.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="269.0" x2="12.2" y2="278.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="260.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="273.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0209</text>
-<rect x="83.6" y="260.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="273.5" xml:space="preserve" fill="#bbc2cf"> 2026-09-10_Client_Onboarding_Acme_ID0209     96.0 MB </text>
-<rect x="537.2" y="260.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="273.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="16.4" y="260.0" width="588.0" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="260.0" x2="608.6" y2="269.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="269.0" x2="608.6" y2="278.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="260.0" x2="617.0" y2="269.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="269.0" x2="617.0" y2="278.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="260.0" x2="617.0" y2="269.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="269.0" x2="617.0" y2="278.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="260.0" x2="625.4" y2="269.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="269.0" x2="625.4" y2="278.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="260.0" width="361.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="273.5" xml:space="preserve" fill="#9ca0a4">── todo ───────────────────────────────────</text>
+<rect x="629.6" y="260.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="273.5" xml:space="preserve" fill="#9ca0a4">── todo ────────────────────────────────────</text>
 <rect x="999.2" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="260.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="273.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="260.0" x2="1011.8" y2="269.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="269.0" x2="1011.8" y2="278.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="278.0" x2="12.2" y2="287.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="287.0" x2="12.2" y2="296.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="278.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="291.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0210</text>
-<rect x="83.6" y="278.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="291.5" xml:space="preserve" fill="#bbc2cf"> 2026-01-11_Motion_Graphics_Pack_ID0210       47.0 MB </text>
-<rect x="537.2" y="278.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="537.2" y="291.5" xml:space="preserve" fill="#51afef">archive</text>
-<rect x="596.0" y="278.0" width="16.8" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="278.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="278.0" x2="608.6" y2="287.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="287.0" x2="608.6" y2="296.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="278.0" x2="617.0" y2="287.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="287.0" x2="617.0" y2="296.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="278.0" x2="625.4" y2="287.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="287.0" x2="625.4" y2="296.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="278.0" width="42.0" height="18.0" fill="#282c34"/>
-<text x="638.0" y="291.5" xml:space="preserve" fill="#9ca0a4">Shoot</text>
-<rect x="680.0" y="278.0" width="294.0" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="278.0" x2="617.0" y2="287.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="287.0" x2="617.0" y2="296.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="278.0" width="352.8" height="18.0" fill="#282c34"/>
+<text x="621.2" y="291.5" xml:space="preserve" fill="#bbc2cf"> Post                                     </text>
 <rect x="974.0" y="278.0" width="25.2" height="18.0" fill="#282c34"/>
-<text x="974.0" y="291.5" xml:space="preserve" fill="#9ca0a4">2/2</text>
+<text x="974.0" y="291.5" xml:space="preserve" fill="#9ca0a4">0/1</text>
 <rect x="999.2" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="278.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="291.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="278.0" x2="1011.8" y2="287.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="287.0" x2="1011.8" y2="296.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="296.0" x2="12.2" y2="305.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="305.0" x2="12.2" y2="314.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="296.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="309.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0211</text>
-<rect x="83.6" y="296.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="309.5" xml:space="preserve" fill="#bbc2cf"> 2026-02-12_Interview_Series_ID0211           12.0 MB </text>
-<rect x="537.2" y="296.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="309.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="16.4" y="296.0" width="588.0" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="296.0" x2="608.6" y2="305.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="305.0" x2="608.6" y2="314.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="296.0" x2="617.0" y2="305.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="305.0" x2="617.0" y2="314.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="296.0" x2="625.4" y2="305.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="305.0" x2="625.4" y2="314.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="296.0" width="25.2" height="18.0" fill="#282c34"/>
-<rect x="654.8" y="296.0" width="260.4" height="18.0" fill="#282c34"/>
-<text x="654.8" y="309.5" xml:space="preserve" fill="#9ca0a4">[x] shoot the product close-ups</text>
-<rect x="915.2" y="296.0" width="92.4" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="296.0" x2="617.0" y2="305.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="305.0" x2="617.0" y2="314.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="296.0" width="25.2" height="18.0" fill="#282c34"/>
+<rect x="646.4" y="296.0" width="33.6" height="18.0" fill="#282c34"/>
+<text x="646.4" y="309.5" xml:space="preserve" fill="#9ca0a4">[ ] </text>
+<rect x="680.0" y="296.0" width="176.4" height="18.0" fill="#282c34"/>
+<text x="680.0" y="309.5" xml:space="preserve" fill="#bbc2cf">send the invoice     </text>
+<rect x="856.4" y="296.0" width="142.8" height="18.0" fill="#282c34"/>
+<text x="856.4" y="309.5" xml:space="preserve" fill="#9ca0a4">@sales 2026-02-01</text>
+<rect x="999.2" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="296.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="309.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="296.0" x2="1011.8" y2="305.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="305.0" x2="1011.8" y2="314.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="314.0" x2="12.2" y2="323.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="323.0" x2="12.2" y2="332.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="314.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="327.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0212</text>
-<rect x="83.6" y="314.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="327.5" xml:space="preserve" fill="#bbc2cf"> 2026-03-13_Portfolio_Site_ID0212              4.2 MB </text>
-<rect x="537.2" y="314.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="327.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="16.4" y="314.0" width="588.0" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="314.0" x2="608.6" y2="323.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="323.0" x2="608.6" y2="332.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="314.0" x2="617.0" y2="323.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="323.0" x2="617.0" y2="332.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="314.0" x2="617.0" y2="323.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="323.0" x2="617.0" y2="332.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="314.0" x2="625.4" y2="323.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="323.0" x2="625.4" y2="332.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="314.0" width="25.2" height="18.0" fill="#282c34"/>
-<rect x="654.8" y="314.0" width="109.2" height="18.0" fill="#282c34"/>
-<text x="654.8" y="327.5" xml:space="preserve" fill="#9ca0a4">[x] rough cut</text>
-<rect x="764.0" y="314.0" width="243.6" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="314.0" width="100.8" height="18.0" fill="#282c34"/>
+<text x="629.6" y="327.5" xml:space="preserve" fill="#9ca0a4">· add a todo</text>
+<rect x="730.4" y="314.0" width="277.2" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="314.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="327.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="314.0" x2="1011.8" y2="323.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="323.0" x2="1011.8" y2="332.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="332.0" x2="12.2" y2="341.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="341.0" x2="12.2" y2="350.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="332.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="345.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0213</text>
-<rect x="83.6" y="332.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="345.5" xml:space="preserve" fill="#bbc2cf"> 2026-04-14_Studio_Website_ID0213            760.3 KB </text>
-<rect x="537.2" y="332.0" width="67.2" height="18.0" fill="#282c34"/>
-<text x="537.2" y="345.5" xml:space="preserve" fill="#51afef">projects</text>
+<rect x="16.4" y="332.0" width="588.0" height="18.0" fill="#282c34"/>
 <rect x="604.4" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="332.0" x2="608.6" y2="341.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="341.0" x2="608.6" y2="350.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="332.0" x2="617.0" y2="341.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="341.0" x2="617.0" y2="350.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="332.0" x2="617.0" y2="341.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="341.0" x2="617.0" y2="350.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="332.0" x2="625.4" y2="341.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="341.0" x2="625.4" y2="350.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="332.0" width="344.4" height="18.0" fill="#282c34"/>
-<text x="629.6" y="345.5" xml:space="preserve" fill="#bbc2cf"> Deliver                                 </text>
-<rect x="974.0" y="332.0" width="25.2" height="18.0" fill="#282c34"/>
-<text x="974.0" y="345.5" xml:space="preserve" fill="#9ca0a4">0/2</text>
-<rect x="999.2" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="332.0" width="109.2" height="18.0" fill="#282c34"/>
+<text x="629.6" y="345.5" xml:space="preserve" fill="#9ca0a4">· add a phase</text>
+<rect x="738.8" y="332.0" width="268.8" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="332.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="345.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="332.0" x2="1011.8" y2="341.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="341.0" x2="1011.8" y2="350.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="350.0" x2="12.2" y2="359.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="359.0" x2="12.2" y2="368.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="24.8" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="33.2" y="350.0" width="50.4" height="18.0" fill="#282c34"/>
-<text x="33.2" y="363.5" xml:space="preserve" fill="#51afef" font-weight="bold">ID0214</text>
-<rect x="83.6" y="350.0" width="453.6" height="18.0" fill="#282c34"/>
-<text x="83.6" y="363.5" xml:space="preserve" fill="#bbc2cf"> 2026-05-15_Brand_Refresh_ID0214             220.3 KB </text>
-<rect x="537.2" y="350.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="537.2" y="363.5" xml:space="preserve" fill="#51afef">archive</text>
-<rect x="596.0" y="350.0" width="16.8" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="350.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="350.0" x2="608.6" y2="359.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="359.0" x2="608.6" y2="368.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="350.0" x2="617.0" y2="359.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="359.0" x2="617.0" y2="368.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="350.0" x2="617.0" y2="359.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="359.0" x2="617.0" y2="368.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="350.0" x2="625.4" y2="359.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="359.0" x2="625.4" y2="368.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="350.0" width="25.2" height="18.0" fill="#282c34"/>
-<rect x="654.8" y="350.0" width="33.6" height="18.0" fill="#282c34"/>
-<text x="654.8" y="363.5" xml:space="preserve" fill="#9ca0a4">[ ] </text>
-<rect x="688.4" y="350.0" width="319.2" height="18.0" fill="#282c34"/>
-<text x="688.4" y="363.5" xml:space="preserve" fill="#bbc2cf">colour and sound mix                  </text>
+<rect x="629.6" y="350.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="363.5" xml:space="preserve" fill="#9ca0a4">── notes ───────────────────────────────────</text>
+<rect x="999.2" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="350.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="363.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="350.0" x2="1011.8" y2="359.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="359.0" x2="1011.8" y2="368.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="368.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="368.0" x2="12.2" y2="377.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="377.0" x2="12.2" y2="386.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="368.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="368.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="368.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="368.0" x2="608.6" y2="377.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="377.0" x2="608.6" y2="386.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="368.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="368.0" x2="617.0" y2="377.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="377.0" x2="617.0" y2="386.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="368.0" x2="617.0" y2="377.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="377.0" x2="617.0" y2="386.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="368.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="368.0" x2="625.4" y2="377.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="377.0" x2="625.4" y2="386.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="368.0" width="25.2" height="18.0" fill="#282c34"/>
-<rect x="654.8" y="368.0" width="33.6" height="18.0" fill="#282c34"/>
-<text x="654.8" y="381.5" xml:space="preserve" fill="#9ca0a4">[ ] </text>
-<rect x="688.4" y="368.0" width="319.2" height="18.0" fill="#282c34"/>
-<text x="688.4" y="381.5" xml:space="preserve" fill="#bbc2cf">deliver the 16:9 and 9:16 masters     </text>
+<rect x="629.6" y="368.0" width="100.8" height="18.0" fill="#282c34"/>
+<text x="629.6" y="381.5" xml:space="preserve" fill="#9ca0a4">· add a note</text>
+<rect x="730.4" y="368.0" width="277.2" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="368.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="381.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="368.0" x2="1011.8" y2="377.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="377.0" x2="1011.8" y2="386.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="386.0" x2="12.2" y2="395.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="395.0" x2="12.2" y2="404.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="386.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="386.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="386.0" x2="608.6" y2="395.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="395.0" x2="608.6" y2="404.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="386.0" x2="617.0" y2="395.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="395.0" x2="617.0" y2="404.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="386.0" x2="617.0" y2="395.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="395.0" x2="617.0" y2="404.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="386.0" x2="625.4" y2="395.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="395.0" x2="625.4" y2="404.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="386.0" width="100.8" height="18.0" fill="#282c34"/>
-<text x="638.0" y="399.5" xml:space="preserve" fill="#9ca0a4">· add a todo</text>
-<rect x="738.8" y="386.0" width="268.8" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="386.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="399.5" xml:space="preserve" fill="#9ca0a4">── glance ──────────────────────────────────</text>
+<rect x="999.2" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="386.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="399.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="386.0" x2="1011.8" y2="395.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="395.0" x2="1011.8" y2="404.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="404.0" x2="12.2" y2="413.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="413.0" x2="12.2" y2="422.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="404.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="404.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="404.0" x2="608.6" y2="413.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="413.0" x2="608.6" y2="422.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="404.0" x2="617.0" y2="413.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="413.0" x2="617.0" y2="422.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="404.0" x2="617.0" y2="413.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="413.0" x2="617.0" y2="422.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="404.0" x2="625.4" y2="413.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="413.0" x2="625.4" y2="422.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="404.0" width="109.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="417.5" xml:space="preserve" fill="#9ca0a4">· add a phase</text>
-<rect x="747.2" y="404.0" width="260.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="404.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="417.5" xml:space="preserve" fill="#9ca0a4">last moved </text>
+<rect x="722.0" y="404.0" width="285.6" height="18.0" fill="#282c34"/>
+<text x="722.0" y="417.5" xml:space="preserve" fill="#bbc2cf">TREATMENT.md  2026-10-08 03:46    </text>
 <rect x="1007.6" y="404.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="417.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="404.0" x2="1011.8" y2="413.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="413.0" x2="1011.8" y2="422.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="422.0" x2="12.2" y2="431.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="431.0" x2="12.2" y2="440.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="422.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="422.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="422.0" x2="608.6" y2="431.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="431.0" x2="608.6" y2="440.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="422.0" x2="617.0" y2="431.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="431.0" x2="617.0" y2="440.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="422.0" x2="617.0" y2="431.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="431.0" x2="617.0" y2="440.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="422.0" x2="625.4" y2="431.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="431.0" x2="625.4" y2="440.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="422.0" width="361.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="435.5" xml:space="preserve" fill="#9ca0a4">── notes ──────────────────────────────────</text>
-<rect x="999.2" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="422.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="435.5" xml:space="preserve" fill="#9ca0a4">working    </text>
+<rect x="722.0" y="422.0" width="285.6" height="18.0" fill="#282c34"/>
+<text x="722.0" y="435.5" xml:space="preserve" fill="#bbc2cf">nobody                            </text>
 <rect x="1007.6" y="422.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="435.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="422.0" x2="1011.8" y2="431.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="431.0" x2="1011.8" y2="440.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="440.0" x2="12.2" y2="449.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="449.0" x2="12.2" y2="458.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="440.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="440.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="440.0" x2="608.6" y2="449.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="449.0" x2="608.6" y2="458.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="440.0" x2="617.0" y2="449.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="449.0" x2="617.0" y2="458.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="440.0" x2="617.0" y2="449.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="449.0" x2="617.0" y2="458.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="440.0" x2="625.4" y2="449.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="449.0" x2="625.4" y2="458.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="440.0" width="92.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="453.5" xml:space="preserve" fill="#9ca0a4">2026-01-05 </text>
-<rect x="730.4" y="440.0" width="277.2" height="18.0" fill="#282c34"/>
-<text x="730.4" y="453.5" xml:space="preserve" fill="#bbc2cf">brief signed off, shoot booked   </text>
+<rect x="629.6" y="440.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="453.5" xml:space="preserve" fill="#9ca0a4">── variables ───────────────────────────────</text>
+<rect x="999.2" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="440.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="453.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="440.0" x2="1011.8" y2="449.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="449.0" x2="1011.8" y2="458.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="458.0" x2="12.2" y2="467.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="467.0" x2="12.2" y2="476.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="458.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="458.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="458.0" x2="608.6" y2="467.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="467.0" x2="608.6" y2="476.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="458.0" x2="617.0" y2="467.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="467.0" x2="617.0" y2="476.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="458.0" x2="617.0" y2="467.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="467.0" x2="617.0" y2="476.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="458.0" x2="625.4" y2="467.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="467.0" x2="625.4" y2="476.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="458.0" width="92.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="471.5" xml:space="preserve" fill="#9ca0a4">2026-01-16 </text>
-<rect x="730.4" y="458.0" width="277.2" height="18.0" fill="#282c34"/>
-<text x="730.4" y="471.5" xml:space="preserve" fill="#bbc2cf">first cut sent to Acme           </text>
+<rect x="629.6" y="458.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="471.5" xml:space="preserve" fill="#9ca0a4">client     </text>
+<rect x="722.0" y="458.0" width="285.6" height="18.0" fill="#282c34"/>
+<text x="722.0" y="471.5" xml:space="preserve" fill="#bbc2cf">Aria_Vance                        </text>
 <rect x="1007.6" y="458.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="471.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="458.0" x2="1011.8" y2="467.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="467.0" x2="1011.8" y2="476.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="476.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="476.0" x2="12.2" y2="485.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="485.0" x2="12.2" y2="494.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="476.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="476.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="476.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="476.0" x2="608.6" y2="485.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="485.0" x2="608.6" y2="494.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="476.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="476.0" x2="617.0" y2="485.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="485.0" x2="617.0" y2="494.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="476.0" x2="617.0" y2="485.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="485.0" x2="617.0" y2="494.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="476.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="476.0" x2="625.4" y2="485.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="485.0" x2="625.4" y2="494.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="476.0" width="378.0" height="18.0" fill="#282c34"/>
-<text x="629.6" y="489.5" xml:space="preserve" fill="#bbc2cf">            hold the logo two seconds longer </text>
+<rect x="629.6" y="476.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="489.5" xml:space="preserve" fill="#9ca0a4">project    </text>
+<rect x="722.0" y="476.0" width="285.6" height="18.0" fill="#282c34"/>
+<text x="722.0" y="489.5" xml:space="preserve" fill="#bbc2cf">Album Artwork                     </text>
 <rect x="1007.6" y="476.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="489.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="476.0" x2="1011.8" y2="485.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="485.0" x2="1011.8" y2="494.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="494.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="494.0" x2="12.2" y2="503.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="503.0" x2="12.2" y2="512.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="494.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="494.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="494.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="494.0" x2="608.6" y2="503.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="503.0" x2="608.6" y2="512.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="494.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="494.0" x2="617.0" y2="503.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="503.0" x2="617.0" y2="512.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="494.0" x2="617.0" y2="503.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="503.0" x2="617.0" y2="512.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="494.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="494.0" x2="625.4" y2="503.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="503.0" x2="625.4" y2="512.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="494.0" width="378.0" height="18.0" fill="#282c34"/>
-<text x="629.6" y="507.5" xml:space="preserve" fill="#bbc2cf">            and a quieter music bed          </text>
+<rect x="629.6" y="494.0" width="92.4" height="18.0" fill="#282c34"/>
+<text x="629.6" y="507.5" xml:space="preserve" fill="#9ca0a4">year       </text>
+<rect x="722.0" y="494.0" width="285.6" height="18.0" fill="#282c34"/>
+<text x="722.0" y="507.5" xml:space="preserve" fill="#bbc2cf">2026                              </text>
 <rect x="1007.6" y="494.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="507.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="494.0" x2="1011.8" y2="503.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="503.0" x2="1011.8" y2="512.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="512.0" x2="12.2" y2="521.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="521.0" x2="12.2" y2="530.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="512.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="512.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="512.0" x2="608.6" y2="521.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="521.0" x2="608.6" y2="530.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="512.0" x2="617.0" y2="521.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="521.0" x2="617.0" y2="530.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="512.0" x2="617.0" y2="521.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="521.0" x2="617.0" y2="530.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="512.0" x2="625.4" y2="521.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="521.0" x2="625.4" y2="530.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="512.0" width="100.8" height="18.0" fill="#282c34"/>
-<text x="638.0" y="525.5" xml:space="preserve" fill="#9ca0a4">· add a note</text>
-<rect x="738.8" y="512.0" width="268.8" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="512.0" width="369.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="525.5" xml:space="preserve" fill="#9ca0a4">── inside ──────────────────────────────────</text>
+<rect x="999.2" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="512.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="525.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="512.0" x2="1011.8" y2="521.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="521.0" x2="1011.8" y2="530.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="530.0" x2="12.2" y2="539.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="539.0" x2="12.2" y2="548.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="530.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="530.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="530.0" x2="608.6" y2="539.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="539.0" x2="608.6" y2="548.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="530.0" x2="617.0" y2="539.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="539.0" x2="617.0" y2="548.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="530.0" x2="617.0" y2="539.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="539.0" x2="617.0" y2="548.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="530.0" x2="625.4" y2="539.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="539.0" x2="625.4" y2="548.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="530.0" width="361.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="543.5" xml:space="preserve" fill="#9ca0a4">── variables ──────────────────────────────</text>
-<rect x="999.2" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
+<rect x="629.6" y="530.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="629.6" y="543.5" xml:space="preserve" fill="#9ca0a4">▸ </text>
+<rect x="646.4" y="530.0" width="361.2" height="18.0" fill="#282c34"/>
+<text x="646.4" y="543.5" xml:space="preserve" fill="#bbc2cf">00_Inbox/                                  </text>
 <rect x="1007.6" y="530.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="543.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="530.0" x2="1011.8" y2="539.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="539.0" x2="1011.8" y2="548.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="548.0" x2="12.2" y2="557.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="557.0" x2="12.2" y2="566.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="548.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="548.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="548.0" x2="608.6" y2="557.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="557.0" x2="608.6" y2="566.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="548.0" x2="617.0" y2="557.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="557.0" x2="617.0" y2="566.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="548.0" x2="617.0" y2="557.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="557.0" x2="617.0" y2="566.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="548.0" x2="625.4" y2="557.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="557.0" x2="625.4" y2="566.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="548.0" width="134.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="561.5" xml:space="preserve" fill="#9ca0a4">Client Name     </text>
-<rect x="772.4" y="548.0" width="235.2" height="18.0" fill="#282c34"/>
-<text x="772.4" y="561.5" xml:space="preserve" fill="#bbc2cf">Acme                        </text>
+<rect x="629.6" y="548.0" width="16.8" height="18.0" fill="#282c34"/>
+<text x="629.6" y="561.5" xml:space="preserve" fill="#9ca0a4">▸ </text>
+<rect x="646.4" y="548.0" width="361.2" height="18.0" fill="#282c34"/>
+<text x="646.4" y="561.5" xml:space="preserve" fill="#bbc2cf">01_Work/                                   </text>
 <rect x="1007.6" y="548.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="561.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="548.0" x2="1011.8" y2="557.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="557.0" x2="1011.8" y2="566.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="566.0" x2="12.2" y2="575.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="575.0" x2="12.2" y2="584.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="566.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="566.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="566.0" x2="608.6" y2="575.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="575.0" x2="608.6" y2="584.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="566.0" x2="617.0" y2="575.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="575.0" x2="617.0" y2="584.0" stroke="#51afef" stroke-width="1"/>
+<line x1="617.0" y1="566.0" x2="617.0" y2="575.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="575.0" x2="617.0" y2="584.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="621.2" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="566.0" x2="625.4" y2="575.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="575.0" x2="625.4" y2="584.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="566.0" width="134.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="579.5" xml:space="preserve" fill="#9ca0a4">Project Title   </text>
-<rect x="772.4" y="566.0" width="235.2" height="18.0" fill="#282c34"/>
-<text x="772.4" y="579.5" xml:space="preserve" fill="#bbc2cf">Spring Campaign             </text>
+<rect x="629.6" y="566.0" width="117.6" height="18.0" fill="#282c34"/>
+<text x="629.6" y="579.5" xml:space="preserve" fill="#9ca0a4">· TREATMENT.md</text>
+<rect x="747.2" y="566.0" width="260.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="566.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="579.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="566.0" x2="1011.8" y2="575.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="575.0" x2="1011.8" y2="584.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="584.0" x2="12.2" y2="593.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="593.0" x2="12.2" y2="602.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="584.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="584.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="584.0" x2="608.6" y2="593.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="593.0" x2="608.6" y2="602.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="584.0" x2="617.0" y2="593.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="593.0" x2="617.0" y2="602.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="584.0" x2="625.4" y2="593.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="593.0" x2="625.4" y2="602.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="584.0" width="134.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="597.5" xml:space="preserve" fill="#9ca0a4">Engagement Type </text>
-<rect x="772.4" y="584.0" width="235.2" height="18.0" fill="#282c34"/>
-<text x="772.4" y="597.5" xml:space="preserve" fill="#bbc2cf">(empty)                     </text>
+<line x1="617.0" y1="584.0" x2="617.0" y2="593.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="593.0" x2="617.0" y2="602.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="584.0" width="386.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="584.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="597.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="584.0" x2="1011.8" y2="593.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="593.0" x2="1011.8" y2="602.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="602.0" x2="12.2" y2="611.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="611.0" x2="12.2" y2="620.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="602.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="602.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="602.0" x2="608.6" y2="611.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="611.0" x2="608.6" y2="620.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="602.0" x2="617.0" y2="611.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="611.0" x2="617.0" y2="620.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="602.0" x2="625.4" y2="611.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="611.0" x2="625.4" y2="620.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="602.0" width="134.4" height="18.0" fill="#282c34"/>
-<text x="638.0" y="615.5" xml:space="preserve" fill="#9ca0a4">year            </text>
-<rect x="772.4" y="602.0" width="235.2" height="18.0" fill="#282c34"/>
-<text x="772.4" y="615.5" xml:space="preserve" fill="#bbc2cf">2026                        </text>
+<line x1="617.0" y1="602.0" x2="617.0" y2="611.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="611.0" x2="617.0" y2="620.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="602.0" width="386.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="602.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="615.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="602.0" x2="1011.8" y2="611.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="611.0" x2="1011.8" y2="620.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="620.0" x2="12.2" y2="629.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="629.0" x2="12.2" y2="638.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="620.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="620.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="620.0" x2="608.6" y2="629.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="629.0" x2="608.6" y2="638.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="620.0" x2="617.0" y2="629.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="629.0" x2="617.0" y2="638.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="620.0" x2="625.4" y2="629.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="629.0" x2="625.4" y2="638.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="620.0" width="361.2" height="18.0" fill="#282c34"/>
-<text x="638.0" y="633.5" xml:space="preserve" fill="#9ca0a4">── inside ─────────────────────────────────</text>
-<rect x="999.2" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="620.0" x2="617.0" y2="629.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="629.0" x2="617.0" y2="638.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="620.0" width="386.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="620.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="633.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="620.0" x2="1011.8" y2="629.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="629.0" x2="1011.8" y2="638.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="638.0" x2="12.2" y2="647.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="647.0" x2="12.2" y2="656.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="638.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="638.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="638.0" x2="608.6" y2="647.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="647.0" x2="608.6" y2="656.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="638.0" x2="617.0" y2="647.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="647.0" x2="617.0" y2="656.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="638.0" x2="625.4" y2="647.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="647.0" x2="625.4" y2="656.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="638.0" width="16.8" height="18.0" fill="#282c34"/>
-<text x="638.0" y="651.5" xml:space="preserve" fill="#9ca0a4">▸ </text>
-<rect x="654.8" y="638.0" width="352.8" height="18.0" fill="#282c34"/>
-<text x="654.8" y="651.5" xml:space="preserve" fill="#bbc2cf">00_Brief/                                 </text>
+<line x1="617.0" y1="638.0" x2="617.0" y2="647.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="647.0" x2="617.0" y2="656.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="638.0" width="386.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="638.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="651.5" xml:space="preserve" fill="#3f444a">█</text>
+<line x1="1011.8" y1="638.0" x2="1011.8" y2="647.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="647.0" x2="1011.8" y2="656.0" stroke="#3f444a" stroke-width="1"/>
 <rect x="8.0" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="656.0" x2="12.2" y2="665.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="665.0" x2="12.2" y2="674.0" stroke="#51afef" stroke-width="1"/>
-<rect x="16.4" y="656.0" width="596.4" height="18.0" fill="#282c34"/>
+<rect x="16.4" y="656.0" width="588.0" height="18.0" fill="#282c34"/>
+<rect x="604.4" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="656.0" x2="608.6" y2="665.0" stroke="#51afef" stroke-width="1"/>
+<line x1="608.6" y1="665.0" x2="608.6" y2="674.0" stroke="#51afef" stroke-width="1"/>
 <rect x="612.8" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="617.0" y1="656.0" x2="617.0" y2="665.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="665.0" x2="617.0" y2="674.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
-<line x1="625.4" y1="656.0" x2="625.4" y2="665.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="665.0" x2="625.4" y2="674.0" stroke="#3f444a" stroke-width="1"/>
-<rect x="629.6" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
-<rect x="638.0" y="656.0" width="16.8" height="18.0" fill="#282c34"/>
-<text x="638.0" y="669.5" xml:space="preserve" fill="#9ca0a4">▸ </text>
-<rect x="654.8" y="656.0" width="352.8" height="18.0" fill="#282c34"/>
-<text x="654.8" y="669.5" xml:space="preserve" fill="#bbc2cf">01_Working/                               </text>
+<line x1="617.0" y1="656.0" x2="617.0" y2="665.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="665.0" x2="617.0" y2="674.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="621.2" y="656.0" width="386.4" height="18.0" fill="#282c34"/>
 <rect x="1007.6" y="656.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="1007.6" y="669.5" xml:space="preserve" fill="#3f444a">║</text>
-<rect x="8.0" y="674.0" width="613.2" height="18.0" fill="#282c34"/>
+<line x1="1011.8" y1="656.0" x2="1011.8" y2="665.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="1011.8" y1="665.0" x2="1011.8" y2="674.0" stroke="#3f444a" stroke-width="1"/>
+<rect x="8.0" y="674.0" width="604.8" height="18.0" fill="#282c34"/>
 <line x1="12.2" y1="683.0" x2="16.4" y2="683.0" stroke="#51afef" stroke-width="1"/>
 <line x1="12.2" y1="674.0" x2="12.2" y2="683.0" stroke="#51afef" stroke-width="1"/>
 <line x1="16.4" y1="683.0" x2="20.6" y2="683.0" stroke="#51afef" stroke-width="1"/>
@@ -1031,12 +1006,12 @@
 <line x1="596.0" y1="683.0" x2="600.2" y2="683.0" stroke="#51afef" stroke-width="1"/>
 <line x1="600.2" y1="683.0" x2="604.4" y2="683.0" stroke="#51afef" stroke-width="1"/>
 <line x1="604.4" y1="683.0" x2="608.6" y2="683.0" stroke="#51afef" stroke-width="1"/>
-<line x1="608.6" y1="683.0" x2="612.8" y2="683.0" stroke="#51afef" stroke-width="1"/>
-<line x1="612.8" y1="683.0" x2="617.0" y2="683.0" stroke="#51afef" stroke-width="1"/>
-<line x1="617.0" y1="674.0" x2="617.0" y2="683.0" stroke="#51afef" stroke-width="1"/>
-<rect x="621.2" y="674.0" width="394.8" height="18.0" fill="#282c34"/>
+<line x1="608.6" y1="674.0" x2="608.6" y2="683.0" stroke="#51afef" stroke-width="1"/>
+<rect x="612.8" y="674.0" width="403.2" height="18.0" fill="#282c34"/>
+<line x1="617.0" y1="683.0" x2="621.2" y2="683.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="617.0" y1="674.0" x2="617.0" y2="683.0" stroke="#3f444a" stroke-width="1"/>
+<line x1="621.2" y1="683.0" x2="625.4" y2="683.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="625.4" y1="683.0" x2="629.6" y2="683.0" stroke="#3f444a" stroke-width="1"/>
-<line x1="625.4" y1="674.0" x2="625.4" y2="683.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="629.6" y1="683.0" x2="633.8" y2="683.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="633.8" y1="683.0" x2="638.0" y2="683.0" stroke="#3f444a" stroke-width="1"/>
 <line x1="638.0" y1="683.0" x2="642.2" y2="683.0" stroke="#3f444a" stroke-width="1"/>
@@ -1165,16 +1140,16 @@
 <rect x="638.0" y="710.0" width="100.8" height="18.0" fill="#282c34"/>
 <text x="638.0" y="723.5" xml:space="preserve" fill="#9ca0a4"> templates  </text>
 <rect x="738.8" y="710.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="738.8" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">→</text>
+<text x="738.8" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">w</text>
 <rect x="747.2" y="710.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="747.2" y="723.5" xml:space="preserve" fill="#9ca0a4"> pane  </text>
+<text x="747.2" y="723.5" xml:space="preserve" fill="#9ca0a4"> desk  </text>
 <rect x="806.0" y="710.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="806.0" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">?</text>
+<text x="806.0" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">→</text>
 <rect x="814.4" y="710.0" width="58.8" height="18.0" fill="#282c34"/>
-<text x="814.4" y="723.5" xml:space="preserve" fill="#9ca0a4"> help  </text>
+<text x="814.4" y="723.5" xml:space="preserve" fill="#9ca0a4"> pane  </text>
 <rect x="873.2" y="710.0" width="8.4" height="18.0" fill="#282c34"/>
-<text x="873.2" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">c</text>
-<rect x="881.6" y="710.0" width="92.4" height="18.0" fill="#282c34"/>
-<text x="881.6" y="723.5" xml:space="preserve" fill="#9ca0a4"> commands  </text>
-<rect x="974.0" y="710.0" width="42.0" height="18.0" fill="#282c34"/>
+<text x="873.2" y="723.5" xml:space="preserve" fill="#51afef" font-weight="bold">?</text>
+<rect x="881.6" y="710.0" width="58.8" height="18.0" fill="#282c34"/>
+<text x="881.6" y="723.5" xml:space="preserve" fill="#9ca0a4"> help  </text>
+<rect x="940.4" y="710.0" width="75.6" height="18.0" fill="#282c34"/>
 </svg>

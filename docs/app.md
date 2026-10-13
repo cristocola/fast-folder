@@ -56,8 +56,16 @@ Top to bottom:
   and when it was last touched, its size and how many notes and todos it has;
   then what you work with: its tags one per row, its todos, grouped under the
   `###` labels the file carries when it has any, and its latest notes, each
-  with the day it was written and every line it has; and last what you look
-  things up in, its template variables and the top of its folder. Nothing is
+  with the day it was written and every line it has; then the **glance** —
+  what a hand opens the folder to see: the newest file under it and when it
+  was written (`last moved`, once the size scan has walked the folder; a
+  dot-folder such as `.git` is bookkeeping and never it), the repository's
+  branch and last commit when the folder is one (`head`, read from `.git` as
+  files, no `git` started), and who is working in the folder right now
+  (`working`: the programs whose working folder is inside it, by name, on
+  Linux; `nobody` when none is), checked once a second while the pane shows
+  the project; and last what you look things up in, its template variables
+  and the top of its folder. Nothing is
   cut: a long folder name continues on the next row, broken after an `_`, `-`
   or `.`; the facts wrap whole, never half a date on one row; a note or todo
   too long for the pane continues on the rows under it. A note shows its first

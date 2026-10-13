@@ -364,7 +364,10 @@ impl Runtime {
             Effect::LoadWorking(paths) => {
                 spawn_worker("fastf-working", move || {
                     let active = crate::core::holders::working_in_all(&paths);
-                    let _ = tx.send(Msg::Working(active));
+                    let _ = tx.send(Msg::Working {
+                        asked: paths,
+                        active,
+                    });
                 });
             }
             _ => {}
@@ -442,6 +445,11 @@ impl Runtime {
         };
         self.last_watch = Some(Instant::now());
         self.detail.check(project.path.clone(), detail.stamp);
+        // And who is working in it, on the same beat: the pane's glance
+        // says so, and a shell that just opened there should show.
+        if crate::core::holders::WORKING_KNOWN {
+            self.read_for_the_desk(Effect::LoadWorking(vec![project.path.clone()]));
+        }
     }
 
     /// Nothing is moving: wake once a second to look for a signal from

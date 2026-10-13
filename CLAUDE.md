@@ -105,6 +105,9 @@ tell you.
   Linux, the Restart Manager on Windows),
   `attention.rs` (what is unfinished, by who finishes it, and the choices that
   settle what needs you),
+  `desk.rs` (the desk: a project's ball, whose court it is in, the grouping —
+  pure, handed what the surfaces read), `glance.rs` (a repository's head from
+  `.git` as files, nothing spawned),
   `operations.rs` (the shared mutation boundary), `project.rs` (plan / create /
   apply, and the preview *reports*), `plan.rs` (`ProjectPlan`),
   `transactions/` (v2 staged moves, a facade over `journal` / `manifest` /
@@ -144,10 +147,13 @@ tell you.
   (`fastf --fastf-job <id>`, taken off argv in `main`); `jobs.rs` starts and
   follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
   `progress.rs` prints a job's steps. One module per subcommand (`folder_verbs.rs` is `rename`,
-  `unregister` and `delete`), plus `render.rs`, the only module that prints a
+  `unregister` and `delete`; `desk.rs` reads the cards on the pool and prints
+  them, or opens the app on its tab; `peek.rs` is one project's glance;
+  `agent.rs` runs the configured agent in a project's folder; `hat.rs` wears
+  one), plus `render.rs`, the only module that prints a
   plan, a create or an apply; `target.rs` (resolve a query to one project, asking
-  when it is ambiguous — shared by `open`/`copy`/`path`/`term` and the folder
-  verbs); `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
+  when it is ambiguous — shared by `open`/`copy`/`path`/`term`/`agent` and the
+  folder verbs); `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
   read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are named
   around a keyword and `std::path`.
 - `src/tui/` — every interactive terminal surface, all ratatui. The guided app:
@@ -156,7 +162,9 @@ tell you.
   `detail`, the workers),
   `entry.rs` (how the app was opened), `app/` (`App` and `update`; the app's own
   `impl App` in `geometry` / `status` / `listing` / `messages` / `keys` / `run`,
-  for the pane `pane_edit` / `pane_add` / `pane_cursor`, and for the templates
+  for the pane `pane_edit` / `pane_add` / `pane_cursor`, for the desk tab
+  `desk` (its rows and cursor) / `desk_tab` (its reads, cuts and the journal
+  page), and for the templates
   tab and its builder `templates_tab` / `builder`; and a module per
   flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`, `bases`), `view/` (renderers only, `&App`

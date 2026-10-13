@@ -242,6 +242,9 @@ pub struct ProjectDetail {
     /// folder's modification time, as `library::touched` reads it — or
     /// `None` where neither could be stat'ed.
     pub touched: Option<String>,
+    /// The repository's head, when the folder is one: read from `.git` as
+    /// files, with the record.
+    pub head: Option<crate::core::glance::GitHead>,
     /// The read that failed, if one did.
     pub error: Option<String>,
 }

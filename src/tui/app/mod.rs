@@ -274,6 +274,11 @@ pub struct App {
     pub screen: Screen,
     /// The desk tab's rows, cursor, court and order.
     pub desk: desk::DeskState,
+    /// Who is working in which project, by name, from the last pass over
+    /// the process table — for every project when the desk asked, for the
+    /// selected one while the pane shows it. A project with no entry has not
+    /// been asked about; one with an empty list has nobody in it.
+    pub working: HashMap<PathBuf, Vec<String>>,
     /// A hat worn for this run alone (`fastf desk --as`), over the
     /// configured one.
     pub hat_override: Option<String>,
@@ -417,6 +422,7 @@ impl App {
             focus: Focus::Projects,
             screen: Screen::Library,
             desk: desk::DeskState::default(),
+            working: HashMap::new(),
             hat_override: None,
             desk_visited: false,
             desk_seen_at: None,

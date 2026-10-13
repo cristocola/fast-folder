@@ -120,6 +120,11 @@ impl Holders {
     }
 }
 
+/// Whether this platform can say who is working in a folder at all. Where
+/// it cannot, a surface shows no `working` fact rather than `nobody`, which
+/// would be a guess.
+pub const WORKING_KNOWN: bool = cfg!(target_os = "linux");
+
 /// Which programs are working in each of `roots` — their working folder
 /// inside it — by name, each once, for every root at once: one pass over
 /// the processes answers for a whole desk. Linux reads `/proc`; elsewhere

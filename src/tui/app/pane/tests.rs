@@ -54,7 +54,12 @@ fn metadata(variables: &[(&str, &str)]) -> Metadata {
 
 #[test]
 fn rows_are_one_per_tag_then_add_tag_and_reading_until_the_detail_lands() {
-    let rows = pane_rows(&project(&["draft", "client/Acme"], "client"), None, 0);
+    let rows = pane_rows(
+        &project(&["draft", "client/Acme"], "client"),
+        None,
+        &Glance::default(),
+        0,
+    );
     assert_eq!(
         rows,
         vec![
@@ -105,7 +110,7 @@ fn a_new_phase_is_drawn_where_the_writer_will_open_it() {
         todos: vec![todo("read the order", None)],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&plain), 0);
+    let rows = pane_rows(&project(&[], "client"), Some(&plain), &Glance::default(), 0);
 
     // The name is typed at the end of the list, where the label will go.
     assert_eq!(
@@ -131,7 +136,7 @@ fn a_new_phase_is_drawn_where_the_writer_will_open_it() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&other), 0);
+    let rows = pane_rows(&project(&[], "client"), Some(&other), &Glance::default(), 0);
     assert_eq!(
         todo_rows(with_naming(rows.clone())),
         vec![
@@ -204,7 +209,12 @@ fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
         phases: vec![label("Grade", 0), label("Setup", 0), label("Review", 1)],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     assert_eq!(
         todo_rows(rows.clone()),
         vec![
@@ -237,7 +247,12 @@ fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
         phases: vec![label("Other", 0), label("Setup", 0)],
         ..detail
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&other_first), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&other_first),
+        &Glance::default(),
+        0,
+    );
     assert_eq!(todo_rows(with_naming(rows))[0], PaneRow::Adding);
 }
 
@@ -258,7 +273,12 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     let todo_rows: Vec<&PaneRow> = rows
         .iter()
         .skip_while(|r| **r != PaneRow::Rule(PaneSection::Todo))
@@ -346,7 +366,12 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
         }],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&["draft"], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&["draft"], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     let selectable: Vec<&PaneRow> = rows.iter().filter(|r| r.selectable()).collect();
     assert_eq!(
         selectable,
@@ -409,7 +434,12 @@ fn the_latest_notes_are_shown_under_earlier_and_a_long_note_is_cut_with_more() {
             .collect(),
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     assert!(rows.contains(&PaneRow::EarlierNotes(3)));
     let shown: Vec<usize> = rows
         .iter()
@@ -451,7 +481,12 @@ fn variables_follow_the_template_and_a_select_offers_only_its_options() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     let variables: Vec<&PaneRow> = rows
         .iter()
         .filter(|r| matches!(r, PaneRow::Variable { .. }))
@@ -494,7 +529,12 @@ fn a_registered_project_offers_every_variable_as_text() {
         meta: Some(metadata(&[("b", "2"), ("a", "1")])),
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "(registered)"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "(registered)"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     let kinds: Vec<(&str, &VarKind)> = rows
         .iter()
         .filter_map(|r| match r {
@@ -507,7 +547,7 @@ fn a_registered_project_offers_every_variable_as_text() {
 
 #[test]
 fn the_cursor_walks_selectable_rows_and_stops() {
-    let rows = pane_rows(&project(&["draft"], "client"), None, 0);
+    let rows = pane_rows(&project(&["draft"], "client"), None, &Glance::default(), 0);
     // Name(0) Description(1) Facts Figures Rule Tag(5) AddTag(6) Reading
     assert_eq!(
         step_cursor(&rows, 0, 1),
@@ -568,7 +608,12 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
         ..Default::default()
     };
     // 31 columns inside the border: 20 for a note's text, 27 for a todo's.
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 31);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        31,
+    );
     let at = rows
         .iter()
         .position(|r| matches!(r, PaneRow::Note { .. }))
@@ -617,7 +662,7 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
         notes: vec![note(None, &"word ".repeat(200))],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&long), 31);
+    let rows = pane_rows(&project(&[], "client"), Some(&long), &Glance::default(), 31);
     let lines = rows
         .iter()
         .filter(|r| matches!(r, PaneRow::NoteLine(_)))
@@ -704,7 +749,7 @@ fn a_long_name_wraps_after_its_separators() {
 #[test]
 fn facts_flow_whole_and_wrap_between_them() {
     let project = project(&[], "client-project");
-    let wide = pane_rows(&project, None, 200);
+    let wide = pane_rows(&project, None, &Glance::default(), 200);
     assert_eq!(
         wide[2],
         PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
@@ -712,11 +757,11 @@ fn facts_flow_whole_and_wrap_between_them() {
     );
     // "client-project" (14) + gap (7) + "projects" (8) = 29; the date's 18
     // more does not fit 40, so it starts the next row.
-    let narrow = pane_rows(&project, None, 40);
+    let narrow = pane_rows(&project, None, &Glance::default(), 40);
     assert_eq!(narrow[2], PaneRow::Facts(vec![Fact::Template, Fact::Base]));
     assert_eq!(narrow[3], PaneRow::Facts(vec![Fact::Created]));
     // Narrower than any two: one fact to a row.
-    let tight = pane_rows(&project, None, 15);
+    let tight = pane_rows(&project, None, &Glance::default(), 15);
     let facts: Vec<&PaneRow> = tight
         .iter()
         .filter(|row| matches!(row, PaneRow::Facts(_)))
@@ -737,9 +782,9 @@ fn the_figures_row_count_does_not_depend_on_the_size() {
     let detail = ProjectDetail::default();
     // Size (11) + gap (7) + "no notes" (8) = 26: at 26 they share a row,
     // whatever the size turns out to read.
-    let rows = pane_rows(&project, Some(&detail), 26);
+    let rows = pane_rows(&project, Some(&detail), &Glance::default(), 26);
     assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size, Fact::Notes(0)])));
-    let rows = pane_rows(&project, Some(&detail), 25);
+    let rows = pane_rows(&project, Some(&detail), &Glance::default(), 25);
     assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size])));
 }
 
@@ -756,7 +801,12 @@ fn the_living_sections_come_first() {
         }],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&["draft"], "client"), Some(&detail), 60);
+    let rows = pane_rows(
+        &project(&["draft"], "client"),
+        Some(&detail),
+        &Glance::default(),
+        60,
+    );
     let rules: Vec<PaneSection> = rows
         .iter()
         .filter_map(|row| match row {
@@ -822,7 +872,12 @@ fn the_add_line_opens_where_the_todo_will_land() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
     let around = |place: TodoPlace| {
         let rows = with_adding(rows.clone(), &place);
         let at = rows.iter().position(|r| *r == PaneRow::Adding).unwrap();
@@ -873,7 +928,12 @@ fn a_phase_heading_counts_its_tasks_and_indents_them() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&detail), 30);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        30,
+    );
     let headings: Vec<(&str, usize, usize)> = rows
         .iter()
         .filter_map(|row| match row {
@@ -891,9 +951,73 @@ fn a_phase_heading_counts_its_tasks_and_indents_them() {
         todos: vec![todo(false, None)],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&flat), 30);
+    let rows = pane_rows(&project(&[], "client"), Some(&flat), &Glance::default(), 30);
     assert!(
         rows.iter()
             .any(|row| matches!(row, PaneRow::Todo { phased: false, .. }))
+    );
+}
+
+/// The glance section exists only once it has a fact, each fact a row once
+/// it is known, ahead of the variables: what last moved, the head, who is
+/// working — `nobody` when the answer is that nobody is.
+#[test]
+fn the_glance_shows_each_fact_once_it_is_known_and_nothing_before() {
+    let detail = ProjectDetail::default();
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&detail),
+        &Glance::default(),
+        0,
+    );
+    assert!(
+        !rows.contains(&PaneRow::Rule(PaneSection::Glance)),
+        "no fact, no section: {rows:?}"
+    );
+
+    let glance = Glance {
+        newest: Some((
+            "2026-01-09T09:41:05Z".to_string(),
+            "02_Edit/cut_v03.prproj".to_string(),
+        )),
+        working: Some(Vec::new()),
+    };
+    let with_head = ProjectDetail {
+        head: Some(crate::core::glance::GitHead {
+            branch: Some("main".to_string()),
+            sha: Some("a1b2c3d".to_string()),
+            when: None,
+            subject: Some("Rough cut".to_string()),
+        }),
+        ..Default::default()
+    };
+    let rows = pane_rows(&project(&[], "client"), Some(&with_head), &glance, 0);
+    let at = rows
+        .iter()
+        .position(|r| *r == PaneRow::Rule(PaneSection::Glance))
+        .expect("the section");
+    assert_eq!(
+        rows[at + 1..at + 4],
+        [
+            PaneRow::Glance {
+                key: "last moved",
+                value: "02_Edit/cut_v03.prproj  2026-01-09 09:41".to_string(),
+            },
+            PaneRow::Glance {
+                key: "head",
+                value: "main @ a1b2c3d  Rough cut".to_string(),
+            },
+            PaneRow::Glance {
+                key: "working",
+                value: "nobody".to_string(),
+            },
+        ]
+    );
+    assert!(!rows[at + 1].selectable(), "a fact is read, never edited");
+    assert!(
+        rows.iter()
+            .position(|r| *r == PaneRow::Rule(PaneSection::Notes))
+            < Some(at),
+        "after the notes, before the reference: {rows:?}"
     );
 }

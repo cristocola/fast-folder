@@ -26,6 +26,8 @@ mod desk;
 mod edges;
 #[path = "tui_update/flows.rs"]
 mod flows;
+#[path = "tui_update/glance.rs"]
+mod glance;
 #[path = "tui_update/guide.rs"]
 mod guide;
 #[path = "tui_update/key_lines.rs"]

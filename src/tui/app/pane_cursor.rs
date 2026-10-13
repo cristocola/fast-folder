@@ -18,7 +18,22 @@ impl App {
             .detail
             .map(|pane| crate::tui::layout::pane_text(pane).width as usize)
             .unwrap_or(0);
-        let rows = pane_rows(project, self.details.get(&project.path), width);
+        let glance = Glance {
+            newest: self
+                .library
+                .sizes
+                .get(&project.path)
+                .and_then(|facts| facts.as_ref())
+                .and_then(|facts| facts.newest.as_ref())
+                .map(|(at, path)| {
+                    (
+                        crate::util::time::iso8601_of(*at),
+                        crate::util::paths::display_path(path),
+                    )
+                }),
+            working: self.working.get(&project.path).cloned(),
+        };
+        let rows = pane_rows(project, self.details.get(&project.path), &glance, width);
         match &self.pane_edit {
             Some(PaneEdit::Line {
                 target: EditTarget::NewTodo { place, .. },

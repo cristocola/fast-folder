@@ -679,6 +679,9 @@ pub fn detail(path: &Path) -> ProjectDetail {
         Ok(entries) => detail.listing = entries,
         Err(err) => problems.push(format!("folder: {err}")),
     }
+    // The repository's head, from `.git` as files: absent when the folder
+    // is not a repository, which is no problem to report.
+    detail.head = crate::core::glance::git_head(path);
     detail.error = problems.into_iter().next();
     detail
 }

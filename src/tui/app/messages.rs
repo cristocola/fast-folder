@@ -11,6 +11,15 @@ impl App {
             Msg::Resize(width, height) => self.on_resize(width, height),
             Msg::Tick => self.on_tick(),
             Msg::Sizes(cells) => {
+                // The newest file the pane shows before these land, to say
+                // whether what it shows after is a change.
+                let shown = self.library.selected().and_then(|project| {
+                    self.library
+                        .sizes
+                        .get(&project.path)
+                        .and_then(|facts| facts.as_ref())
+                        .and_then(|facts| facts.newest.clone())
+                });
                 let effects = self.on_sizes(cells);
                 // A walk's newest file is part of how quiet a card is, and
                 // the pane's glance names it: the rows under the cursor may
@@ -19,6 +28,23 @@ impl App {
                     self.after_records_changed();
                 }
                 self.refind_pane();
+                // A `last moved` that replaced a different one pulses, as a
+                // size that changed does: the eye is told what moved.
+                let now = self.library.selected().and_then(|project| {
+                    self.library
+                        .sizes
+                        .get(&project.path)
+                        .and_then(|facts| facts.as_ref())
+                        .and_then(|facts| facts.newest.clone())
+                });
+                if shown.is_some() && now.is_some() && shown != now && self.pane_live() {
+                    let rows = self.pane_rows();
+                    if let Some(at) = rows.iter().position(
+                        |row| matches!(row, pane::PaneRow::Glance { key, .. } if *key == "last moved"),
+                    ) {
+                        self.pane_pulses.start(at, self.elapsed_ms);
+                    }
+                }
                 effects
             }
             Msg::Summary(summary) => {

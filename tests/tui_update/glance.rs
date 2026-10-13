@@ -60,6 +60,27 @@ fn the_glance_fills_in_as_the_answers_land() {
         glance_rows(&app),
         [("last moved", "notes/brief.md  2026-01-09 09:41".to_string())]
     );
+    assert!(app.pane_pulses.is_empty(), "a first fill is not a change");
+    // A different newest file replacing it is a change, and its row pulses.
+    let _ = update(
+        &mut app,
+        Msg::Sizes(vec![(
+            project.path.clone(),
+            Some(fastf::util::tree_size::TreeFacts {
+                bytes: 12,
+                newest: Some((
+                    UNIX_EPOCH + Duration::from_secs(1_767_951_665 + 3600),
+                    PathBuf::from("notes/brief.md"),
+                )),
+            }),
+        )]),
+    );
+    assert!(!app.pane_pulses.is_empty(), "what moved is lit");
+    assert!(
+        glance_rows(&app)[0]
+            .1
+            .starts_with("notes/brief.md  2026-01-09 10:41")
+    );
     let _ = update(
         &mut app,
         Msg::Working {

@@ -1,5 +1,5 @@
-//! The desk tab: the library grouped by who each project's next open todo
-//! is assigned to.
+//! The desk tab: the library grouped by the owner of each project's next
+//! open todo.
 
 use crate::harness::*;
 use fastf::core::desk::{Assignee, Order};

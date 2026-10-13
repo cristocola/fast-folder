@@ -9,7 +9,7 @@
 //! fastf todo list ID0047                              # the list, numbered
 //! fastf todo add ID0047 "colour grade"                # at the end
 //! fastf todo add ID0047 "cut" --phase "Main Edit"     # under a label
-//! fastf todo add ID0047 "cut @claude"                 # assigned to @claude
+//! fastf todo add ID0047 "cut @claude"                 # owner: @claude
 //! fastf todo add ID0047 "call back" --mine            # in the hat's
 //! fastf todo owner ID0047 3 claude                    # hand number 3 over
 //! fastf todo owner ID0047 3 --none                    # to nobody
@@ -199,9 +199,9 @@ pub struct AddArgs {
     pub text: String,
     /// The `###` label to put it under, opening one if the list has none.
     pub phase: Option<String>,
-    /// Who it is assigned to, over any `@owner` typed at the end of the text.
+    /// Its owner, over any `@owner` typed at the end of the text.
     pub owner: Option<String>,
-    /// Assign it to the hat.
+    /// Make the hat its owner.
     pub mine: bool,
 }
 
@@ -248,11 +248,11 @@ pub struct OwnerArgs {
     /// the todo away from everybody; `None` without it prints the owner.
     pub owner: Option<String>,
     pub none: bool,
-    /// Assign it to the hat.
+    /// Make the hat its owner.
     pub mine: bool,
 }
 
-/// `fastf todo owner`: who a todo is assigned to, or assign it to somebody.
+/// `fastf todo owner`: print a todo's owner, or set it.
 pub fn owner(args: OwnerArgs) -> Result<()> {
     let (cfg, project) = project(&args.query)?;
     let todos = crate::core::body::read_todos(&project.path)?;

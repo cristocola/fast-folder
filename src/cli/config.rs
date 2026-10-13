@@ -423,7 +423,7 @@ fn set_hat(config: &mut Config, value: &str) -> Result<String> {
     let owner = crate::core::validated::Owner::parse(value)?;
     config.hat = owner.into_string();
     Ok(format!(
-        "Set hat = {}  (`fastf todo add --mine` assigns to @{} now)",
+        "Set hat = {}  (`fastf todo add --mine` now gives new todos the owner @{})",
         config.hat, config.hat
     ))
 }

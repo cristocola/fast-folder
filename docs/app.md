@@ -395,12 +395,12 @@ beside each is how many projects use it.
 
 ## The desk
 
-`w` opens the **desk**: every project in view as one line, grouped by who
-its next open todo is assigned to. The next open todo is the project's first
+`w` opens the **desk**: every project in view as one line, grouped by the
+owner of its next open todo. The next open todo is the project's first
 unticked todo in file order, and its owner is the `@name` at the end of that
-todo's line. The groups are `yours` for the hat, `@claude` for an agent,
-`@acme` for a client or colleague, `no owner` for a project whose next todo
-has no `@name`, and `no open todos` for a project with no unticked todo at
+todo's line, a name you wrote there for yourself. The groups are `yours` for
+the hat, `@claude` for an agent, `@acme` for a client you are waiting on,
+`no owner` for a project whose next todo has no `@name`, and `no open todos` for a project with no unticked todo at
 all. The groups come in this order: `yours` first when a hat is set, then
 `no owner`, then the other owners, the one with the most projects first,
 then `no open todos`. Within a group, the project nothing has written in for
@@ -424,7 +424,7 @@ todo with its phase before it, how long the project has been **quiet** (the
 newer of its `PROJECT_INFO.md`, its folder and the newest file under it,
 once the size scan has walked it), and, at the right, `active` when a
 program has its working folder in the project right now (Linux; read from
-the process table) or `⚠` when the next todo is assigned to an owner, nothing
+the process table) or `⚠` when the next todo has an owner, nothing
 has been written in the folder for three days, and no program is working in
 it. That is the sign of an agent that stopped without finishing. Nothing is stored
 for any of it and nothing is inferred. A project whose record has not been

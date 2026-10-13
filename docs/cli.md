@@ -28,10 +28,10 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf journal` | Every dated note across every project, newest first |
-| `fastf desk` | Every project as one line, grouped by who its next open todo is assigned to. On a terminal it opens the guided app on its desk tab; `--plain` prints the list |
+| `fastf desk` | Every project as one line, grouped by the owner of its next open todo. On a terminal it opens the guided app on its desk tab; `--plain` prints the list |
 | `fastf peek <query>` | A short summary of one project: next todo, todo counts, programs working in it, newest file, git head, last note |
 | `fastf todo list/add/done/edit/remove/owner <id>` | A project's task list |
-| `fastf hat [name]` | Print or set the hat: the owner name the desk lists as yours and `todo add --mine` assigns to |
+| `fastf hat [name]` | Print or set the hat: the owner name for your own todos, which the desk lists as yours |
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf desc <query> [text]` | Show or set a project's one-line description |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
@@ -498,10 +498,10 @@ every row is a `note`.
 ## The desk
 
 ```bash
-fastf desk                        # every project, one line each, grouped by assignee
-fastf desk --mine                 # only the projects whose next todo is assigned to the hat
+fastf desk                        # every project, one line each, grouped by owner
+fastf desk --mine                 # only the projects whose next todo is yours (the hat's)
 fastf desk --as sales             # use @sales as the hat for this run
-fastf desk --owner claude         # only the projects whose next todo is assigned to @claude
+fastf desk --owner claude         # only the projects whose next todo is @claude's
 fastf desk --no-owner             # only the projects whose next todo has no owner
 fastf desk --no-open-todos        # only the projects with no open todo
 fastf desk --quiet 7              # only the projects nothing has written in for a week
@@ -511,11 +511,12 @@ fastf desk --template music-video --tag client/Acme --base projects
 fastf desk --json
 ```
 
-The desk lists every project as one line and groups the lines by who the
-project's next open todo is assigned to. The next open todo is the first
-unticked todo in the file, in file order. Its owner is the `@name` at the end
-of the todo's line. A project whose next todo has no `@name` is under
-`no owner`. A project with no unticked todo at all is under `no open todos`.
+The desk lists every project as one line and groups the lines by the owner
+of the project's next open todo. The next open todo is the first unticked
+todo in the file, in file order. Its owner is the `@name` at the end of the
+todo's line: a name you wrote there for yourself, such as an agent
+(`@claude`), a client you are waiting on (`@acme`) or your own hat
+(`@sales`). A project whose next todo has no `@name` is under `no owner`. A project with no unticked todo at all is under `no open todos`.
 Only one todo per project is listed, never the whole list.
 
 ```
@@ -911,11 +912,11 @@ fastf todo list ID0047                            # the list, numbered
 fastf todo list ID0047 --open                     # only what is left
 fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
-fastf todo add ID0047 "cut @claude"               # assigned to @claude
+fastf todo add ID0047 "cut @claude"               # owner: @claude
 fastf todo add ID0047 "cut" --owner claude        # the same, as a flag
-fastf todo add ID0047 "call the label" --mine     # assigned to the hat
-fastf todo owner ID0047 3                         # print who number 3 is assigned to
-fastf todo owner ID0047 3 acme                    # assign it to @acme
+fastf todo add ID0047 "call the label" --mine     # owner: the hat
+fastf todo owner ID0047 3                         # print the owner of number 3
+fastf todo owner ID0047 3 acme                    # set its owner to @acme
 fastf todo owner ID0047 3 --none                  # remove the owner
 fastf todo done ID0047 3                          # tick number 3
 fastf todo done ID0047 3 --undo                   # untick it again
@@ -934,13 +935,16 @@ same list and toggles it with Enter.
 - [x] shoot @sales added:2026-09-20T10:00:00Z done:2026-09-28T18:30:00Z
 ```
 
-`@claude` is the **owner**: the person, agent or client the todo is assigned
-to. `add` writes `added:` with the time of the write; `done` writes `done:`
-and `--undo` removes it; `edit` replaces the text and leaves all three where
-they were. To assign a todo, end the text you type with `@name`, pass
-`--owner`, or pass `--mine` to assign it to the hat (`fastf hat`). A todo
-without any of these has no owner. `owner` prints a todo's owner, assigns it
-to someone else, or removes the owner with `--none`. An owner is one word, by
+`@claude` is the **owner**: a name you write on the todo for yourself, to
+say who it is with. An agent working in the folder (`@claude`), a client
+whose answer you are waiting for (`@acme`), or you under a role (`@sales`).
+fastf is a tool for one person: the names are your own notes, and nobody
+else has to run fastf for them to be useful. `add` writes `added:` with the
+time of the write; `done` writes `done:` and `--undo` removes it; `edit`
+replaces the text and leaves all three where they were. To give a todo an
+owner, end the text you type with `@name`, pass `--owner`, or pass `--mine`
+for the hat (`fastf hat`). A todo without any of these has no owner. `owner`
+prints a todo's owner, changes it, or removes it with `--none`. An owner is one word, by
 the rule a tag keeps. `list` shows the owner and the day (added, or done once
 it is) in two columns after the text, and leaves both out of a list that has
 neither.
@@ -948,8 +952,8 @@ neither.
 **The owner is read from the end of the line only.** fastf takes the run of
 `@name`, `added:` and `done:` tokens at the end of the line as the todo's
 record and everything before it as the text. A `@word` in the middle of the
-text stays text, so a todo that mentions an address or a handle is not
-assigned to it. When two `@names` end the line, the first is the owner.
+text stays text, so a todo that mentions an address or a handle does not
+get that owner. When two `@names` end the line, the first is the owner.
 
 A todo written by hand without any of these tokens has no owner and no
 dates, and stays that way: fastf never fills in what it does not know. The
@@ -1004,9 +1008,10 @@ fastf hat --off                  # unset it
 FASTF_HAT=technician fastf …     # the hat for one shell, written nowhere
 ```
 
-The hat is an owner name, for example `@sales`. When it is set, the desk
-lists the todos assigned to that name under `yours`, `fastf todo add --mine`
-assigns new todos to it, and the app's header shows it after the tabs. It is
+The hat is the owner name you use for your own todos, for example `@sales`.
+When it is set, the desk lists the todos with that owner under `yours`,
+`fastf todo add --mine` gives new todos that owner, and the app's header
+shows it after the tabs. It is
 the `hat` configuration key, so `config show` prints it and the settings
 screen has its row. `FASTF_HAT` sets it for one shell without writing the
 config file, and wins while it is set, so two terminals can use two different

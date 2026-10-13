@@ -658,7 +658,7 @@ enum Commands {
             tasks alone — a `###` phase label is not a task and takes no number.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
-            A todo's line carries who it is assigned to and its dates, as\n\
+            A todo's line carries its owner and its dates, as\n\
             `- [ ] cut @claude added:2026-10-12T14:02:11Z`: `add` stamps\n\
             `added:`, `done` stamps `done:` and `--undo` takes it off, and a\n\
             trailing `@name` is the owner. A line written by hand without them\n\
@@ -680,11 +680,12 @@ enum Commands {
         action: TodoAction,
     },
 
-    /// Print or set the hat: the owner name the desk and `todo add --mine` treat as yours
+    /// Print or set the hat: the owner name for your own todos
     #[command(
-        after_help = "The hat is an owner name, for example @sales. When it is set, the desk\n\
-        lists the todos assigned to that name under `yours`, `fastf todo add --mine`\n\
-        assigns new todos to it, and the app's header shows it. It is the `hat`\n\
+        after_help = "The hat is the owner name you use for your own todos, for example\n\
+        @sales. When it is set, the desk\n\
+        lists the todos with that owner under `yours`, `fastf todo add --mine`\n\
+        gives new todos that owner, and the app's header shows it. It is the `hat`\n\
         configuration key; FASTF_HAT sets it for one shell without writing the\n\
         config file.\n\n\
         Examples:\n  \
@@ -701,11 +702,11 @@ enum Commands {
         off: bool,
     },
 
-    /// List every project as one line, grouped by who its next open todo is assigned to
+    /// List every project as one line, grouped by the owner of its next open todo
     #[command(
         after_help = "Each project is one line: its first open todo, how long since anything in\n\
         the project was written, and `active` when a program is working in it. The\n\
-        lines are grouped by who that todo is assigned to: the hat (yours), each\n\
+        lines are grouped by that todo's owner: the hat (yours), each\n\
         other owner, no owner, and no open todo at all. Only the first open todo\n\
         of each project is listed, never every todo.\n\n\
         On a terminal it opens the guided app on its desk tab, carrying the group,\n\
@@ -713,9 +714,9 @@ enum Commands {
         terminal, as do --quiet, --template, --tag and --base, and so does a pipe.\n\n\
         Examples:\n  \
             fastf desk                              # the app on its desk tab\n  \
-            fastf desk --mine                       # only the todos assigned to the hat\n  \
-            fastf desk --owner claude               # only the todos assigned to @claude\n  \
-            fastf desk --no-owner                   # only the todos nobody is assigned to\n  \
+            fastf desk --mine                       # only the projects whose next todo is yours\n  \
+            fastf desk --owner claude               # only the projects whose next todo is @claude's\n  \
+            fastf desk --no-owner                   # only the projects whose next todo has no owner\n  \
             fastf desk --quiet 7                    # nothing written for a week\n  \
             fastf desk --random                     # one project, picked at random\n  \
             fastf desk --as sales --json"
@@ -724,10 +725,10 @@ enum Commands {
         /// Use this owner name as the hat for this run, instead of the configured one
         #[arg(long = "as", value_name = "NAME")]
         as_hat: Option<String>,
-        /// Only the projects whose next todo is assigned to the hat
+        /// Only the projects whose next todo is yours (its owner is the hat)
         #[arg(long)]
         mine: bool,
-        /// Only the projects whose next todo is assigned to this owner
+        /// Only the projects whose next todo has this owner
         #[arg(long, value_name = "NAME")]
         owner: Option<String>,
         /// Only the projects whose next todo has no owner
@@ -764,7 +765,7 @@ enum Commands {
 
     /// Print a short summary of one project without opening its folder
     #[command(
-        after_help = "The next open todo and who it is assigned to, how many todos are open\n\
+        after_help = "The next open todo and its owner, how many todos are open\n\
         and done, which programs are working in the folder right now, the newest\n\
         file under it, the repository's branch and last commit when the folder is\n\
         one, the last note, and how long the project has been quiet. `fastf show`\n\
@@ -932,7 +933,7 @@ enum ConfigAction {
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
             agent                       The agent `fastf agent` starts in a project's folder, as one shell line (default: none)\n  \
-            hat                         The owner name you work under; todos assigned to it count as yours (default: none; FASTF_HAT sets one for a shell)\n  \
+            hat                         The owner name for your own todos; the desk lists them as yours (default: none; FASTF_HAT sets one for a shell)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
@@ -1022,23 +1023,23 @@ enum TodoAction {
         #[arg(long)]
         open: bool,
     },
-    /// Add an open task: one line, dated, assigned to somebody or to nobody
+    /// Add an open task: one line, dated, with an owner or without
     Add {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The task text; a trailing `@name` assigns it to that owner
+        /// The task text; a trailing `@name` is its owner
         text: String,
         /// Put it under this `###` phase label, opening one if there is none
         #[arg(long)]
         phase: Option<String>,
-        /// Who it is assigned to (over a `@name` at the end of the text)
+        /// Its owner (over a `@name` at the end of the text)
         #[arg(long, value_name = "NAME", conflicts_with = "mine")]
         owner: Option<String>,
-        /// Assign it to the hat (`fastf hat`)
+        /// Make the hat (`fastf hat`) its owner
         #[arg(long)]
         mine: bool,
     },
-    /// Show who a task is assigned to, or assign it to somebody
+    /// Show or set a task's owner
     Owner {
         /// Project ID, ID prefix, or name substring
         query: String,
@@ -1050,7 +1051,7 @@ enum TodoAction {
         /// Remove the owner
         #[arg(long, conflicts_with = "mine")]
         none: bool,
-        /// Assign it to the hat (`fastf hat`)
+        /// Make the hat (`fastf hat`) its owner
         #[arg(long)]
         mine: bool,
     },

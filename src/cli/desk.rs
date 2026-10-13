@@ -1,5 +1,5 @@
-//! `fastf desk`: every project as one line, grouped by who its next open
-//! todo is assigned to.
+//! `fastf desk`: every project as one line, grouped by the owner of its next
+//! open todo.
 //!
 //! Each line shows the project's first open todo, its phase, how long the
 //! project has been quiet, and whether a program is working in it. The
@@ -10,8 +10,8 @@
 //!
 //! ```bash
 //! fastf desk                        # every group, yours first
-//! fastf desk --mine                 # only the todos assigned to the hat
-//! fastf desk --owner claude         # only the todos assigned to @claude
+//! fastf desk --mine                 # only the projects whose next todo is yours
+//! fastf desk --owner claude         # only the projects whose next todo is @claude's
 //! fastf desk --no-owner             # only the projects whose next todo has no owner
 //! fastf desk --quiet 7              # only the projects nothing has written in for a week
 //! fastf desk --random               # one project, picked at random
@@ -43,9 +43,9 @@ use crate::core::library::{self, Project};
 pub struct DeskArgs {
     /// Use this owner name as the hat for this run, instead of the configured one.
     pub as_hat: Option<String>,
-    /// Only the projects whose next todo is assigned to the hat.
+    /// Only the projects whose next todo is yours (its owner is the hat).
     pub mine: bool,
-    /// Only the projects whose next todo is assigned to this owner.
+    /// Only the projects whose next todo has this owner.
     pub owner: Option<String>,
     /// Only the projects whose next todo has no owner.
     pub no_owner: bool,
@@ -388,8 +388,8 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
     }
 }
 
-/// Every assignee the cards name, each with how many projects have their
-/// next todo assigned to it. `peek` prints these counts.
+/// Every owner the cards name, each with how many projects have their next
+/// todo under it. `peek` prints these counts.
 pub fn assignees_of(cards: &[Card]) -> Vec<(Assignee, usize)> {
     let mut counts: HashMap<Assignee, usize> = HashMap::new();
     for card in cards {

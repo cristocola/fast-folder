@@ -1,7 +1,7 @@
 //! `fastf peek <query>`: a short summary of one project, without opening
 //! its folder.
 //!
-//! It prints the next open todo and who it is assigned to, the todo counts,
+//! It prints the next open todo and its owner, the todo counts,
 //! which programs are working in the folder right now, the newest file under
 //! it, the repository's head when the folder is one, the last note, and how
 //! long the project has been quiet. `fastf show` prints everything fastf

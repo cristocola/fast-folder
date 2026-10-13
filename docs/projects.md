@@ -60,8 +60,9 @@ A new project starts with an empty `## Notes` and no `## Todo`. The two notes an
 A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
 
 **A todo's owner and its dates are at the end of its line**, after the
-task. `@claude` is the **owner**: the person, agent or client the todo is
-assigned to, or a hat of your own (`@sales`). `added:` and `done:` are when
+task. `@claude` is the **owner**: a name you write for yourself to say who the
+todo is with, such as an agent (`@claude`), a client (`@acme`) or your own
+hat (`@sales`). `added:` and `done:` are when
 it was added and when it was ticked, the same stamps the notes carry. The
 text comes first, so a person reads the task; the three tokens name
 themselves, so an agent reading the raw file needs no documentation. `fastf
@@ -75,7 +76,7 @@ and **never filled in**: fastf does not know when it was written.
 `@name`, `added:` and `done:` tokens at the end of the line, in any order and
 any case, and treats everything before it as the text. A `@word` in the
 middle of the text stays text, so a todo like `- [ ] mail @acme the invoice`
-has no owner, and `- [ ] mail the invoice @acme` is assigned to acme. When
+has no owner, and `- [ ] mail the invoice @acme` has the owner acme. When
 two `@names` end the line, the first is the owner. See
 [docs/cli.md](cli.md#todos).
 
@@ -130,7 +131,7 @@ from when anything wrote the file.
 ### What the desk reads
 
 `fastf desk` and the app's desk tab list every project as one line, grouped
-by who its first open todo is assigned to, with how long the project has been
+by the owner of its first open todo, with how long the project has been
 quiet. All of it is read from the folder: the owner from the todo's own
 `@name`, the age from `touched` and from the newest file a walk of the folder
 finds (never one under a dot-folder such as `.git`), and `active` from the

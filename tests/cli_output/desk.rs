@@ -1,9 +1,9 @@
-//! `fastf desk` and `fastf peek`: every project grouped by who its next open
-//! todo is assigned to, and one project's summary.
+//! `fastf desk` and `fastf peek`: every project grouped by the owner of its
+//! next open todo, and one project's summary.
 
 use super::*;
 
-/// Four projects, each with a different assignee for its next todo, so
+/// Four projects, each with a different owner for its next todo, so
 /// every heading the desk can show is on it.
 fn desk_library() -> Sandbox {
     let sb = Sandbox::new();

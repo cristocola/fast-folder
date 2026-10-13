@@ -1,10 +1,10 @@
-//! The desk: every project as one line, grouped by who its next open todo is
-//! assigned to. `fastf desk` prints it and the app's desk tab shows it.
+//! The desk: every project as one line, grouped by the owner of its next open
+//! todo. `fastf desk` prints it and the app's desk tab shows it.
 //!
 //! The **next todo** is the project's first open todo in file order. The
-//! **assignee** is who that todo is assigned to: the `@owner` at the end of
-//! its line, nobody when it has none, and no open todo at all when every todo
-//! is done. Each project is one line under its assignee, with how long since
+//! **assignee** is that todo's owner: the `@owner` at the end of its line, a
+//! name the user wrote there for their own reference; nobody when it has
+//! none; and no open todo at all when every todo is done. Each project is one line under its assignee, with how long since
 //! anything in the project was last written. Nothing here is inferred: the
 //! owner is on the todo's line, the age is the file's and the folder's own
 //! modification time, and "active" means the operating system reports a
@@ -28,7 +28,7 @@ pub struct NextTodo {
     pub index: usize,
 }
 
-/// Who a project's next open todo is assigned to.
+/// The owner of a project's next open todo, or why it has none.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Assignee {
     /// The owner the todo names, without its `@`.
@@ -138,7 +138,7 @@ impl Card {
         }
     }
 
-    /// Who the next open todo is assigned to.
+    /// The owner of the next open todo, or why it has none.
     pub fn assignee(&self) -> Assignee {
         match &self.next_todo {
             None => Assignee::NoOpenTodo,

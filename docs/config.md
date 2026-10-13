@@ -65,8 +65,9 @@ fastf config set terminal none                   # never relaunch (fastf term st
 fastf config set agent claude
 fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
 
-# The hat: the owner name the desk lists as yours. `fastf todo add --mine`
-# assigns to it and the app's header shows it. `fastf hat sales` is the
+# The hat: the owner name for your own todos. The desk lists them as yours,
+# `fastf todo add --mine` gives new todos that owner, and the app's header
+# shows it. `fastf hat sales` is the
 # short way; FASTF_HAT sets it for one shell without writing the file.
 fastf config set hat sales
 fastf config set hat ""                          # no hat

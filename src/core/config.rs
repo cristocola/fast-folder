@@ -107,8 +107,8 @@ pub struct Config {
     #[serde(default)]
     pub agent: String,
 
-    /// The hat: the owner name the desk lists as yours and `fastf todo add
-    /// --mine` assigns to. Empty = none. Shown in the app's header;
+    /// The hat: the owner name for the user's own todos; the desk lists them
+    /// as yours and `fastf todo add --mine` uses it. Empty = none. Shown in the app's header;
     /// `FASTF_HAT` sets it for one shell. It never changes what a file says.
     ///
     /// Never read raw — see [`Config::resolve_hat`].

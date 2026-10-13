@@ -755,7 +755,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneOwner,
         "Give the todo an owner",
-        "who the todo under the cursor is assigned to: an owner the list already names, the hat, nobody, or a name you type",
+        "the owner of the todo under the cursor: an owner the list already names, the hat, nobody, or a name you type",
         &[Context::Detail],
         [Key::ch('O')],
         Project,
@@ -1176,7 +1176,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         ShowDesk,
         "The desk",
-        "every project as one line, grouped by who its next open todo is assigned to (you, an agent, somebody else, nobody, or no open todo), with how long since anything in it was written",
+        "every project as one line, grouped by the owner of its next open todo (you, an agent, a client, nobody, or no open todo), with how long since anything in it was written",
         TABS,
         [Key::ch('w')],
         Library,

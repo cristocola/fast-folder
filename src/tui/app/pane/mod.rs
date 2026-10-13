@@ -460,7 +460,7 @@ pub enum PaneRow {
     },
     /// One todo's first row. Enter toggles it; F2 edits its text; `O` gives
     /// it an owner. `phased` when it sits under a phase heading, and is
-    /// drawn in from it. `owner` and `when` — who it is assigned to, and the day it
+    /// drawn in from it. `owner` and `when` — its owner, and the day it
     /// was added, or ticked once it is — sit at the row's right, dim.
     Todo {
         ordinal: usize,

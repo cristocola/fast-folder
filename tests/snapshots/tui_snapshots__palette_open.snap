@@ -13,7 +13,7 @@ expression: frame
 "│  ID0246 2026-│ Open project folder  · reveal it in the file manager             o │rojects       │"
 "│  ID0245 2026-│ Open terminal here  · a new terminal window in the project fol…  t │              │"
 "│  ID0244 2026-│ Project actions  · open the action menu for the selected proje…  a │              │"
-"│  ID0243 2026-│ The desk  · every project as one line, grouped by who its next…  w │───────────── │"
+"│  ID0243 2026-│ The desk  · every project as one line, grouped by the owner of…  w │───────────── │"
 "│  ID0242 2026-│ Only this group  · nothing on the desk                           f │              │"
 "│  ID0241 2026-│                                                                    │              │"
 "│  ID0240 2026-│                                                                    │              │"

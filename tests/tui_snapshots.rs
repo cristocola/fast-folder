@@ -609,14 +609,18 @@ fn detail_pane_glance_120x40() {
         },
     );
     let frame = render_to_string(&app, 120, 40);
-    if fastf::core::holders::WORKING_KNOWN {
-        assert!(frame.contains("claude, bash"), "{frame}");
-    }
     assert!(
         frame.contains("cut_v03.prproj") && frame.contains("main @ a1b2c3d"),
         "{frame}"
     );
-    snap("detail_pane_glance_120x40", frame);
+    // The picture is of a platform that can say who is working in a folder.
+    // Where none can, the row is absent and the frame is a row shorter.
+    if fastf::core::holders::WORKING_KNOWN {
+        assert!(frame.contains("claude, bash"), "{frame}");
+        snap("detail_pane_glance_120x40", frame);
+    } else {
+        assert!(!frame.contains("working"), "{frame}");
+    }
 }
 
 /// The desk at the standard size: every group heading with its count, one

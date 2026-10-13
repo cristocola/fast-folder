@@ -59,6 +59,13 @@ fresh VM, never a developer's box. `packaging/windows/assert-standalone.ps1`
 checks the PE import table on every Windows job. A `RUSTFLAGS` in the environment
 *replaces* that config rather than adding to it.
 
+`build.rs` exists for one link argument: the Windows exe's header asks for an
+8 MB main-thread stack, which is what Linux gives. Windows' default is 1 MB,
+and clap's derived command tree is one function whose unoptimized frame is
+larger than that, so a debug `fastf.exe` without it overflows before it parses
+anything, and every Windows suite that runs the binary fails at its first
+command.
+
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a
 # real Windows runner. Needs `rustup target add x86_64-pc-windows-gnu` plus a

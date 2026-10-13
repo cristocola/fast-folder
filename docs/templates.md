@@ -154,9 +154,9 @@ Templates always use `/` as the path separator, on every platform. fastf transla
 
 Press `H` on the templates tab or anywhere in the builder and Fast Folder
 explains itself: seven pages on what a template is, the five parts of one, how
-projects get their names, the questions to ask, folders and files — and a
-walkthrough that builds a real template from nothing, with the exact values to
-type. `←` and `→` turn the page, Enter goes forward, Esc closes it.
+projects get their names, the questions to ask, folders and files (the starter
+todos included) — and a walkthrough that builds a real template from nothing,
+with the exact values to type. `←` and `→` turn the page, Enter goes forward, Esc closes it.
 
 Opened from inside the builder it lands on the page for the part under the
 cursor, so it answers the question you actually have rather than starting at the

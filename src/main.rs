@@ -14,13 +14,23 @@ use clap::{Parser, Subcommand};
     long_about = "fastf creates structured project folders from YAML templates.\n\
 \n\
 Templates define a folder structure, placeholder files, and variables (text inputs\n\
-or select menus). Each project gets an auto-incrementing ID. Templates, config, and\n\
-counters live in one data folder: next to the binary when a config.toml sits there\n\
-(portable mode), otherwise in your user config directory. See `fastf paths`.\n\
+or select menus). Each project gets an auto-incrementing ID and a PROJECT_INFO.md\n\
+that holds its description, tags, dated notes and todo list. A todo may end in\n\
+@owner, a name you write for yourself to say who it is with (an agent, a client,\n\
+your own hat), and the desk lists every project's next todo by that owner.\n\
+Templates, config, and counters live in one data folder: next to the binary when\n\
+a config.toml sits there (portable mode), otherwise in your user config\n\
+directory. See `fastf paths`.\n\
 \n\
 Getting started:\n\
   fastf                        # the guided app: your whole library, on one screen\n\
   fastf new                    # pick a template and fill in variables\n\
+  fastf open 47                # reveal a project's folder, by id or name\n\
+  fastf todo add 47 \"cut the first minute @claude\"   # a todo, with its owner\n\
+  fastf desk                   # every project's next todo, grouped by owner\n\
+  fastf hat sales              # the owner name for your own todos\n\
+  fastf agent 47               # run the configured agent in a project's folder\n\
+  fastf peek 47                # a short summary of one project\n\
   fastf template list          # see available templates\n\
   fastf template new           # create a new template interactively\n\
   fastf paths                  # where fastf keeps its data\n\

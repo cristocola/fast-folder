@@ -27,7 +27,8 @@ On the very first launch fastf asks where your projects should live and suggests
 | `fastf note add <id> [msg]` | Append a dated note — as many lines as you like |
 | `fastf notes <id>` | Show a project's notes |
 | `fastf journal` | Every dated note across every project, newest first |
-| `fastf todo list/add/done/edit/remove <id>` | A project's task list |
+| `fastf todo list/add/done/edit/remove/owner <id>` | A project's task list |
+| `fastf hat [name]` | The hat worn — the owner whose court is yours — or wear another |
 | `fastf show <query>` | Everything fastf knows about one project |
 | `fastf desc <query> [text]` | Show or set a project's one-line description |
 | `fastf template ...` | Manage templates (list, show, new, edit, delete, from-folder) |
@@ -312,15 +313,18 @@ or `null` where neither could be read; see [the project
 model](projects.md#description-and-touched) for what it does and does not see.
 `fastf show` adds what only the file knows — `last_note`, the timestamp of the
 newest dated note or `null`; `variables`; `notes`; and `todos` with the `phase`
-each one sits under:
+each one sits under, its `owner` and its `added` and `done_at` stamps, each
+`null` where the line does not say:
 
 ```json
 {
   "id": "ID0047",
   "name": "2026-04-20_Lullaby_ID0047",
   "todos": [
-    { "done": true,  "text": "read the order",     "phase": null },
-    { "done": false, "text": "cut the first minute", "phase": "Main Edit" }
+    { "done": true,  "text": "read the order",       "phase": null,
+      "owner": null, "added": null, "done_at": null },
+    { "done": false, "text": "cut the first minute", "phase": "Main Edit",
+      "owner": "claude", "added": "2026-05-02T18:41:00Z", "done_at": null }
   ]
 }
 ```
@@ -426,6 +430,8 @@ fastf journal --since 2026-10-01               # this month
 fastf journal --grep lesson:                   # the notes written to be found
 fastf journal --template music-video --grep lesson:
 fastf journal --tag client/Acme -n 100
+fastf journal --todos                          # and every todo ticked, when it was
+fastf journal --todos all --since 2026-10-13   # ticked and added, since yesterday
 fastf journal --base archive --json
 ```
 
@@ -440,8 +446,17 @@ the word, case-insensitively, which is how a `lesson:` written months ago is
 read again. Undated notes — the free text above the first entry, and a line
 whose "timestamp" is not a date — have no place on a timeline and are left out.
 
-`--json` prints a bare array, one object per note: `id`, `name`, `path`,
-`timestamp` and `text`.
+**`--todos` puts the todos' events on the timeline** by their own dates: every
+todo ticked, where its `done:` stamp says it was, its owner after its text —
+which is how a morning reads what the agents finished — and with `--todos
+all` every todo added too, by its `added:`. A column before the text says
+which each entry is (`done`, `added`; a note's is blank), and `--since` and
+`--grep` apply to them as to a note. A todo a hand ticked without a stamp has
+no date to stand on and is left out, as an undated note is.
+
+`--json` prints a bare array, one object per entry: `id`, `name`, `path`,
+`timestamp`, `text` and `kind` — `note`, `done` or `added`; without `--todos`
+every row is a `note`.
 
 ## Registering existing folders
 
@@ -748,6 +763,12 @@ fastf todo list ID0047                            # the list, numbered
 fastf todo list ID0047 --open                     # only what is left
 fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
+fastf todo add ID0047 "cut @claude"               # in @claude's court
+fastf todo add ID0047 "cut" --owner claude        # the same, as a flag
+fastf todo add ID0047 "call the label" --mine     # in the hat's court
+fastf todo owner ID0047 3                         # whose court number 3 is in
+fastf todo owner ID0047 3 acme                    # hand it to @acme
+fastf todo owner ID0047 3 --none                  # to nobody
 fastf todo done ID0047 3                          # tick number 3
 fastf todo done ID0047 3 --undo                   # untick it again
 fastf todo edit ID0047 3 "grade the colour"       # reword number 3
@@ -757,6 +778,33 @@ fastf todo remove ID0047 3                        # take number 3 out (or `rm`)
 Todos live under a `## Todo` heading in the project's `PROJECT_INFO.md`, as
 `- [ ] text` and `- [x] text`, in any indent. The app's detail pane shows the
 same list and toggles it with Enter.
+
+**A todo carries whose court it is in, and its dates**, at the end of its
+line, after the task:
+
+```markdown
+- [ ] cut the first minute @claude added:2026-10-12T14:02:11Z
+- [x] shoot @sales added:2026-09-20T10:00:00Z done:2026-09-28T18:30:00Z
+```
+
+`@claude` is the **owner**: who the ball is with — an agent you handed the
+todo to, a hat of your own, a client whose answer you are waiting on. `add`
+stamps `added:` with the moment of the write, `done` stamps `done:` and
+`--undo` takes it off again; `edit` rewords the text and leaves all three
+where they were. The owner is a trailing `@name` in the text you type,
+`--owner`, or `--mine` for the hat you wear (`fastf hat`); nothing is assigned
+in silence, so a todo you type is nobody's until you say whose. `owner` prints
+a todo's court, hands it over, or takes it away with `--none`. An owner is one
+word, by the rule a tag keeps. `list` shows the owner and the day — added, or
+done once it is — in two columns after the text, and leaves both out of a list
+that has neither.
+
+A todo a hand wrote without any of it is a todo with no owner and no dates,
+and stays so: fastf never fills in what it does not know. The reader takes the
+tokens in any order and any case, reads a day (`added:2026-10-12`) as well as
+a stamp, treats a `@word` in the middle of the text as text, and takes the
+first owner of the run when a line names two. A file an older fastf reads
+shows the tokens as the end of the text, which is the accepted cost.
 
 A `###` line inside the section is a **phase**: every task under it belongs to
 it, until the next one.
@@ -795,6 +843,23 @@ its phase. The new text is one line, and an empty one is refused and pointed at
 that was never set than a wish to delete. `remove` takes the task's whole line,
 and the blank line it would otherwise leave doubled; a phase label stays even
 when the last task under it goes, because the label is a line of your own.
+
+## The hat
+
+```bash
+fastf hat                        # which hat is worn
+fastf hat sales                  # wear @sales
+fastf hat --off                  # wear none
+FASTF_HAT=technician fastf …     # one shell's hat, written nowhere
+```
+
+A hat is an owner's name: `@sales` when you talk to people, `@technician`
+when you edit. Wearing one, `fastf todo add --mine` assigns to it and the app's
+header shows it after the tabs. It is the `hat` configuration key, so
+`config show` prints it and the settings screen has its row; `FASTF_HAT` wears
+one for a shell without writing anything, and wins while it is set, so one
+terminal can wear a hat and the next another. The hat never changes what a
+file says.
 
 ## Templates
 

@@ -53,6 +53,13 @@ pub enum Then {
     /// selected project — a `select` variable edited from the detail pane,
     /// which offers its options and nothing else.
     PaneVariable(String),
+    /// The picked value is the new owner of the selected project's todo
+    /// `ordinal`, whose text was `was` when the picker opened — `NOBODY`
+    /// to take the owner off, `NEW_OWNER` to type one.
+    TodoOwner {
+        ordinal: usize,
+        was: String,
+    },
     /// `!`: the picked value is an unfinished item's path, or
     /// `ATTENTION_FINISH` to finish now what fastf can.
     Attention,
@@ -555,6 +562,14 @@ impl App {
                     slug,
                     value: item.value.clone(),
                 })
+            }
+            Then::TodoOwner { ordinal, was } => {
+                if item.value == crate::tui::app::pane_edit::NEW_OWNER {
+                    return self.open_owner_prompt(ordinal, was);
+                }
+                let owner =
+                    (item.value != crate::tui::app::pane_edit::NOBODY).then(|| item.value.clone());
+                self.send_todo_owner(ordinal, was, owner)
             }
             Then::FormField(key) => {
                 let Some(Modal::Flow(flow)) = self.modals.top_mut() else {

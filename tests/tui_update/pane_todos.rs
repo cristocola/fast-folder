@@ -53,6 +53,7 @@ fn with_todos(app: &mut App, todos: &[(bool, &str, Option<&str>)]) {
             done: *done,
             text: text.to_string(),
             phase: phase.map(str::to_string),
+            ..Default::default()
         })
         .collect();
     update(
@@ -798,4 +799,125 @@ fn plus_on_add_a_phase_adds_a_phase() {
         "{:?}",
         app.pane_edit
     );
+}
+
+/// `O` on a todo is its owner: a picker over the owners the list already
+/// names, the hat worn, nobody and a name to type; the pick is sent as the
+/// edit of that todo, so the answer lands on its row; and `O` is hidden off
+/// a todo row.
+#[test]
+fn o_on_a_todo_picks_its_owner_and_sends_it_as_the_todos_edit() {
+    use fastf::tui::app::modal::{Modal, Then};
+    use fastf::tui::command::CommandId;
+
+    let mut app = editing_fixture();
+    with_todos(
+        &mut app,
+        &[
+            (false, "cut the first minute", None),
+            (false, "deliver", None),
+        ],
+    );
+    {
+        let path = app.library.selected().unwrap().path.clone();
+        let detail = app.details.get_mut(&path).unwrap();
+        detail.todos[1].owner = Some("claude".to_string());
+    }
+    // The owner picker is hidden where there is no todo under the cursor.
+    go_to(&mut app, |row| matches!(row, PaneRow::Name(_)));
+    assert!(matches!(
+        (fastf::tui::command::find(CommandId::PaneOwner).available)(&app),
+        fastf::tui::command::Availability::Hidden
+    ));
+
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Todo { text, .. } if text == "cut the first minute"),
+    );
+    let effects = press(&mut app, Key::ch('O'));
+    assert!(effects.is_empty(), "a picker opens and nothing runs yet");
+    let Some(Modal::Pick(pick)) = app.modals.top() else {
+        panic!("the owner picker is open: {:?}", app.modals.top());
+    };
+    let labels: Vec<&str> = pick.items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        ["@claude", "nobody", "a name you type"],
+        "{labels:?}"
+    );
+    assert!(matches!(
+        pick.then,
+        Then::TodoOwner { ordinal: 0, ref was } if was == "cut the first minute"
+    ));
+
+    // Enter on @claude sends it as the edit of todo 0, with the text as read.
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        sent(&effects),
+        Some(&Action::SetTodoOwner {
+            project: Box::new(app.library.selected().unwrap().clone()),
+            ordinal: 0,
+            was: "cut the first minute".to_string(),
+            owner: Some("claude".to_string()),
+        })
+    );
+    assert!(
+        matches!(app.pane_edit, Some(PaneEdit::Line { pending: true, .. })),
+        "the picker was the edit, and it waits for the answer"
+    );
+    done_ok(&mut app, "In @claude's court.");
+    assert!(app.pane_edit.is_none(), "the answer closed it");
+
+    // "nobody" takes the owner off; the typed name goes through the prompt,
+    // which refuses two words on the line and sends one.
+    go_to(
+        &mut app,
+        |row| matches!(row, PaneRow::Todo { text, .. } if text == "deliver"),
+    );
+    // The picker is a text-entry context: a letter types, the arrows move.
+    press(&mut app, Key::ch('O'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        sent(&effects),
+        Some(Action::SetTodoOwner {
+            ordinal: 1,
+            owner: None,
+            ..
+        })
+    ));
+    done_ok(&mut app, "Nobody's now.");
+
+    press(&mut app, Key::ch('O'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    press(&mut app, Key::plain(KeyCode::Down));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(app.modals.top(), Some(Modal::TextPrompt(prompt)) if matches!(prompt.then, TextThen::TodoOwner { ordinal: 1, .. })),
+        "the prompt for a name: {:?}",
+        app.modals.top()
+    );
+    type_text(&mut app, "two words");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none());
+    let Some(Modal::TextPrompt(prompt)) = app.modals.top() else {
+        panic!("the prompt stays up with the refusal");
+    };
+    assert!(
+        prompt
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("an owner is one word")),
+        "{:?}",
+        prompt.error
+    );
+    for _ in 0.."two words".len() {
+        press(&mut app, Key::plain(KeyCode::Backspace));
+    }
+    type_text(&mut app, "@acme");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        sent(&effects),
+        Some(Action::SetTodoOwner { ordinal: 1, owner: Some(owner), .. }) if owner == "acme"
+    ));
 }

@@ -834,10 +834,70 @@ pub fn replace_todo(project: &Project, ordinal: usize, expected: &str, text: &st
     )
 }
 
+/// Give todo `ordinal` to `owner` — one word, as a tag is — or to nobody
+/// with `None`, rewriting its tail and nothing else (`body::set_owner`).
+/// `expected` is the text the caller last read.
+pub fn set_todo_owner(
+    project: &Project,
+    ordinal: usize,
+    expected: &str,
+    owner: Option<&str>,
+) -> Result<Option<String>> {
+    let owner = owner
+        .map(crate::core::validated::Owner::parse)
+        .transpose()?
+        .map(crate::core::validated::Owner::into_string);
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    body::set_owner(
+        &project_info::pinfo_path(&project.path),
+        ordinal,
+        expected,
+        owner.as_deref(),
+    )?;
+    Ok(owner)
+}
+
 /// Add an open todo, one line, at the end of `## Todo` — opening the
 /// section when there is none (`body::add_todo`).
 pub fn add_todo(project: &Project, text: &str) -> Result<()> {
     add_todo_in(project, text, None)
+}
+
+/// Add one open todo as somebody typed it, with `owner` over whatever its
+/// text named — the command line's `--owner` — under `phase` or at the end
+/// (`body::add_todos_with`). Answers the owner it was written with.
+pub fn add_todo_owned(
+    project: &Project,
+    text: &str,
+    owner: Option<&str>,
+    phase: Option<&str>,
+) -> Result<Option<String>> {
+    if text.contains(['\n', '\r']) {
+        bail!("a todo is one line");
+    }
+    let owner = owner
+        .map(crate::core::validated::Owner::parse)
+        .transpose()?
+        .map(crate::core::validated::Owner::into_string);
+    let todo = body::NewTodo::owned(text, owner.as_deref());
+    if todo.text.is_empty() {
+        bail!("the todo is empty — nothing written");
+    }
+    let place = match phase.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(name) => body::TodoPlace::Phase(name.to_string()),
+        None => body::TodoPlace::End,
+    };
+    let _mutation_lock = DataLock::acquire()?;
+    let config = Config::load()?;
+    let project = library::revalidate_project(&config, project)?;
+    body::add_todos_with(
+        &project_info::pinfo_path(&project.path),
+        std::slice::from_ref(&todo),
+        &place,
+    )?;
+    Ok(todo.owner)
 }
 
 /// Add an open todo under a `### phase` label, opening the label and the

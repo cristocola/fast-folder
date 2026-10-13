@@ -740,8 +740,25 @@ tag_from: ["tier"]
         });
     }
 
+    /// `text` without the stamps a writer puts after a todo — ` added:<stamp>`
+    /// and ` done:<stamp>` — so the rest of the file can be checked byte for
+    /// byte against what it was.
+    fn unstamped(text: &str) -> String {
+        let mut out = text.to_string();
+        for key in [" added:", " done:"] {
+            while let Some(at) = out.find(key) {
+                let end = out[at + 1..]
+                    .find(|c: char| c.is_whitespace())
+                    .map_or(out.len(), |n| at + 1 + n);
+                out.replace_range(at..end, "");
+            }
+        }
+        out
+    }
+
     /// A todo is added at the end of `## Todo` — opened after the notes when
-    /// there is none — and toggled by the one character in its brackets.
+    /// there is none — stamped with when; toggled by the one character in its
+    /// brackets, and a tick stamps when that was too.
     #[test]
     fn a_todo_is_added_and_toggled_under_the_lock() {
         sandboxed(|install| {
@@ -752,10 +769,15 @@ tag_from: ["tier"]
             operations::add_todo(&project, "delivered the video").unwrap();
             let after = file(&project);
             assert_eq!(
-                after,
+                unstamped(&after),
                 format!(
                     "{before}\n## Todo\n\n- [ ] ingested the videos\n- [ ] delivered the video\n"
                 )
+            );
+            assert_eq!(
+                after.matches(" added:20").count(),
+                2,
+                "each add stamped its line: {after}"
             );
             let todos = fastf::core::body::read_todos(&project.path).unwrap();
             assert_eq!(
@@ -791,19 +813,25 @@ tag_from: ["tier"]
                 ]
             );
             assert!(operations::toggle_todo(&project, 1, "delivered the video").unwrap());
+            let ticked = file(&project);
             assert_eq!(
-                file(&project),
+                unstamped(&ticked),
                 with_phases.replace("- [ ] delivered", "- [x] delivered"),
-                "one byte, and the phase lines untouched"
+                "one byte and its stamp, and the phase lines untouched"
+            );
+            assert!(
+                ticked.contains("- [x] delivered the video done:20"),
+                "{ticked}"
             );
             std::fs::write(fastf::core::project_info::pinfo_path(&project.path), &after).unwrap();
 
             assert!(operations::toggle_todo(&project, 0, "ingested the videos").unwrap());
             assert_eq!(
-                file(&project),
-                after.replace("- [ ] ingested", "- [x] ingested"),
+                unstamped(&file(&project)),
+                unstamped(&after.replace("- [ ] ingested", "- [x] ingested")),
                 "one byte"
             );
+            // An untick takes the `done:` off again and leaves the `added:`.
             assert!(!operations::toggle_todo(&project, 0, "ingested the videos").unwrap());
             assert_eq!(file(&project), after);
 

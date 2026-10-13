@@ -69,11 +69,13 @@ pub(crate) fn editing_fixture() -> App {
                 done: true,
                 text: "ingested the videos".to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "delivered the video".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         ..Default::default()
@@ -759,6 +761,7 @@ fn a_todo_too_wide_for_the_pane_wraps_and_toggles_by_its_whole_text() {
                     done: false,
                     text: long.to_string(),
                     phase: None,
+                    ..Default::default()
                 }],
                 ..Default::default()
             }),
@@ -847,11 +850,13 @@ fn enter_on_a_todo_toggles_it_and_the_answer_lands_on_its_row() {
                 done: true,
                 text: "ingested the videos".to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: true,
                 text: "delivered the video".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         ..Default::default()
@@ -1242,11 +1247,13 @@ fn a_resize_rewraps_and_the_cursor_stays_on_its_todo() {
                 done: false,
                 text: long.to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "export".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         ..Default::default()

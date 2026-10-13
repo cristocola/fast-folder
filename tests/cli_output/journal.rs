@@ -188,3 +188,75 @@ fn plant_note(dir: &Path, stamp: &str, text: &str) {
     }
     fs::write(&path, file).unwrap();
 }
+
+/// `--todos` puts a todo's events on the timeline by their own dates — a
+/// tick where it happened, and with `all` the add too — each row saying
+/// which it is, and `--json` carrying the kind; without the flag the
+/// journal is the notes it always was.
+#[test]
+fn todos_join_the_timeline_by_their_dates() {
+    let sb = Sandbox::new();
+    let alpha = sb.plant_project(&sb.base, "alpha", "ID0001");
+    plant_note(&alpha, "2026-10-02T10:00:00Z", "alpha began");
+    let path = alpha.join("PROJECT_INFO.md");
+    let mut file = fs::read_to_string(&path).unwrap();
+    file.push_str(concat!(
+        "\n## Todo\n\n",
+        "- [x] cut the first minute @claude added:2026-10-01T09:00:00Z done:2026-10-03T08:00:00Z\n",
+        "- [ ] colour grade @claude added:2026-10-04T09:00:00Z\n",
+        "- [x] ticked by hand\n",
+    ));
+    fs::write(&path, file).unwrap();
+
+    let notes = sb.ok(&["journal"]);
+    assert!(
+        notes.contains("alpha began") && !notes.contains("cut the first minute"),
+        "{notes}"
+    );
+    assert!(notes.contains("1 note"), "{notes}");
+
+    let out = sb.ok(&["journal", "--todos"]);
+    let rows: Vec<&str> = out
+        .lines()
+        .filter(|line| line.trim_start().starts_with('•'))
+        .collect();
+    assert_eq!(rows.len(), 2, "{out}");
+    assert!(
+        rows[0].contains("done") && rows[0].contains("cut the first minute @claude"),
+        "the tick, newest, with who finished it: {out}"
+    );
+    assert!(rows[1].contains("alpha began"), "{out}");
+    assert!(out.contains("2 entries"), "{out}");
+
+    let all = sb.ok(&["journal", "--todos", "all"]);
+    let rows: Vec<&str> = all
+        .lines()
+        .filter(|line| line.trim_start().starts_with('•'))
+        .collect();
+    assert_eq!(rows.len(), 4, "{all}");
+    assert!(
+        rows[0].contains("added") && rows[0].contains("colour grade"),
+        "{all}"
+    );
+    assert!(rows[1].contains("done"), "{all}");
+    assert!(rows[2].contains("alpha began"), "{all}");
+    assert!(
+        rows[3].contains("added") && rows[3].contains("cut the first minute"),
+        "{all}"
+    );
+
+    let out = sb.run(&["journal", "--todos", "all", "--json"]);
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let kinds: Vec<&str> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["added", "done", "note", "added"]);
+    let since = sb.ok(&["journal", "--todos", "--since", "2026-10-03"]);
+    assert!(
+        since.contains("cut the first minute") && !since.contains("alpha began"),
+        "{since}"
+    );
+}

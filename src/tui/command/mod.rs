@@ -124,6 +124,7 @@ pub enum CommandId {
     /// F2 in the pane: the text of the row under the cursor, opened in
     /// place — a todo reworded, a tag, a variable, a note, the name.
     PaneEditText,
+    PaneOwner,
     /// `+` in the pane: one more of what the cursor is among.
     PaneAdd,
     /// F2 on the list: the folder's name — rename, as everywhere F2 edits.
@@ -237,7 +238,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 114] = [
+    pub const ALL: [CommandId; 115] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -275,6 +276,7 @@ impl CommandId {
         CommandId::PanePreviousProject,
         CommandId::PaneNextProject,
         CommandId::PaneEditText,
+        CommandId::PaneOwner,
         CommandId::PaneAdd,
         CommandId::ListRename,
         CommandId::ListAddTodo,

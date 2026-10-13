@@ -1433,11 +1433,13 @@ fn detail_pane_editing_a_variable_120x40() {
                 done: true,
                 text: "ingested the footage".to_string(),
                 phase: None,
+                ..Default::default()
             },
             fastf::core::body::Todo {
                 done: false,
                 text: "deliver the video".to_string(),
                 phase: None,
+                ..Default::default()
             },
         ],
         touched: Some("2026-09-02T18:40:00Z".to_string()),
@@ -1502,6 +1504,7 @@ fn detail_pane_groups_todos_by_phase_120x40() {
         done,
         text: text.to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let detail = ProjectDetail {
         todos: vec![
@@ -1562,6 +1565,82 @@ fn detail_pane_groups_todos_by_phase_120x40() {
     );
 }
 
+/// A todo's owner and its day sit at the right of its row, dim, and a long
+/// todo wraps short of them; a todo with neither keeps its whole row; a
+/// ticked one shows the day it was ticked; the hat worn shows after the
+/// tabs.
+#[test]
+fn detail_pane_shows_the_owner_and_the_day_120x40() {
+    use fastf::tui::app::data::ProjectDetail;
+    use fastf::tui::app::pane::PaneRow;
+
+    let mut app = fixture(12, 120, 40);
+    app.summary.as_mut().unwrap().prefs.hat = Some("sales".to_string());
+    let project = app.library.selected().unwrap().clone();
+    let todo = |done: bool,
+                text: &str,
+                owner: Option<&str>,
+                added: Option<&str>,
+                done_at: Option<&str>| {
+        fastf::core::body::Todo {
+            done,
+            text: text.to_string(),
+            phase: None,
+            owner: owner.map(str::to_string),
+            added: added.map(str::to_string),
+            done_at: done_at.map(str::to_string),
+        }
+    };
+    let detail = ProjectDetail {
+        todos: vec![
+            todo(
+                true,
+                "shoot the product close-ups",
+                Some("sales"),
+                Some("2026-09-20T10:00:00Z"),
+                Some("2026-09-28T18:30:00Z"),
+            ),
+            todo(
+                false,
+                "cut the first minute of the edit, then rewatch it with the client's notes beside you",
+                Some("claude"),
+                Some("2026-10-12T14:02:11Z"),
+                None,
+            ),
+            todo(false, "approve the storyboard", Some("acme"), None, None),
+            todo(false, "deliver the masters", None, None, None),
+        ],
+        ..Default::default()
+    };
+    let _ = update(
+        &mut app,
+        Msg::Detail {
+            path: project.path.clone(),
+            detail: Box::new(detail),
+        },
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
+    let rows = app.pane_rows();
+    let first = rows
+        .iter()
+        .position(|r| matches!(r, PaneRow::Todo { ordinal: 1, .. }))
+        .unwrap();
+    while app.pane_cursor < first {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains("@claude 2026-10-12"), "{frame}");
+    assert!(
+        frame.contains("@sales 2026-09-28"),
+        "the day it was ticked: {frame}"
+    );
+    assert!(frame.contains("@sales"), "the hat in the header: {frame}");
+    snap(
+        "detail_pane_shows_the_owner_and_the_day_120x40",
+        render_to_string(&app, 120, 40),
+    );
+}
+
 /// A note and a todo too wide for the pane continue on the rows under them,
 /// each in its own column, instead of being cut.
 #[test]
@@ -1582,6 +1661,7 @@ fn detail_pane_wraps_a_long_note_and_todo_120x40() {
             text: "send the rough cut to the label and ask whether the lyric video is in scope"
                 .to_string(),
             phase: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -1609,6 +1689,7 @@ fn a_record() -> fastf::tui::app::data::ProjectDetail {
         done,
         text: text.to_string(),
         phase: Some(phase.to_string()),
+        ..Default::default()
     };
     fastf::tui::app::data::ProjectDetail {
         notes: vec![

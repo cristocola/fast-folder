@@ -86,6 +86,12 @@ pub enum TextThen {
     /// The description of the project at this path, where the pane cannot
     /// show the line it is typed on.
     Describe(PathBuf),
+    /// A new owner's name for the selected project's todo `ordinal`, whose
+    /// text was `was` when the picker offered to type one.
+    TodoOwner {
+        ordinal: usize,
+        was: String,
+    },
     /// Type the word `delete` to confirm; nothing else deletes. The prompt
     /// names the folder — or the folders, over marks — so what is being
     /// confirmed is on screen, and the word is the same every time.
@@ -287,6 +293,7 @@ impl App {
             TextThen::AddTodo { place, project } => self.add_typed_todo(place, project, text),
             TextThen::AddTag(targets) => self.add_typed_tag(targets, text),
             TextThen::Describe(path) => self.describe_typed(path, text),
+            TextThen::TodoOwner { ordinal, was } => self.owner_typed(ordinal, was, text),
             TextThen::CopyTo(targets) => self.copy_to_typed(targets, text),
             TextThen::RaiseCounter => self.raise_counter_to(text),
             TextThen::DiscardAttention(path) => self.discard_when_typed(path, text),

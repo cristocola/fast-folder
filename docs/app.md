@@ -24,8 +24,8 @@ configuration, one set of templates and one counter.
 Top to bottom:
 
 - **The header** — two lines. The two tabs, `library` and `templates`, with
-  the one you are on underlined, then how many bases there are and the
-  highest ID; then each base with how many projects its index holds, or that
+  the one you are on underlined, the hat you wear (`@sales`) when you wear
+  one, then how many bases there are and the highest ID; then each base with how many projects its index holds, or that
   it is not mounted, or `unresponsive` when it has not answered within a
   second and a half — led, while a job runs, by what it is and its step
   (`moving ID0047 · copying 312 of 1473 files`) — and on the right
@@ -105,7 +105,11 @@ remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
 every note, as `J` shows them. **F2 edits the text** of the row under the
 cursor in place — on a todo that is how you reword it, since Enter ticks it;
 emptied and Enter, the todo is removed — and on the name, the description, a
-tag, a variable or a note it opens what Enter opens. Every section that can grow ends in a row that
+tag, a variable or a note it opens what Enter opens. **`O` on a todo says
+whose court it is in**: a picker over the owners the list already names, the
+hat you wear, nobody, and a name you type; the row shows the owner and the
+day it was added, or ticked, at its right. A tick stamps the todo's line with
+when, as `fastf todo done` does. Every section that can grow ends in a row that
 adds to it: **add a tag**, **add a note** (the quick note — Enter saves,
 Alt-Enter breaks a line), **add a todo** and **add a phase**; and **`+` adds one more of whatever
 the cursor is among**, from anywhere in that section. Esc leaves the row as it
@@ -186,6 +190,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | ← / `h` | put the cursor back on the list. It never quits and never closes anything: leaving is Esc's job, and Esc in the pane does the same as ← |
 | `<` / `>` | in the pane: the project above or below, without leaving the pane — the cursor stays in the section it was in, so one project's todos after another's is a key each |
 | F2 | edit the text under the cursor in place: in the pane a todo (reworded, or emptied to remove it), a tag, a variable, a note, the name; on the list, the folder's name |
+| `O` | in the pane, on a todo: whose court it is in — an owner the list already names, the hat, nobody, or a name you type |
 | `+` | add one more: on the list or in the todos, a todo, typed on a line in the list with the next opening under it; among the tags, a tag; among the notes, a note |
 | `T` | the templates tab, and `T` again (or Esc) back to the library |
 | Tab / Shift-Tab | move focus between the project list and the detail pane |

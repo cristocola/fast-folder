@@ -265,6 +265,7 @@ impl App {
             CommandId::Describe => self.start_describing(),
             CommandId::PaneAdd => self.pane_add(),
             CommandId::PaneEditText => self.pane_edit_text(),
+            CommandId::PaneOwner => self.pane_owner(),
             CommandId::ListRename => self.run(CommandId::Rename),
             CommandId::Rename => self.open_rename_prompt(),
             CommandId::Move => self.open_move_picker(),

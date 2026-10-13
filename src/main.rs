@@ -641,10 +641,18 @@ enum Commands {
             tasks alone — a `###` phase label is not a task and takes no number.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
+            A todo's line carries whose court it is in and its dates, as\n\
+            `- [ ] cut @claude added:2026-10-12T14:02:11Z`: `add` stamps\n\
+            `added:`, `done` stamps `done:` and `--undo` takes it off, and a\n\
+            trailing `@name` is the owner. A line a hand wrote without them\n\
+            is a todo with no owner and no dates, and nothing fills them in.\n\n\
             Examples:\n  \
             fastf todo list ID0047\n  \
             fastf todo add ID0047 \"colour grade\"\n  \
             fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
+            fastf todo add ID0047 \"cut the first minute @claude\"\n  \
+            fastf todo add ID0047 \"call the label back\" --mine\n  \
+            fastf todo owner ID0047 3 claude\n  \
             fastf todo done ID0047 3\n  \
             fastf todo done ID0047 3 --undo\n  \
             fastf todo edit ID0047 3 \"grade the colour\"\n  \
@@ -653,6 +661,26 @@ enum Commands {
     Todo {
         #[command(subcommand)]
         action: TodoAction,
+    },
+
+    /// The hat worn — the owner whose court is yours — or wear another
+    #[command(
+        after_help = "A hat is an owner's name: @sales when you talk to people, @technician\n\
+        when you edit. Wearing one, `fastf todo add --mine` assigns to it and\n\
+        the app's header shows it. It is the `hat` configuration key;\n\
+        FASTF_HAT wears one for a shell without writing anything.\n\n\
+        Examples:\n  \
+            fastf hat                 # which hat\n  \
+            fastf hat sales           # wear @sales\n  \
+            fastf hat --off           # wear none"
+    )]
+    Hat {
+        /// The hat to wear, with or without its `@`
+        #[arg(conflicts_with = "off")]
+        name: Option<String>,
+        /// Take the hat off
+        #[arg(long)]
+        off: bool,
     },
 
     /// Every dated note across every project, newest first
@@ -664,6 +692,7 @@ enum Commands {
             fastf journal --since 2026-10-01               # this month\n  \
             fastf journal --grep lesson:                   # what was learned\n  \
             fastf journal --template music-video --grep lesson:\n  \
+            fastf journal --todos                          # and what was ticked, by its date\n  \
             fastf journal --tag client/Acme -n 100 --json"
     )]
     Journal {
@@ -691,7 +720,13 @@ enum Commands {
         #[arg(long, value_name = "TEXT")]
         grep: Option<String>,
 
-        /// Print the notes as JSON: an array, one object per note
+        /// Also the todos' events, by their dates: `done` for every todo
+        /// ticked, `all` for the ones added too
+        #[arg(long, value_name = "WHICH", num_args = 0..=1, default_missing_value = "done", value_parser = ["done", "all"])]
+        todos: Option<String>,
+
+        /// Print the entries as JSON: an array, one object per entry, each
+        /// with its `kind`
         #[arg(long)]
         json: bool,
     },
@@ -801,6 +836,7 @@ enum ConfigAction {
             bases                       Extra project folders to index, comma-separated (empty value clears the list)\n  \
             editor                      Editor command for opening templates (default: $EDITOR)\n  \
             terminal                    Terminal emulator to open when launched without one (default: $TERMINAL, else probe; \"none\" disables)\n  \
+            hat                         The hat worn: the owner whose court is yours (default: none; FASTF_HAT wears one for a shell)\n  \
             theme                       The app's palette: auto, doom-one, rich, ansi or mono (default: auto — Doom One where the terminal draws 24-bit colour)\n  \
             motion                      Whether the app moves: on or off (default: on; a palette with no colour is always off)\n  \
             log-level                   How much the log keeps: debug, info, warn, error or off (default: info)\n  \
@@ -890,15 +926,37 @@ enum TodoAction {
         #[arg(long)]
         open: bool,
     },
-    /// Add an open task — one line
+    /// Add an open task — one line, dated, in somebody's court or nobody's
     Add {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The task text
+        /// The task text; a trailing `@name` puts it in that owner's court
         text: String,
         /// Put it under this `###` phase label, opening one if there is none
         #[arg(long)]
         phase: Option<String>,
+        /// Whose court it goes in (over a `@name` in the text)
+        #[arg(long, value_name = "NAME", conflicts_with = "mine")]
+        owner: Option<String>,
+        /// The hat's court (`fastf hat`)
+        #[arg(long)]
+        mine: bool,
+    },
+    /// Show whose court a task is in, or hand it to somebody
+    Owner {
+        /// Project ID, ID prefix, or name substring
+        query: String,
+        /// The number `fastf todo list` printed
+        number: usize,
+        /// The new owner, with or without its `@`
+        #[arg(conflicts_with_all = ["none", "mine"])]
+        owner: Option<String>,
+        /// Nobody's: take the owner off
+        #[arg(long, conflicts_with = "mine")]
+        none: bool,
+        /// The hat's court (`fastf hat`)
+        #[arg(long)]
+        mine: bool,
     },
     /// Tick a task off by its number
     Done {
@@ -1312,6 +1370,7 @@ fn run() -> Result<()> {
         Some(Commands::Note { action }) => run_note(action),
 
         Some(Commands::Todo { action }) => run_todo(action),
+        Some(Commands::Hat { name, off }) => cli::hat::run(cli::hat::HatArgs { name, off }),
 
         Some(Commands::Journal {
             limit,
@@ -1320,6 +1379,7 @@ fn run() -> Result<()> {
             tag,
             base,
             grep,
+            todos,
             json,
         }) => cli::journal::run(cli::journal::JournalArgs {
             limit,
@@ -1328,6 +1388,11 @@ fn run() -> Result<()> {
             tag,
             base,
             grep,
+            todos: match todos.as_deref() {
+                None => cli::journal::Todos::None,
+                Some("all") => cli::journal::Todos::All,
+                Some(_) => cli::journal::Todos::Done,
+            },
             json,
         }),
 
@@ -1520,9 +1585,32 @@ fn run_note(action: NoteAction) -> Result<()> {
 fn run_todo(action: TodoAction) -> Result<()> {
     match action {
         TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
-        TodoAction::Add { query, text, phase } => {
-            cli::todo::add(cli::todo::AddArgs { query, text, phase })
-        }
+        TodoAction::Add {
+            query,
+            text,
+            phase,
+            owner,
+            mine,
+        } => cli::todo::add(cli::todo::AddArgs {
+            query,
+            text,
+            phase,
+            owner,
+            mine,
+        }),
+        TodoAction::Owner {
+            query,
+            number,
+            owner,
+            none,
+            mine,
+        } => cli::todo::owner(cli::todo::OwnerArgs {
+            query,
+            number,
+            owner,
+            none,
+            mine,
+        }),
         TodoAction::Done {
             query,
             number,

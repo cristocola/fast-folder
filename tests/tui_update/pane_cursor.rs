@@ -180,6 +180,7 @@ fn with_todos(app: &mut App, n: usize) {
                     done: false,
                     text: format!("task {t}"),
                     phase: None,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()
@@ -282,6 +283,7 @@ fn an_open_todo_is_plain_text_and_a_finished_phase_recedes() {
         done,
         text: text.to_string(),
         phase: Some(phase.to_string()),
+        ..Default::default()
     };
     with_detail(
         &mut app,

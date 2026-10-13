@@ -391,6 +391,7 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "base-dir" => settings.base_dir.clone(),
         "editor" => settings.editor.clone(),
         "terminal" => settings.terminal.clone(),
+        "hat" => settings.hat.clone(),
         // The canonical name, so a hand-written `doom` or `Doom One` is the
         // row's own `doom-one` and Enter moves on from it.
         "theme" => crate::tui::theme::ThemeChoice::parse(&settings.theme)
@@ -523,6 +524,12 @@ fn project_basics(s: &Settings) -> Vec<Row> {
             "terminal",
             or(&s.terminal, "(probe the known ones)"),
             "the emulator to open when fastf is started without one; \"none\" never opens a window",
+        ),
+        text(
+            "Hat",
+            "hat",
+            or(&s.hat, "(none)"),
+            "the owner whose court is yours: `fastf todo add --mine` assigns to it",
         ),
         text(
             "Register pattern",

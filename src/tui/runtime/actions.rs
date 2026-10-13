@@ -41,6 +41,24 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
             was,
             text,
         } => replace_todo(project, ordinal, was, text),
+        Action::SetTodoOwner {
+            project,
+            ordinal,
+            was,
+            owner,
+        } => {
+            let owner =
+                crate::core::operations::set_todo_owner(&project, ordinal, &was, owner.as_deref())?;
+            Ok(ActionOutcome::new(
+                ListChange::DetailOnly {
+                    path: project.path.clone(),
+                },
+                match owner {
+                    Some(owner) => format!("In @{owner}'s court."),
+                    None => "Nobody's now.".to_string(),
+                },
+            ))
+        }
         Action::AddTodos {
             project,
             texts,

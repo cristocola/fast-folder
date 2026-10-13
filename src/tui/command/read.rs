@@ -210,6 +210,7 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::FocusDetail if app.pane_behind_list() => "details",
         CommandId::FocusDetail => "pane",
         CommandId::PaneEditText => "edit",
+        CommandId::PaneOwner => "owner",
         CommandId::PaneAdd => "add",
         CommandId::PaneEdit => pane_verb(app),
         // On the add line Enter writes one more and opens the next, and Esc

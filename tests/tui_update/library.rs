@@ -893,6 +893,7 @@ fn the_peek_says_what_the_hidden_pane_holds() {
                         done: n < 1,
                         text: format!("task {n}"),
                         phase: None,
+                        ..Default::default()
                     })
                     .collect(),
                 ..Default::default()

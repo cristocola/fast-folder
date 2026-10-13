@@ -219,6 +219,14 @@ pub enum Action {
         ordinal: usize,
         was: String,
     },
+    /// Give one todo — `ordinal` in the file's todos, whose text was `was`
+    /// when the picker opened — to `owner`, or to nobody with `None`.
+    SetTodoOwner {
+        project: Box<Project>,
+        ordinal: usize,
+        was: String,
+        owner: Option<String>,
+    },
     /// Reword one todo — `ordinal` in the file's todos, whose text was `was`
     /// when the edit opened — or remove it when `text` is empty.
     ReplaceTodo {

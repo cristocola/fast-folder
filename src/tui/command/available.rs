@@ -175,6 +175,18 @@ pub(super) fn pane_text_row(app: &App) -> Availability {
     }
 }
 
+/// `O` gives a todo an owner: on a todo row, and nowhere else.
+pub(super) fn pane_todo_row(app: &App) -> Availability {
+    use crate::tui::app::pane::PaneRow;
+    match selection_and_not_busy(app) {
+        Availability::Enabled => match app.pane_rows().get(app.pane_cursor) {
+            Some(PaneRow::Todo { .. }) => Availability::Enabled,
+            _ => Availability::Hidden,
+        },
+        other => other,
+    }
+}
+
 /// The pane's line editor is open and not yet sent: Enter keeps. Hidden in
 /// the note editor, where Enter is a new line and `Ctrl-S` is the keep.
 pub(super) fn pane_line_editing(app: &App) -> Availability {

@@ -91,6 +91,18 @@ fn print_base_and_programs(config: &Config, base: std::path::PathBuf, editor: St
                 "(probe: konsole, gnome-terminal, kitty, …)".to_string(),
         }
     );
+    println!(
+        "  {:<26} {}",
+        "hat:".green(),
+        match (
+            config.resolve_hat(),
+            std::env::var_os("FASTF_HAT").is_some()
+        ) {
+            (Some(hat), true) => format!("@{hat} (from $FASTF_HAT)"),
+            (Some(hat), false) => format!("@{hat}"),
+            (None, _) => "(none — `fastf hat <name>` wears one)".to_string(),
+        }
+    );
 }
 
 fn print_look_and_defaults(config: &Config) {
@@ -258,6 +270,14 @@ pub fn normalize_base_entry(raw: &str) -> Result<String> {
 /// `fastf config set <key> <value>` — the same write the guided app performs,
 /// with its answer printed.
 pub fn set(key: &str, value: &str) -> Result<()> {
+    let said = set_quietly(key, value)?;
+    println!("{said}");
+    Ok(())
+}
+
+/// The write `set` makes, answering its sentence instead of printing it, for
+/// a command that is one key's own door (`fastf hat`).
+pub fn set_quietly(key: &str, value: &str) -> Result<String> {
     // Load-mutate-save is a read-modify-write, so it needs the same
     // cross-process lock as ID allocation. Without it, two concurrent
     // `config set` calls each write back their own copy of the whole file and
@@ -267,8 +287,7 @@ pub fn set(key: &str, value: &str) -> Result<()> {
         said = apply(config, key, value)?;
         Ok(())
     })?;
-    println!("{said}");
-    Ok(())
+    Ok(said)
 }
 
 /// Apply one setting to a `Config` already in hand, and say what happened.
@@ -288,6 +307,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             config.terminal = value.to_string();
             format!("Set terminal = {}", value)
         }
+        "hat" => set_hat(config, value)?,
         "motion" => set_motion(config, value)?,
         "log_level" => set_log_level(config, value)?,
         // A retired key: the app never takes the mouse. Accepted and
@@ -351,7 +371,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
             )
         }
         other => bail!(
-            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, theme, motion, log-level, default-template, date-format, \
+            "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, hat, theme, motion, log-level, default-template, date-format, \
          preview-lines, prompt-open-after-create, confirm-create, \
          recent-limit, register-naming-pattern, on-name-collision, \
          post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
@@ -370,6 +390,22 @@ fn set_base_dir(config: &mut Config, value: &str) -> Result<String> {
     Ok(format!(
         "Set base_dir = {}",
         crate::util::paths::display_path(&resolved)
+    ))
+}
+
+/// The hat is an owner's name, by the owner's rule; empty takes it off.
+fn set_hat(config: &mut Config, value: &str) -> Result<String> {
+    let value = value.trim();
+    let value = value.strip_prefix('@').unwrap_or(value);
+    if value.is_empty() {
+        config.hat = String::new();
+        return Ok("Set hat = (none)  — no court is yours until you wear one".to_string());
+    }
+    let owner = crate::core::validated::Owner::parse(value)?;
+    config.hat = owner.into_string();
+    Ok(format!(
+        "Set hat = {}  (`fastf todo add --mine` assigns to @{} now)",
+        config.hat, config.hat
     ))
 }
 

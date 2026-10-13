@@ -61,6 +61,16 @@ fn tabs_line(
             },
         ));
     }
+    // The hat worn, after the tabs: whose court the desk opens on. It goes
+    // with the tabs, since it says where you are as much as they do.
+    if let Some(hat) = app
+        .summary
+        .as_ref()
+        .and_then(|summary| summary.prefs.hat.as_deref())
+    {
+        left.push(Span::raw(gap));
+        left.push(Span::styled(format!("@{hat}"), theme.text()));
+    }
     let mut with_bases = left.clone();
     if let Some(bases) = known {
         with_bases.push(Span::styled(

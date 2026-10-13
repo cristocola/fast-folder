@@ -677,6 +677,19 @@ pub static COMMANDS: &[Command] = &[
         hint = true,
         pane_text_row
     ),
+    // `@` would be the key, but it is AltGr on a German or a French layout;
+    // `O` is the one letter left that says it.
+    cmd!(
+        PaneOwner,
+        "Give the todo an owner",
+        "whose court the todo under the cursor is in: an owner the list already names, the hat, nobody, or a name you type",
+        &[Context::Detail],
+        [Key::ch('O')],
+        Project,
+        palette = true,
+        hint = true,
+        pane_todo_row
+    ),
     cmd!(
         PaneAdd,
         "Add here",

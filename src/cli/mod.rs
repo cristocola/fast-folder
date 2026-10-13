@@ -6,6 +6,7 @@ pub mod desc;
 pub mod extra;
 pub mod folder_verbs;
 
+pub mod hat;
 pub mod id;
 #[doc(hidden)]
 pub mod job_worker;

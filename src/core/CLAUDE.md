@@ -1012,6 +1012,28 @@ new label on every add. `phase_labels_in` reads every label with the tasks above
 it, empty ones included, for a reader that must draw where the writer will put
 a task.
 
+**A todo's trailer is read from the end of its line and written in one order.**
+`split_trailer` takes the maximal run of trailer tokens at the end of the text
+after the `]` — `@owner`, `added:<stamp>`, `done:<stamp>`, in any order and any
+case, a stamp being anything `starts_with_a_day` accepts — so a `@word` in the
+middle of the text is text and the first owner of the run is the owner;
+`render_trailer` writes `@owner added: done:`, and `PlacedTodo::tail_for` is the
+space before it or nothing. `Todo.text` is the task alone, so every `expected`
+a caller passes back is the text without the trailer. **A line without a
+trailer is a todo without an owner and without dates, and nothing backfills
+them**: fastf does not know when a hand wrote it. The writers: an add stamps
+`added:` with one `now_iso8601` for the whole run (a typed `added:` is kept, a
+typed `done:` dropped); a tick writes `done:<now>` and an untick takes the
+token off, in the same write as the marker; `replace_todo` splices the text
+and leaves the tail, unless the new text ends in `@name`, which hands the todo
+over and writes the tail again; `set_owner` rewrites the tail alone. Without a
+trailer the text range runs to the line's end, as it always did, so a
+rewording still takes the trailing blanks with it. `validated::Owner` is the
+one word an owner may be (a tag's rule, an owner's sentences), at the
+`operations` door. **`time:frozen`** is the decision point that makes
+`now_iso8601` answer `time::FROZEN`, for a test that checks the bytes a stamp
+lands in; a test that must also pass in release compares `unstamped` text.
+
 **A file saved with `\r\n` keeps them** (`with_line_endings_of`): the adders, the
 note appender and `replace_note` make their edit on the file's `\n` reading and
 give it back in `\r\n` when every line of the file ended that way; a file mixing

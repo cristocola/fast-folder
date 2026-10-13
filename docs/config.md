@@ -59,6 +59,12 @@ fastf config set editor nvim
 fastf config set terminal kitty
 fastf config set terminal none                   # never relaunch (fastf term still works)
 
+# The hat worn: the owner whose court is yours. `fastf todo add --mine`
+# assigns to it and the app's header shows it. `fastf hat sales` is the
+# short way; FASTF_HAT wears one for a shell without writing anything.
+fastf config set hat sales
+fastf config set hat ""                          # wear none
+
 # The app's palette. auto is Doom One wherever the terminal announces 24-bit
 # colour, and the sixteen ANSI colours elsewhere; pin one for a terminal that
 # announces nothing (an ssh session forwards no COLORTERM) or lies. NO_COLOR

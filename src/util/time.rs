@@ -1,11 +1,21 @@
 //! One clock.
 
+/// What the clock answers while the `time:frozen` decision is armed: a
+/// test that checks the bytes a stamp lands in needs a stamp it knows.
+pub const FROZEN: &str = "2026-01-01T00:00:00Z";
+
 /// Current UTC timestamp, ISO-8601 with seconds precision.
 ///
 /// Seconds, not milliseconds, because this string is compared lexicographically
 /// (`created > "2026-01-01"` in a search, journal entries sorted as text) and a
 /// fixed-width representation is what makes that correct.
+///
+/// [`FROZEN`] while `time:frozen` is armed (a debug build under test; the
+/// decision is compiled out of a release).
 pub fn now_iso8601() -> String {
+    if crate::util::faults::is_armed("time:frozen") {
+        return FROZEN.to_string();
+    }
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 

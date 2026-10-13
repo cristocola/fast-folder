@@ -18,6 +18,7 @@ pub(super) fn render_text_prompt(
         TextThen::AddTodo { .. } => "add a todo",
         TextThen::AddPhase(_) => "add a phase",
         TextThen::Describe(_) => "describe",
+        TextThen::TodoOwner { .. } => "whose court",
         TextThen::Delete(_) => "delete",
         TextThen::RaiseCounter => "ID counter",
         TextThen::CopyTo(_) => "copy to",

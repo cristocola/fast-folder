@@ -86,6 +86,7 @@ fn a_new_phase_is_drawn_where_the_writer_will_open_it() {
         done: false,
         text: text.to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let heading = |name: &str, total: usize| PaneRow::Phase {
         name: name.to_string(),
@@ -198,6 +199,7 @@ fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
             done: false,
             text: "a".to_string(),
             phase: Some("Setup".to_string()),
+            ..Default::default()
         }],
         phases: vec![label("Grade", 0), label("Setup", 0), label("Review", 1)],
         ..Default::default()
@@ -245,6 +247,7 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
         done,
         text: text.to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let detail = ProjectDetail {
         todos: vec![
@@ -270,6 +273,8 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
                 done: true,
                 text: "read the order".to_string(),
                 phased: false,
+                owner: None,
+                when: None,
             },
             &PaneRow::Phase {
                 name: "Setup".to_string(),
@@ -281,6 +286,8 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
                 done: false,
                 text: "download the files".to_string(),
                 phased: true,
+                owner: None,
+                when: None,
             },
             // The second task of a run draws no second label.
             &PaneRow::Todo {
@@ -288,6 +295,8 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
                 done: false,
                 text: "copy the audio".to_string(),
                 phased: true,
+                owner: None,
+                when: None,
             },
             &PaneRow::Phase {
                 name: "Creative Plan".to_string(),
@@ -299,6 +308,8 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
                 done: false,
                 text: "listen to the song".to_string(),
                 phased: true,
+                owner: None,
+                when: None,
             },
             &PaneRow::AddTodo,
             &PaneRow::AddPhase,
@@ -331,6 +342,7 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
             done: true,
             text: "ingested".to_string(),
             phase: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -348,6 +360,8 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
                 done: true,
                 text: "ingested".to_string(),
                 phased: false,
+                owner: None,
+                when: None,
             },
             &PaneRow::AddTodo,
             &PaneRow::AddPhase,
@@ -549,6 +563,7 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
             done: false,
             text: "send the rough cut to the label".to_string(),
             phase: None,
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -583,6 +598,8 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
                 done: false,
                 text: "send the rough cut to the".to_string(),
                 phased: false,
+                owner: None,
+                when: None,
             },
             PaneRow::TodoLine {
                 done: false,
@@ -793,6 +810,7 @@ fn the_add_line_opens_where_the_todo_will_land() {
         done: false,
         text: text.to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let detail = ProjectDetail {
         todos: vec![
@@ -845,6 +863,7 @@ fn a_phase_heading_counts_its_tasks_and_indents_them() {
         done,
         text: "task".to_string(),
         phase: phase.map(str::to_string),
+        ..Default::default()
     };
     let detail = ProjectDetail {
         todos: vec![

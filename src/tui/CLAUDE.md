@@ -942,6 +942,18 @@ bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`) through
 `command::hint_title`. The edit lives in `App.pane_edit` beside the rows, so what
 is being changed stays in view.
 
+**`O` on a todo is its owner** (`PaneOwner`, `[Detail]` only, hidden off a todo
+row): a `Pick` over the owners the project's own list names, the hat worn, nobody
+(`pane_edit::NOBODY`) and a name to type (`pane_edit::NEW_OWNER`, a `TextPrompt`
+on `TextThen::TodoOwner`), each sent as `Action::SetTodoOwner` the way a
+`select` variable's pick is: the picker was the edit, so an `EditTarget::Todo`
+is set for the row the answer pulses. `@` would be the key, but it is AltGr on a
+German or a French layout. A todo row carries `owner` and `when` — the day it
+was added, or ticked once it is — drawn dim at the row's right by
+`pane::trailer_text`, and `todo_rows` wraps the first line short of them. The
+hat worn rides in `Prefs.hat` (the summary's `Local` part, so it lands without a
+base) and the header shows it after the tabs.
+
 **Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
 needs a key of its own: `PaneEditText` (F2) opens a row's text in place
 (`EditTarget::Todo { ordinal, was }` on a todo, `EditTarget::Description` on the

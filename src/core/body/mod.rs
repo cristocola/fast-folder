@@ -78,7 +78,13 @@ impl Note {
 }
 
 /// One task under `## Todo`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// The text is the task alone: what the line says after its brackets and
+/// before its **trailer**, the run of `@owner`, `added:<stamp>` and
+/// `done:<stamp>` tokens at its end (`split_trailer`). A line a hand wrote
+/// without one is a todo with no owner and no dates, and nothing here
+/// invents them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Todo {
     pub done: bool,
     pub text: String,
@@ -86,6 +92,172 @@ pub struct Todo {
     /// nearest one, so a task before the first label has none. It is read,
     /// never written by a toggle: a phase is a line of the user's own file.
     pub phase: Option<String>,
+    /// Whose court it is in: the `@owner` at the end of its line. `None`
+    /// for a todo nobody was named for.
+    pub owner: Option<String>,
+    /// When it was added, as the `added:` token says: the stamp notes
+    /// carry, or a day, whichever was written. `None` without one.
+    pub added: Option<String>,
+    /// When it was ticked, as the `done:` token says. A tick writes it and
+    /// an untick removes it; a hand may leave either.
+    pub done_at: Option<String>,
+}
+
+impl Todo {
+    /// The day the todo was added, for a column ten wide — by `get`, never
+    /// a byte slice, since a hand can put anything after `added:`.
+    pub fn added_day(&self) -> Option<&str> {
+        self.added.as_deref().map(day_of)
+    }
+
+    /// The day the todo was ticked, the same way.
+    pub fn done_day(&self) -> Option<&str> {
+        self.done_at.as_deref().map(day_of)
+    }
+}
+
+/// The first ten characters of a stamp — the day — or the stamp whole when
+/// it is shorter.
+fn day_of(stamp: &str) -> &str {
+    stamp.get(..10).unwrap_or(stamp)
+}
+
+/// What a todo line's trailer says. Each token is optional and a hand may
+/// write them in any order; `render_trailer` writes them in one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Trailer {
+    owner: Option<String>,
+    added: Option<String>,
+    done: Option<String>,
+}
+
+/// A trailer token, by shape: `@word`, `added:<stamp>`, `done:<stamp>`. A
+/// stamp is anything that starts with a day, so `added:2026-10-12` written
+/// by hand reads as well as the full stamp fastf writes; the prefixes are
+/// read in any case. Anything else is text, which is what ends the trailer.
+fn trailer_token(token: &str) -> Option<TrailerToken<'_>> {
+    if let Some(name) = token.strip_prefix('@') {
+        let name = name.trim_end_matches([',', '.', ';', ':', '!', '?']);
+        return (!name.is_empty()).then_some(TrailerToken::Owner(name));
+    }
+    let keyed = |key: &str| -> Option<&str> {
+        let (head, rest) = token.split_at_checked(key.len())?;
+        (head.eq_ignore_ascii_case(key) && starts_with_a_day(rest)).then_some(rest)
+    };
+    if let Some(stamp) = keyed("added:") {
+        return Some(TrailerToken::Added(stamp));
+    }
+    if let Some(stamp) = keyed("done:") {
+        return Some(TrailerToken::Done(stamp));
+    }
+    None
+}
+
+enum TrailerToken<'a> {
+    Owner(&'a str),
+    Added(&'a str),
+    Done(&'a str),
+}
+
+/// Where `after` — a task line's text after its `]` — ends and its trailer
+/// begins: the byte where the text's last word ends (the text is
+/// `after[..text_end].trim()`), the byte where the trailer's first token
+/// starts — `None` when the line has no trailer — and what the trailer
+/// says. **The trailer is the maximal run of trailer tokens at the end of
+/// the line**, so a `@word` in the middle of the text is text, and the
+/// first owner of the run is the owner.
+fn split_trailer(after: &str) -> (usize, Option<usize>, Trailer) {
+    // Every whitespace-separated word, with where it sits.
+    let mut words: Vec<(usize, usize)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (at, c) in after.char_indices() {
+        match (c.is_whitespace(), start) {
+            (false, None) => start = Some(at),
+            (true, Some(from)) => {
+                words.push((from, at));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        words.push((from, after.len()));
+    }
+    let mut trailer = Trailer::default();
+    let mut first = words.len();
+    for (index, (from, to)) in words.iter().enumerate().rev() {
+        match trailer_token(&after[*from..*to]) {
+            // The leftmost of each wins: it is the first a reader meets.
+            Some(TrailerToken::Owner(name)) => trailer.owner = Some(name.to_string()),
+            Some(TrailerToken::Added(stamp)) => trailer.added = Some(stamp.to_string()),
+            Some(TrailerToken::Done(stamp)) => trailer.done = Some(stamp.to_string()),
+            None => break,
+        }
+        first = index;
+    }
+    let text_end = match first {
+        0 => 0,
+        n => words[n - 1].1,
+    };
+    let trailer_start = words.get(first).map(|(from, _)| *from);
+    (text_end, trailer_start, trailer)
+}
+
+/// The trailer as fastf writes it: `@owner added:<stamp> done:<stamp>`, each
+/// only when there is one, one space apart — empty with none. **The one
+/// writer of the order**, so a line reassigned, ticked and unticked comes
+/// out as it went in.
+fn render_trailer(owner: Option<&str>, added: Option<&str>, done: Option<&str>) -> String {
+    let mut out = String::new();
+    let mut push = |token: String| {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&token);
+    };
+    if let Some(owner) = owner {
+        push(format!("@{owner}"));
+    }
+    if let Some(added) = added {
+        push(format!("added:{added}"));
+    }
+    if let Some(done) = done {
+        push(format!("done:{done}"));
+    }
+    out
+}
+
+/// A todo as somebody typed it: the text, and the owner and the added stamp
+/// a trailer in it names. `done:` typed into a new todo is dropped, since a
+/// todo is added open; a text that is nothing but a trailer is empty, and
+/// skipped as an empty one is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewTodo {
+    pub text: String,
+    pub owner: Option<String>,
+    pub added: Option<String>,
+}
+
+impl NewTodo {
+    /// Read `typed` by the trailer's own grammar: `cut the first minute
+    /// @claude` is the text and its owner, as the reader will read it back.
+    pub fn typed(typed: &str) -> Self {
+        let (text_end, _, trailer) = split_trailer(typed);
+        Self {
+            text: typed[..text_end].trim().to_string(),
+            owner: trailer.owner,
+            added: trailer.added,
+        }
+    }
+
+    /// [`typed`](Self::typed), with `owner` over whatever the text named.
+    pub fn owned(typed: &str, owner: Option<&str>) -> Self {
+        let mut new = Self::typed(typed);
+        if let Some(owner) = owner {
+            new.owner = Some(owner.to_string());
+        }
+        new
+    }
 }
 
 /// A section fastf knows how to read.
@@ -595,19 +767,36 @@ fn remove_lines(content: &str, span: Range<usize>) -> String {
 
 /// A task as it sits in the file: the task; its whole line, the line ending
 /// included when there is one, which is what a removal takes; its text, from
-/// just after the `]` to before the line ending, which is what a rewording
-/// replaces; and the character inside its brackets (an empty range for `[]`),
+/// just after the `]` to the end of its last word, which is what a rewording
+/// replaces; its tail, from there to before the line ending — the space and
+/// the trailer, or nothing — which is what a tick, an untick and a new owner
+/// rewrite; and the character inside its brackets (an empty range for `[]`),
 /// which is what a toggle rewrites.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PlacedTodo {
     todo: Todo,
     line: Range<usize>,
     text: Range<usize>,
+    tail: Range<usize>,
     marker: Range<usize>,
 }
 
+impl PlacedTodo {
+    /// The tail a line with this trailer gets: a space and the tokens, or
+    /// nothing at all, so a line with nothing to say ends at its last word.
+    fn tail_for(owner: Option<&str>, added: Option<&str>, done: Option<&str>) -> String {
+        let rendered = render_trailer(owner, added, done);
+        if rendered.is_empty() {
+            rendered
+        } else {
+            format!(" {rendered}")
+        }
+    }
+}
+
 /// What a task line is: a list item, any indent, then `[ ]`, `[x]`, `[X]` or
-/// `[]`, then the text. Anything else under the heading is not a task.
+/// `[]`, then the text and its trailer, handed over untrimmed. Anything else
+/// under the heading is not a task.
 fn task_line(line: &str) -> Option<(bool, usize, usize, &str)> {
     let indent = line.len() - line.trim_start().len();
     let rest = &line[indent..];
@@ -623,8 +812,8 @@ fn task_line(line: &str) -> Option<(bool, usize, usize, &str)> {
         _ => return None,
     };
     let marker_at = at + 1;
-    let text = rest[inside + 1..].trim();
-    Some((done, marker_at, inside, text))
+    let after = &rest[inside + 1..];
+    Some((done, marker_at, inside, after))
 }
 
 fn place_todos(content: &str) -> Vec<PlacedTodo> {
@@ -638,7 +827,7 @@ fn place_todos(content: &str) -> Vec<PlacedTodo> {
             phase = Some(name.to_string());
             continue;
         }
-        let Some((done, marker_at, inside, text)) = task_line(line) else {
+        let Some((done, marker_at, inside, after)) = task_line(line) else {
             continue;
         };
         // A section stops short of the `\n` before the next heading, so its
@@ -648,14 +837,29 @@ fn place_todos(content: &str) -> Vec<PlacedTodo> {
             whole.end += 1;
         }
         let text_at = range.start + marker_at + inside + 1;
+        let (text_end, trailer_start, trailer) = split_trailer(after);
+        let line_end = range.start + line.len();
+        // With a trailer the text stops at its last word and the tail is
+        // the rest; without one the text runs to the line's end, as it
+        // always did, so a rewording takes the trailing blanks with it and
+        // a tick lands after them.
+        let (text, tail) = if trailer_start.is_some() {
+            (text_at..text_at + text_end, text_at + text_end..line_end)
+        } else {
+            (text_at..line_end, line_end..line_end)
+        };
         placed.push(PlacedTodo {
             todo: Todo {
                 done,
-                text: text.to_string(),
+                text: after[..text_end].trim().to_string(),
                 phase: phase.clone(),
+                owner: trailer.owner,
+                added: trailer.added,
+                done_at: trailer.done,
             },
             line: whole,
-            text: text_at..range.start + line.len(),
+            text,
+            tail,
             marker: range.start + marker_at..range.start + marker_at + inside,
         });
     }
@@ -683,9 +887,11 @@ pub fn read_todo_list(project_root: &Path) -> Result<(Vec<Todo>, Vec<PhaseLabel>
     Ok((todos_in(&content), phase_labels_in(&content)))
 }
 
-/// Flip task `ordinal` between open and done by rewriting the one character
-/// inside its brackets. Returns whether it is done now. `expected` is the
-/// text the caller last read — see [`replace_note`].
+/// Flip task `ordinal` between open and done: the one character inside its
+/// brackets, and its tail — a tick writes `done:<now>` there, an untick
+/// takes the `done:` token away, and the owner and `added:` stay as they
+/// were. One write. Returns whether it is done now. `expected` is the text
+/// the caller last read — see [`replace_note`].
 pub fn toggle_todo(path: &Path, ordinal: usize, expected: &str) -> Result<bool> {
     let content = read_document(path, "toggle a todo")?;
     let placed = place_todos(&content);
@@ -696,8 +902,17 @@ pub fn toggle_todo(path: &Path, ordinal: usize, expected: &str) -> Result<bool> 
         bail!("the todo changed meanwhile — reload and try again");
     }
     let done = !current.todo.done;
+    let now = crate::util::time::now_iso8601();
+    let tail = PlacedTodo::tail_for(
+        current.todo.owner.as_deref(),
+        current.todo.added.as_deref(),
+        done.then_some(now.as_str()),
+    );
+    // The tail sits after the marker, so splicing it first leaves the
+    // marker's offsets where they were.
+    let new_content = splice(&content, current.tail.clone(), &tail);
     let new_content = splice(
-        &content,
+        &new_content,
         current.marker.clone(),
         if done { "x" } else { " " },
     );
@@ -710,10 +925,12 @@ pub fn toggle_todo(path: &Path, ordinal: usize, expected: &str) -> Result<bool> 
 /// last read — see [`replace_note`].
 ///
 /// A rewording replaces the text after the brackets and nothing else: the
-/// indent, the list marker, what is inside the brackets and the line ending
-/// (a `\r\n` included) stay as they were. A removal takes the whole line, and
-/// the blank line it would leave doubled. A `###` phase label is never
-/// touched, even when the last task under it goes.
+/// indent, the list marker, what is inside the brackets, the trailer and the
+/// line ending (a `\r\n` included) stay as they were. A text that ends in an
+/// owner of its own — `… @sam` — names the new owner, and the trailer is
+/// written again with it in the trailer's own place. A removal takes the
+/// whole line, and the blank line it would leave doubled. A `###` phase
+/// label is never touched, even when the last task under it goes.
 pub fn replace_todo(path: &Path, ordinal: usize, expected: &str, text: &str) -> Result<()> {
     if text.contains(['\n', '\r']) {
         bail!("a todo is one line");
@@ -726,12 +943,50 @@ pub fn replace_todo(path: &Path, ordinal: usize, expected: &str, text: &str) -> 
     if current.todo.text != expected {
         bail!("the todo changed meanwhile — reload and try again");
     }
-    let text = text.trim();
-    let new_content = if text.is_empty() {
+    let typed = NewTodo::typed(text);
+    let new_content = if typed.text.is_empty() && typed.owner.is_none() {
         remove_lines(&content, current.line.clone())
+    } else if typed.text.is_empty() {
+        bail!("a todo is more than its owner — give it some text");
+    } else if let Some(owner) = &typed.owner {
+        let tail = PlacedTodo::tail_for(
+            Some(owner),
+            current.todo.added.as_deref(),
+            current.todo.done_at.as_deref(),
+        );
+        splice(
+            &content,
+            current.text.start..current.tail.end,
+            &format!(" {}{tail}", typed.text),
+        )
     } else {
-        splice(&content, current.text.clone(), &format!(" {text}"))
+        splice(&content, current.text.clone(), &format!(" {}", typed.text))
     };
+    crate::util::atomic::write(path, new_content.as_bytes())
+}
+
+/// Give task `ordinal` to `owner`, or to nobody with `None`: its tail is
+/// written again with the new `@owner` and the dates it had, and nothing
+/// else on the line moves. `expected` is the text the caller last read —
+/// see [`replace_note`].
+pub fn set_owner(path: &Path, ordinal: usize, expected: &str, owner: Option<&str>) -> Result<()> {
+    if owner.is_some_and(|owner| owner.is_empty() || owner.chars().any(char::is_whitespace)) {
+        bail!("an owner is one word");
+    }
+    let content = read_document(path, "set a todo's owner")?;
+    let placed = place_todos(&content);
+    let Some(current) = placed.get(ordinal) else {
+        bail!("the todo is no longer there — reload and try again");
+    };
+    if current.todo.text != expected {
+        bail!("the todo changed meanwhile — reload and try again");
+    }
+    let tail = PlacedTodo::tail_for(
+        owner,
+        current.todo.added.as_deref(),
+        current.todo.done_at.as_deref(),
+    );
+    let new_content = splice(&content, current.tail.clone(), &tail);
     crate::util::atomic::write(path, new_content.as_bytes())
 }
 
@@ -782,15 +1037,54 @@ pub enum TodoPlace {
 
 /// [`add_todos_in`], at `place`, answering the ordinal the first of them got
 /// — where the writer put it, so a caller that shows the list need not
-/// predict it. A file saved with `\r\n` line endings keeps them.
+/// predict it. Each text is read as somebody typed it ([`NewTodo::typed`]):
+/// a trailing `@owner` is the owner. A file saved with `\r\n` line endings
+/// keeps them.
 pub fn add_todos_at(path: &Path, texts: &[String], place: &TodoPlace) -> Result<usize> {
     if texts.iter().any(|text| text.contains(['\n', '\r'])) {
         bail!("a todo is one line");
     }
-    let lines: Vec<&str> = texts
+    let todos: Vec<NewTodo> = texts.iter().map(|text| NewTodo::typed(text)).collect();
+    add_todos_with(path, &todos, place)
+}
+
+/// [`add_todos_at`] over todos already read: each is written as
+/// `- [ ] text @owner added:<now>` — the owner only when it has one, and
+/// one `added:` stamp for the whole run, since it is one write at one
+/// moment; a todo typed with an `added:` of its own keeps it, because it
+/// says when it was added, which now is not.
+pub fn add_todos_with(path: &Path, todos: &[NewTodo], place: &TodoPlace) -> Result<usize> {
+    if todos.iter().any(|todo| {
+        todo.text.contains(['\n', '\r'])
+            || todo
+                .owner
+                .as_deref()
+                .is_some_and(|o| o.contains(['\n', '\r']))
+    }) {
+        bail!("a todo is one line");
+    }
+    if todos.iter().any(|todo| {
+        todo.owner
+            .as_deref()
+            .is_some_and(|owner| owner.is_empty() || owner.chars().any(char::is_whitespace))
+    }) {
+        bail!("an owner is one word");
+    }
+    let now = crate::util::time::now_iso8601();
+    let lines: Vec<String> = todos
         .iter()
-        .map(|text| text.trim())
-        .filter(|text| !text.is_empty())
+        .map(|todo| (todo.text.trim(), todo))
+        .filter(|(text, _)| !text.is_empty())
+        .map(|(text, todo)| {
+            format!(
+                "{text}{}",
+                PlacedTodo::tail_for(
+                    todo.owner.as_deref(),
+                    Some(todo.added.as_deref().unwrap_or(now.as_str())),
+                    None,
+                )
+            )
+        })
         .collect();
     if lines.is_empty() {
         bail!("the todo is empty — nothing written");

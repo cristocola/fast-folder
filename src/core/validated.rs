@@ -172,6 +172,39 @@ impl Tag {
     }
 }
 
+/// A todo's owner: whose court it is in, written as `@owner` at the end of
+/// the todo's line.
+///
+/// One word, by the rule a tag keeps and for the same reason — it goes on
+/// one line of a file a hand edits, and a space in it would read as text —
+/// so [`Tag::parse`] is the rule, and only the sentences name an owner. The
+/// `@` is the file's spelling, not the owner's: `@sales` and `sales` name
+/// the same hat, and the one typed with it is read without.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Owner(String);
+
+impl Owner {
+    pub fn parse(raw: &str) -> Result<Self> {
+        let raw = raw.trim();
+        let raw = raw.strip_prefix('@').unwrap_or(raw);
+        if raw.is_empty() {
+            bail!("an owner cannot be empty — `--none` takes a todo away from everybody");
+        }
+        let tag = Tag::parse(raw).map_err(|err| {
+            anyhow::anyhow!("{}", err.to_string().replacen("a tag", "an owner", 1))
+        })?;
+        Ok(Self(tag.into_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
 /// A project's one-line description.
 ///
 /// One line, because every list prints it on one and the frontmatter holds it

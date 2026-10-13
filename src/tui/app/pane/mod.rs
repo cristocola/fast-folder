@@ -442,13 +442,17 @@ pub enum PaneRow {
         done: usize,
         total: usize,
     },
-    /// One todo's first row. Enter toggles it; F2 edits its text. `phased`
-    /// when it sits under a phase heading, and is drawn in from it.
+    /// One todo's first row. Enter toggles it; F2 edits its text; `O` gives
+    /// it an owner. `phased` when it sits under a phase heading, and is
+    /// drawn in from it. `owner` and `when` — whose court, and the day it
+    /// was added, or ticked once it is — sit at the row's right, dim.
     Todo {
         ordinal: usize,
         done: bool,
         text: String,
         phased: bool,
+        owner: Option<String>,
+        when: Option<String>,
     },
     /// The rest of a todo too wide for the pane. Not a row the cursor rests on.
     TodoLine {
@@ -583,6 +587,27 @@ fn header_rows(project: &Project, detail: Option<&ProjectDetail>, width: usize) 
     rows
 }
 
+/// What sits at a todo row's right: `@owner · 2026-10-12`, either half
+/// alone, or nothing. One spelling for the rows and the view, so the room
+/// the text leaves is the room the aside takes.
+pub fn trailer_text(owner: Option<&str>, when: Option<&str>) -> String {
+    match (owner, when) {
+        (Some(owner), Some(when)) => format!("@{owner} {when}"),
+        (Some(owner), None) => format!("@{owner}"),
+        (None, Some(when)) => when.to_string(),
+        (None, None) => String::new(),
+    }
+}
+
+/// The columns [`trailer_text`] takes, with the gap before it — zero when
+/// there is nothing to show, so a plain todo keeps its whole row.
+fn trailer_width(owner: Option<&str>, when: Option<&str>) -> usize {
+    match trailer_text(owner, when).width() {
+        0 => 0,
+        w => w + 2,
+    }
+}
+
 fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
     let mut rows = Vec::new();
     rows.push(PaneRow::Rule(PaneSection::Todo));
@@ -607,14 +632,45 @@ fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
         push_labels(&mut rows, ordinal);
         let phased = todo.phase.is_some();
         let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
-        let mut lines = wrap_columns(&todo.text, width.saturating_sub(indent)).into_iter();
+        let owner = todo.owner.clone();
+        let when = if todo.done {
+            todo.done_day().or_else(|| todo.added_day())
+        } else {
+            todo.added_day()
+        }
+        .map(str::to_string);
+        // The first row keeps room for what sits at its right, so a long
+        // text wraps before it rather than under it; the rows after it have
+        // the whole width again. `wrap_columns` keeps every character but
+        // the spaces it breaks on, so its first line is a prefix of the text
+        // and the rest of the text starts where that line ends.
+        let aside = trailer_width(owner.as_deref(), when.as_deref());
+        let full = width.saturating_sub(indent);
+        let (first, rest) = if aside > 0 {
+            let head = wrap_columns(&todo.text, full.saturating_sub(aside).max(1))
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            let remainder = todo.text[head.len()..].trim_start_matches(' ');
+            let rest = if remainder.is_empty() {
+                Vec::new()
+            } else {
+                wrap_columns(remainder, full)
+            };
+            (head, rest)
+        } else {
+            let mut lines = wrap_columns(&todo.text, full).into_iter();
+            (lines.next().unwrap_or_default(), lines.collect())
+        };
         rows.push(PaneRow::Todo {
             ordinal,
             done: todo.done,
-            text: lines.next().unwrap_or_default(),
+            text: first,
             phased,
+            owner,
+            when,
         });
-        rows.extend(lines.map(|text| PaneRow::TodoLine {
+        rows.extend(rest.into_iter().map(|text| PaneRow::TodoLine {
             done: todo.done,
             text,
             phased,

@@ -47,6 +47,7 @@ pub fn summary_local(cfg: &Config) -> SummaryPart {
             default_template: cfg.default_template.clone(),
             confirm_create: cfg.confirm_create,
             register_naming_pattern: cfg.register_naming_pattern.clone(),
+            hat: cfg.resolve_hat(),
         },
     }
 }
@@ -135,6 +136,7 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         bases: cfg.bases.clone(),
         editor: cfg.editor.clone(),
         terminal: cfg.terminal.clone(),
+        hat: cfg.hat.clone(),
         theme: cfg.theme.clone(),
         motion: cfg.motion.clone(),
         log_level: cfg.log_level.clone(),

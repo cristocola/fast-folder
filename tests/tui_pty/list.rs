@@ -1091,7 +1091,7 @@ fn todos_typed_in_one_burst_all_land_in_order() {
     assert_eq!(code, 0, "{}", pty::plain(&out));
     let file = fs::read_to_string(root.join("PROJECT_INFO.md")).unwrap();
     let at = |text: &str| {
-        file.find(&format!("- [ ] {text}\n"))
+        file.find(&format!("- [ ] {text} added:"))
             .unwrap_or_else(|| panic!("{text} was lost:\n{file}"))
     };
     assert!(

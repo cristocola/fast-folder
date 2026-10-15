@@ -265,7 +265,7 @@ mod tests {
         let ranked = fuzzy.rank(
             "open",
             vec![
-                ("terminal", "Open terminal here".to_string()),
+                ("terminal", "Open a terminal window".to_string()),
                 ("folder", "Open project folder".to_string()),
                 ("copy", "Copy path".to_string()),
             ],

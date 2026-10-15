@@ -191,6 +191,13 @@ impl App {
                 })
             }
 
+            // Whatever was done in the shell is in the folder; the pane reads
+            // it again. Nothing finished or failed, so nothing is said.
+            Msg::Resumed(Resumed::ProjectShell { project }) => {
+                self.session = crate::tui::frame::recent_actions();
+                self.apply_change(ListChange::DetailOnly { path: project.path })
+            }
+
             Msg::Resumed(Resumed::Note { project, text }) => {
                 self.on_note_from_editor(project, text)
             }

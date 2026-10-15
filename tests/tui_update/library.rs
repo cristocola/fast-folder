@@ -341,7 +341,7 @@ fn the_palette_ranks_the_folder_command_first_for_open() {
         _ => panic!("the palette should be open"),
     };
     assert_eq!(titles[0], "Open project folder", "{titles:?}");
-    assert_eq!(titles[1], "Open terminal here", "{titles:?}");
+    assert_eq!(titles[1], "Open a terminal window", "{titles:?}");
     // Enter runs it exactly as the key would.
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(app.modals.is_empty());

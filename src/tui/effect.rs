@@ -313,6 +313,10 @@ pub enum Suspended {
     /// main screen, and come back when it exits — the pane re-reads the
     /// file, so what it ticked and noted is there.
     Agent(Box<Project>),
+    /// Start the user's shell in the selected project's folder, on the main
+    /// screen, and come back when it exits. Not [`Suspended::Shell`], which is
+    /// Ctrl-Z giving the terminal to the shell fastf was started from.
+    ProjectShell(Box<Project>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

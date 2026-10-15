@@ -3,7 +3,8 @@
 //! The other thing fastf asks of a terminal. `relaunch` reruns *fastf* inside
 //! an emulator when a launcher gave it none; this module opens an emulator
 //! running the user's *shell* at a project's folder — `fastf term` and the
-//! action menu's "Open terminal here".
+//! app's `t` — or runs that shell in the terminal fastf already has, the
+//! app's `$`.
 //!
 //! The `cwd` conventions live in `relaunch::TERMINALS` beside the `run` ones,
 //! so the two lists cannot drift apart. `xdg-terminal-exec` is deliberately
@@ -144,30 +145,91 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
 /// picker, and becoming the shell there *is* "open a terminal at the project" —
 /// a second window would strand this one. `$SHELL`, then `/bin/sh` if that
 /// fails to exec. Returns only on failure.
+#[cfg(unix)]
+pub fn exec_shell_at(dir: &Path) -> anyhow::Error {
+    use std::os::unix::process::CommandExt;
+
+    let shell = user_shell();
+    let err = shell_at(&shell, dir).exec();
+    if shell.as_os_str() != FALLBACK_SHELL {
+        let err = shell_at(FALLBACK_SHELL.as_ref(), dir).exec();
+        return anyhow::Error::from(err).context("could not start /bin/sh");
+    }
+    anyhow::Error::from(err).context(format!("could not start {}", shell.to_string_lossy()))
+}
+
+/// Run the user's shell at `dir` in this terminal, and wait for it: the
+/// app's `$`, which steps aside until the shell exits. `$SHELL`, then
+/// `/bin/sh` if that cannot be started.
+#[cfg(unix)]
+pub fn run_shell_at(dir: &Path) -> Result<std::process::ExitStatus> {
+    use anyhow::Context;
+
+    let shell = user_shell();
+    match shell_at(&shell, dir).status() {
+        Ok(status) => Ok(status),
+        Err(_) if shell.as_os_str() != FALLBACK_SHELL => shell_at(FALLBACK_SHELL.as_ref(), dir)
+            .status()
+            .context("could not start /bin/sh"),
+        Err(err) => Err(anyhow::Error::from(err)
+            .context(format!("could not start {}", shell.to_string_lossy()))),
+    }
+}
+
+#[cfg(unix)]
+const FALLBACK_SHELL: &str = "/bin/sh";
+
+#[cfg(unix)]
+fn user_shell() -> OsString {
+    std::env::var_os("SHELL")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| OsString::from(FALLBACK_SHELL))
+}
+
+/// `shell` started at `dir` as a terminal tab starts it: no `-i`, since a
+/// shell whose input is a terminal is interactive by itself and reads its own
+/// rc, and no `-l`, which a tab does not pass either.
 ///
 /// The shell is the user's from here on, so it does not inherit the relaunch
 /// marker — see [`open_terminal_at`] for what inheriting it costs.
 #[cfg(unix)]
-pub fn exec_shell_at(dir: &Path) -> anyhow::Error {
-    use std::os::unix::process::CommandExt;
+fn shell_at(shell: &std::ffi::OsStr, dir: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(shell);
+    command
+        .current_dir(dir)
+        .env_remove(crate::util::relaunch::RELAUNCHED_VAR);
+    command
+}
+
+/// Run a shell at `dir` in this console, and wait for it: the app's `$`.
+///
+/// Windows has no `$SHELL`, so this is the shell Windows Terminal opens by
+/// default — PowerShell 7 where it is installed, else the Windows PowerShell
+/// every Windows has — and `%ComSpec%` only if neither starts. Each is tried
+/// by starting it, as `wt` is: an app execution alias says nothing useful
+/// before it runs. The folder is given without the `\\?\` prefix, which
+/// PowerShell would put in every prompt; a working directory cannot be longer
+/// than `MAX_PATH` with or without it.
+#[cfg(windows)]
+pub fn run_shell_at(dir: &Path) -> anyhow::Result<std::process::ExitStatus> {
+    use anyhow::Context;
     use std::process::Command;
 
-    let marker = crate::util::relaunch::RELAUNCHED_VAR;
-    let shell = std::env::var_os("SHELL")
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| OsString::from("/bin/sh"));
-    let err = Command::new(&shell)
-        .current_dir(dir)
-        .env_remove(marker)
-        .exec();
-    if shell.as_os_str() != "/bin/sh" {
-        let err = Command::new("/bin/sh")
-            .current_dir(dir)
-            .env_remove(marker)
-            .exec();
-        return anyhow::Error::from(err).context("could not start /bin/sh");
+    let dir = std::path::PathBuf::from(crate::util::paths::display_path(dir));
+    for powershell in ["pwsh.exe", "powershell.exe"] {
+        if let Ok(status) = Command::new(powershell)
+            .arg("-NoLogo")
+            .current_dir(&dir)
+            .status()
+        {
+            return Ok(status);
+        }
     }
-    anyhow::Error::from(err).context(format!("could not start {}", shell.to_string_lossy()))
+    let comspec = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+    Command::new(&comspec)
+        .current_dir(&dir)
+        .status()
+        .with_context(|| format!("could not start {}", comspec.to_string_lossy()))
 }
 
 /// Spawn a terminal at `dir` on Windows: Windows Terminal when it is there, a

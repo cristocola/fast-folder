@@ -23,6 +23,12 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 /// the second.
 static HUNG_UP: AtomicBool = AtomicBool::new(false);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
+/// How many programs fastf started are holding the terminal right now — the
+/// agent `X` runs, the shell `$` opens. While one is, a Ctrl-C typed is that
+/// program's: the terminal sends it to the whole foreground group, fastf
+/// included, and a flag raised then quits the app the moment the program
+/// gives the terminal back, or exits fastf under it on a second press.
+static HANDED_OVER: AtomicUsize = AtomicUsize::new(0);
 /// What the second signal undoes before it exits: the guided app's alternate
 /// screen and raw mode, or an inline prompt's rows. A `fn()` stored as its
 /// address, so the handler can load it without a lock.
@@ -88,6 +94,27 @@ pub fn raise_for_test() {
 #[cfg(test)]
 pub fn reset() {
     INTERRUPTED.store(false, Ordering::Relaxed);
+    HUNG_UP.store(false, Ordering::Relaxed);
+}
+
+/// The terminal is a program's that fastf started and is waiting for; a
+/// Ctrl-C typed until this is dropped is that program's alone. A hang-up or
+/// a terminate still stops fastf, since the window it would come back to is
+/// gone. Not `SIG_IGN` or `SetConsoleCtrlHandler(NULL, TRUE)`: an ignored
+/// Ctrl-C is inherited by the child, and then it is nobody's.
+#[must_use = "the terminal is handed back when this is dropped"]
+pub struct HandedOver(());
+
+/// Hand the terminal to a program for as long as the guard lives.
+pub fn hand_over() -> HandedOver {
+    HANDED_OVER.fetch_add(1, Ordering::SeqCst);
+    HandedOver(())
+}
+
+impl Drop for HandedOver {
+    fn drop(&mut self) {
+        HANDED_OVER.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Show the terminal cursor again, on whichever standard stream is a terminal.
@@ -210,6 +237,21 @@ fn flag() {
     }
 }
 
+/// Ctrl-C, from either platform's handler: fastf's, unless a program it
+/// started holds the terminal.
+fn ctrl_c() {
+    if HANDED_OVER.load(Ordering::SeqCst) == 0 {
+        flag();
+    }
+}
+
+/// The terminal going away — a hang-up, a terminate, a closed console —
+/// which stops fastf whoever holds the terminal.
+fn hang_up() {
+    HUNG_UP.store(true, Ordering::Relaxed);
+    flag();
+}
+
 /// Install the handler. Idempotent, and never fatal: if the OS refuses, fastf
 /// simply keeps the default terminate-on-Ctrl-C behaviour it had before.
 pub fn install() {
@@ -239,12 +281,11 @@ fn install_platform() {
         const CTRL_SHUTDOWN_EVENT: u32 = 6;
         match ctrl_type {
             CTRL_C_EVENT | CTRL_BREAK_EVENT => {
-                flag();
+                ctrl_c();
                 1 // handled — do not run the default terminator
             }
             CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
-                HUNG_UP.store(true, Ordering::Relaxed);
-                flag();
+                hang_up();
                 1
             }
             _ => 0,
@@ -259,17 +300,18 @@ fn install_platform() {
 #[cfg(unix)]
 fn install_platform() {
     extern "C" fn handler(signum: i32) {
-        if signum != libc::SIGINT {
-            HUNG_UP.store(true, Ordering::Relaxed);
+        if signum == libc::SIGINT {
+            ctrl_c();
+        } else {
+            hang_up();
         }
-        flag();
     }
     // Go through a plain function pointer before the integer cast. Casting the
     // function *item* straight to an integer is accepted by the compiler but
     // relies on its size matching, which clippy rightly refuses.
     let handler_ptr = handler as extern "C" fn(i32) as libc::sighandler_t;
-    // SAFETY: `handler` only performs an atomic store (and `exit` on the second
-    // signal), both of which are safe from a signal context.
+    // SAFETY: `handler` only loads and stores atomics (and `exit`s on the
+    // second signal), all of which are safe from a signal context.
     //
     // SIGHUP too: a closed terminal window or a dropped ssh session must
     // unwind a create the same cooperative way, so the partial folder is
@@ -324,6 +366,25 @@ mod tests {
         RESTORED.store(false, Ordering::SeqCst);
         on_second_signal();
         assert!(!RESTORED.load(Ordering::SeqCst), "cleared: nothing to undo");
+    }
+
+    /// A Ctrl-C typed while a program fastf started holds the terminal is
+    /// that program's; the window closing still stops fastf.
+    #[test]
+    fn a_handed_over_terminal_keeps_ctrl_c_and_not_the_hang_up() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        {
+            let _held = hand_over();
+            ctrl_c();
+            assert!(!is_set(), "the Ctrl-C was the program's");
+            hang_up();
+            assert!(is_set() && hung_up(), "a closed window still stops fastf");
+        }
+        reset();
+        ctrl_c();
+        assert!(is_set(), "given back, Ctrl-C is fastf's again");
+        reset();
     }
 
     #[test]

@@ -692,6 +692,13 @@ impl Runtime {
                     let _ = self.tx.send(Msg::Resumed(Resumed::Agent { project, ok }));
                     self.announce_size();
                 }
+                Effect::Suspend(Suspended::ProjectShell(project)) => {
+                    self.run_project_shell(&project)?;
+                    let _ = self
+                        .tx
+                        .send(Msg::Resumed(Resumed::ProjectShell { project }));
+                    self.announce_size();
+                }
                 Effect::Suspend(Suspended::Shell) => {
                     self.suspend_to_shell()?;
                     let _ = self.tx.send(Msg::Resumed(Resumed::Shell));
@@ -872,6 +879,7 @@ impl Runtime {
                 colored::Colorize::bold(line.as_str()),
                 colored::Colorize::dimmed(crate::util::paths::display_path(&project.path).as_str())
             );
+            let _held = interrupt::hand_over();
             let status = crate::core::post_create::run_line_in(&line, &project.path)
                 .with_context(|| format!("starting `{line}`"))?;
             Ok(status.success())
@@ -893,6 +901,41 @@ impl Runtime {
         self.input.resume();
         self.announce_size();
         Ok(ok)
+    }
+}
+
+impl Runtime {
+    /// Start the user's shell in `project`'s folder on the main screen, as
+    /// the agent runs: the screen given back, the shell owning the terminal
+    /// until it exits, the screen retaken. No pause on the way back — the
+    /// shell was left on purpose and the screen it leaves is the user's —
+    /// unless it could not be started, which is said and left to be read.
+    fn run_project_shell(&mut self, project: &Project) -> Result<()> {
+        self.input.pause();
+        release_screen(&mut self.terminal);
+
+        eprintln!(
+            "{} your shell in {}   {}",
+            colored::Colorize::bold(colored::Colorize::cyan("→")),
+            colored::Colorize::bold(crate::util::paths::display_path(&project.path).as_str()),
+            colored::Colorize::dimmed("exit returns to fastf")
+        );
+        let ran = {
+            let _held = interrupt::hand_over();
+            crate::util::term_open::run_shell_at(&project.path)
+        };
+        if let Err(err) = ran {
+            eprintln!(
+                "{} {:#}",
+                colored::Colorize::bold(colored::Colorize::red("error:")),
+                err
+            );
+            pause_for_enter();
+        }
+
+        self.terminal = take_screen()?;
+        self.input.resume();
+        Ok(())
     }
 }
 

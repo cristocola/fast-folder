@@ -68,7 +68,7 @@ Because `gates` is the whole of CI, **any CI failure is a failed release**.
 Every release failure this project has had was a *test* failure — never a
 build, the MSI or the AUR packages — and each one was an environment delta that
 does not reproduce on the maintainer's Arch desktop, which is why `cargo test`
-was green when the tag went up. Six patterns:
+was green when the tag went up. Seven patterns:
 
 | pattern | platform | nature | how it reads |
 |---|---|---|---|
@@ -78,6 +78,7 @@ was green when the tag went up. Six patterns:
 | no `DISPLAY` on a headless runner | Linux | deterministic | `error: no display` from a command that should need none |
 | Windows path and `cmd` semantics | Windows | deterministic | `hostile_fs` / `windows_semantics` disagreeing about a name |
 | a rustdoc lint | both | deterministic | `docs build clean` failing on `redundant_explicit_links`, or a `pub` item's docs linking to a `pub(crate)` one |
+| a forked child holding a file the test just let go of | Linux, mostly the AUR `check()` | racy | a script just written fails to run (`ETXTBSY`, a shell read as silent), or a lock just dropped is found held |
 
 Recognising them: a Windows-only failure in a path comparison is almost always
 the first; `traced()` prints the whole trace file beside its count for the
@@ -88,7 +89,14 @@ is the third; anything mentioning a display is the fourth. Fixed instances are
 for the same shape. The sixth is missed for a duller reason: `cargo doc` is not
 part of `cargo test`, so nobody runs it by hand. Mind the quoting —
 `RUSTDOCFLAGS=-D warnings cargo doc` runs `warnings` as a command and reports
-nothing, which looks exactly like a pass.
+nothing, which looks exactly like a pass. The seventh lives in the lib's own
+test binary, where hundreds of tests share one process: a child another test
+thread forks holds every descriptor open in it until that child execs. CI
+passes it by luck as often as not; run the binary forty times
+(`target/release/deps/fastf-<hash> --test-threads=16` in a loop) before a tag
+that touches a test which runs a script it wrote or takes a lock twice. The
+fixed instance is `34455bc`: write the script from another process, and test
+what runs under a lock without the lock.
 
 **The step that avoids all of it** is step 2: push the work as a branch, open
 the PR, and let the full matrix run there. `fail-fast: false` on both matrices

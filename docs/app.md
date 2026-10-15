@@ -213,7 +213,8 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `b` / `B` | the bases panel: which bases are active, and one shown alone / switch the list between every base and only the active ones — see [Which bases the list shows](#which-bases-the-list-shows) |
 | `i` | show or hide the detail pane: beside or under the list it switches the pane off and on; on a small window, where the pane takes the list's place, it goes into the pane and back out |
 | Enter, `a` | the selected project's action menu — every verb below, in one list |
-| `o`, `t`, `y`, `p` | open the folder, open a terminal there, copy the path, show the path |
+| `o`, `t`, `y`, `p` | open the folder, open a terminal window there, copy the path, show the path |
+| `$` | your shell (`$SHELL`; PowerShell on Windows) in the project's folder, in this terminal: the app steps aside, and `exit` brings it back. Unlike `t` it needs no display, so it works over ssh |
 | `x`, `X` | start the configured agent (`fastf config set agent claude`) in the project's folder: in a new terminal window, so the app stays up and the next `x` is the next agent; or here, the app stepping aside until it exits |
 | `d` | describe the project: its one-line description opens in the pane, where Enter on its row opens it — or on a line of its own when the pane is off |
 | `A`, Ctrl-T | add a tag (pick one the library already knows, or type a new one); remove tags |
@@ -516,7 +517,10 @@ so the verbs that change a project are dimmed and say why — browsing, search
 and the pane go on. `x` opens a new terminal window running your agent in the project's folder
 (`fastf agent`), a window per agent, and `X` runs it in this terminal, the
 app stepping aside until it exits and reading the project's file again when
-it returns. `N` drops out of the terminal into
+it returns. `t` and `$` are the same pair for your shell: a new window in the
+project's folder, or your shell in this terminal until you type `exit`.
+Ctrl-C typed to the agent or the shell is theirs, and never quits the app.
+`N` drops out of the terminal into
 your `$EDITOR` and appends whatever you save as one note when you come back;
 `M` and `J` open the metadata and the notes, scrollable with the arrow keys.
 

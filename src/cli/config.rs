@@ -298,6 +298,10 @@ pub fn set_quietly(key: &str, value: &str) -> Result<String> {
     Ok(said)
 }
 
+/// What a setting says when it dropped the quotes around the whole value.
+const WHOLE_QUOTES: &str =
+    "(without the outer quotes: a shell would look for one program named all of it)";
+
 /// Apply one setting to a `Config` already in hand, and say what happened.
 ///
 /// Print-free, so the guided app — which owns the screen and cannot let a
@@ -307,18 +311,27 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
     let normalized = key.replace('-', "_");
     Ok(match normalized.as_str() {
         "base_dir" => set_base_dir(config, value)?,
-        "editor" => {
-            config.editor = value.to_string();
-            format!("Set editor = {}", value)
-        }
+        "editor" => match crate::core::config::unwrap_whole_quotes(value) {
+            Some(inside) => {
+                config.editor = inside.to_string();
+                format!("Set editor = {inside}  {}", WHOLE_QUOTES)
+            }
+            None => {
+                config.editor = value.to_string();
+                format!("Set editor = {}", value)
+            }
+        },
         "terminal" => {
             config.terminal = value.to_string();
             format!("Set terminal = {}", value)
         }
         "hat" => set_hat(config, value)?,
         "agent" => {
-            config.agent = value.trim().to_string();
-            if config.agent.is_empty() {
+            let unwrapped = crate::core::config::unwrap_whole_quotes(value);
+            config.agent = unwrapped.unwrap_or(value).trim().to_string();
+            if unwrapped.is_some() {
+                format!("Set agent = {}  {}", config.agent, WHOLE_QUOTES)
+            } else if config.agent.is_empty() {
                 "Set agent = (none)  — `fastf agent` is off until one is named".to_string()
             } else {
                 format!(

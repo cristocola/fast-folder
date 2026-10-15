@@ -207,9 +207,8 @@ fn shell_at(shell: &std::ffi::OsStr, dir: &Path) -> std::process::Command {
 /// default — PowerShell 7 where it is installed, else the Windows PowerShell
 /// every Windows has — and `%ComSpec%` only if neither starts. Each is tried
 /// by starting it, as `wt` is: an app execution alias says nothing useful
-/// before it runs. The folder is given without the `\\?\` prefix, which
-/// PowerShell would put in every prompt; a working directory cannot be longer
-/// than `MAX_PATH` with or without it.
+/// before it runs. The folder is given as it is displayed, without the `\\?\`
+/// prefix, which PowerShell would otherwise put in every prompt.
 #[cfg(windows)]
 pub fn run_shell_at(dir: &Path) -> anyhow::Result<std::process::ExitStatus> {
     use anyhow::Context;

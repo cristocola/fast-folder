@@ -117,7 +117,10 @@ pub fn run(actions: &PostCreate, project_path: &Path, config: &Config) -> Vec<No
 
     // git_init: idempotent.
     if actions.git_init {
-        match project_command("git", project_path).arg("init").status() {
+        match project_command("git", Runs::Program, project_path)
+            .arg("init")
+            .status()
+        {
             Ok(s) if s.success() => notes.push(Note::Done("git init".to_string())),
             Ok(s) => notes.push(Note::Warning(format!("git init exited with status {s}"))),
             Err(e) => notes.push(Note::Warning(format!(
@@ -177,16 +180,35 @@ pub fn run_line_in(line: &str, project_path: &Path) -> std::io::Result<std::proc
     run_shell(&rewrite_path_token(line), project_path)
 }
 
+/// What a child spawned for a project runs, which is what its program is
+/// looked for by.
+enum Runs<'a> {
+    /// The program itself.
+    Program,
+    /// A shell line, which the program (`sh`, `cmd`) runs.
+    Line(&'a str),
+}
+
 /// A child process that knows which project it is being run for.
 ///
 /// **Every child fastf spawns for a project goes through this**: the project
 /// arrives as `current_dir` and as [`PROJECT_PATH_VAR`], so a command never has
 /// to interpolate a path into its own source to find the folder it was run for.
-fn project_command(program: &str, project_path: &Path) -> Command {
+/// It also gets the `PATH` the user's shell builds when fastf's own cannot be
+/// trusted to hold what the user installed (`util::login_path`), so an agent
+/// in `~/.local/bin` starts from a desktop launcher as it does from a terminal.
+fn project_command(program: &str, runs: Runs<'_>, project_path: &Path) -> Command {
     let mut command = Command::new(program);
     command
         .current_dir(project_path)
         .env(PROJECT_PATH_VAR, project_path);
+    let path = match runs {
+        Runs::Program => crate::util::login_path::path_for_program(program),
+        Runs::Line(line) => crate::util::login_path::path_for_line(line),
+    };
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
     command
 }
 
@@ -253,7 +275,7 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
     // resolve, so this one child still goes through a shell. The *path* does
     // not: it is passed as `"%FASTF_PROJECT_PATH%"`, which cmd expands to the
     // variable set below rather than to anything in the folder's own name.
-    let status = project_command("cmd", path)
+    let status = project_command("cmd", Runs::Program, path)
         .args(["/c", "start", "", editor, "\"%FASTF_PROJECT_PATH%\""])
         .status()?;
     if !status.success() {
@@ -269,7 +291,7 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
     // added.
     let mut parts = editor.split_whitespace();
     let bin = parts.next().unwrap_or(editor);
-    let mut cmd = project_command(bin, path);
+    let mut cmd = project_command(bin, Runs::Program, path);
     for arg in parts {
         cmd.arg(arg);
     }
@@ -282,12 +304,17 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
 
 #[cfg(windows)]
 fn run_shell(cmd: &str, cwd: &Path) -> std::io::Result<std::process::ExitStatus> {
-    project_command("cmd", cwd).args(["/c", cmd]).status()
+    project_command("cmd", Runs::Line(cmd), cwd)
+        .args(["/c", cmd])
+        .status()
 }
 
 #[cfg(not(windows))]
 fn run_shell(cmd: &str, cwd: &Path) -> std::io::Result<std::process::ExitStatus> {
-    project_command("sh", cwd).arg("-c").arg(cmd).status()
+    project_command("sh", Runs::Line(cmd), cwd)
+        .arg("-c")
+        .arg(cmd)
+        .status()
 }
 
 #[cfg(test)]

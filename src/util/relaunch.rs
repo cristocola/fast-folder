@@ -24,7 +24,7 @@ use std::ffi::{OsStr, OsString};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
-use crate::util::paths;
+use crate::util::login_path;
 
 /// Set on the child, so the rerun cannot relaunch itself. Internal.
 ///
@@ -227,17 +227,12 @@ pub fn spawn_in_terminal(preference: Option<&str>, args: &[OsString]) -> Result<
         .or_else(|| std::env::args_os().next())
         .unwrap_or_else(|| OsString::from("fastf"));
 
-    let mut tried = Vec::new();
-    for candidate in candidate_commands(preference, &exe, args) {
-        let (program, rest) = candidate.split_first().expect("candidate is never empty");
-        if paths::find_on_path(&program.to_string_lossy()).is_none() {
-            continue;
-        }
-        tried.push(program.to_string_lossy().into_owned());
-
+    let candidates = candidate_commands(preference, &exe, args);
+    let outcome = login_path::first_that_starts(&candidates, named(preference), |found, rest| {
         // The argv is passed as argv. Nothing here is ever handed to a shell:
         // a project name may legally contain `;`, `&`, `$` and a backtick.
-        let spawned = Command::new(program)
+        let mut command = Command::new(&found.program);
+        command
             .args(rest)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -246,23 +241,31 @@ pub fn spawn_in_terminal(preference: Option<&str>, args: &[OsString]) -> Result<
             // must outlive us, so it gets its own — same reason as the
             // clipboard's fork.
             .process_group(0)
-            .env(RELAUNCHED_VAR, "1")
-            .spawn();
-
-        // The child is deliberately dropped rather than waited on: the terminal
-        // is now the user's window and this process is finished.
-        if spawned.is_ok() {
-            return Ok(());
+            .env(RELAUNCHED_VAR, "1");
+        if let Some(path) = &found.path {
+            command.env("PATH", path);
         }
+        // The child is deliberately dropped rather than waited on: the
+        // terminal is now the user's window and this process is finished.
+        command.spawn().is_ok()
+    });
+    if outcome.started {
+        return Ok(());
     }
-
-    if tried.is_empty() {
+    if outcome.tried.is_empty() {
         bail!("no terminal emulator found on PATH");
     }
     bail!(
         "no terminal emulator could be started (tried {})",
-        tried.join(", ")
+        outcome.tried.join(", ")
     )
+}
+
+/// Whether a terminal preference names one: the first candidate is then the
+/// user's choice, looked for on the shell's `PATH` too before any other is
+/// tried.
+pub(crate) fn named(preference: Option<&str>) -> bool {
+    preference.is_some_and(|name| !name.trim().is_empty())
 }
 
 /// Every command that could open a terminal here, in the order to try them.

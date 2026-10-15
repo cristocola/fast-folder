@@ -24,9 +24,9 @@ use anyhow::{Result, bail};
 use std::ffi::OsString;
 
 #[cfg(unix)]
-use crate::util::paths;
+use crate::util::login_path;
 #[cfg(unix)]
-use crate::util::relaunch::{CwdStyle, TERMINALS};
+use crate::util::relaunch::{CwdStyle, TERMINALS, named};
 
 /// Every argv that could open a terminal at `dir`, in the order to try them.
 ///
@@ -82,7 +82,8 @@ fn build(program: &str, style: &CwdStyle, dir: &Path) -> Vec<OsString> {
 ///
 /// `preference` names a program the caller resolved (`terminal` in the config,
 /// else `$TERMINAL`); `None` means probe. The spawn discipline is the
-/// relaunch's: candidates not on `PATH` are skipped, the child gets null stdio
+/// relaunch's: candidates installed nowhere are skipped (`login_path` says
+/// where to look, and in which order), the child gets null stdio
 /// and its own process group, and it is dropped rather than waited on — the
 /// window is now the user's. Every spawn also sets `current_dir(dir)`, which is
 /// what carries the directory for xterm, for an unknown preference, and past
@@ -108,15 +109,10 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
             "no display — a terminal window needs a desktop session (DISPLAY or WAYLAND_DISPLAY)"
         );
     }
-    let mut tried = Vec::new();
-    for candidate in terminal_at_commands(preference, dir) {
-        let (program, rest) = candidate.split_first().expect("candidate is never empty");
-        if paths::find_on_path(&program.to_string_lossy()).is_none() {
-            continue;
-        }
-        tried.push(program.to_string_lossy().into_owned());
-
-        let spawned = Command::new(program)
+    let candidates = terminal_at_commands(preference, dir);
+    let outcome = login_path::first_that_starts(&candidates, named(preference), |found, rest| {
+        let mut command = Command::new(&found.program);
+        command
             .args(rest)
             .current_dir(dir)
             .stdin(Stdio::null())
@@ -124,20 +120,21 @@ pub fn open_terminal_at(preference: Option<&str>, dir: &Path) -> Result<()> {
             .stderr(Stdio::null())
             // The terminal must outlive us — same reason as the relaunch.
             .process_group(0)
-            .env_remove(crate::util::relaunch::RELAUNCHED_VAR)
-            .spawn();
-
-        if spawned.is_ok() {
-            return Ok(());
+            .env_remove(crate::util::relaunch::RELAUNCHED_VAR);
+        if let Some(path) = &found.path {
+            command.env("PATH", path);
         }
+        command.spawn().is_ok()
+    });
+    if outcome.started {
+        return Ok(());
     }
-
-    if tried.is_empty() {
+    if outcome.tried.is_empty() {
         bail!("no terminal emulator found on PATH");
     }
     bail!(
         "no terminal emulator could be started (tried {})",
-        tried.join(", ")
+        outcome.tried.join(", ")
     )
 }
 

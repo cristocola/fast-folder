@@ -571,6 +571,62 @@ fn a_note_added_in_the_editor_is_appended() {
     );
 }
 
+/// `X` from an app a desktop launcher opened: the agent is installed where
+/// only the user's shell looks (`~/.local/bin`), and it starts — the app is
+/// the leader of its session, as under any terminal emulator, so the agent
+/// gets the shell's `PATH`. The fake shell's "rc" adds the agent's folder.
+#[test]
+fn the_agent_x_starts_is_found_where_the_shell_finds_it() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Agented", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let hidden = sb.tmp.path().join("hidden");
+    let agent = common::recorder(&hidden, "fake-agent");
+    sb.ok(&["config", "set", "agent", "fake-agent --resume"]);
+    let shell = sb.tmp.path().join("fake-shell");
+    fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\nPATH='{}':\"$PATH\"; export PATH\nfor line; do :; done\neval \"$line\"\n",
+            hidden.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("X") // → the agent, in this terminal
+        .pause(1500)
+        .enter() // "press Enter to return to fastf"
+        .pause(800)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("PATH", std::path::Path::new("/usr/bin:/bin")),
+            ("DISPLAY", std::path::Path::new(":99")),
+            ("SHELL", shell.as_path()),
+        ],
+        &script,
+        DEADLINE,
+    );
+    let text = pty::plain(&out);
+
+    assert!(!text.contains("command not found"), "{text}");
+    assert_eq!(
+        agent.argv().as_deref(),
+        Some(&["--resume".to_string()][..]),
+        "the agent should have run:\n{text}"
+    );
+    assert_eq!(code, 0, "the app should come back and quit:\n{text}");
+}
+
 /// Moving two marked projects reports the batch on the status line, and both
 /// rows land in the target base without a rescan.
 #[cfg(debug_assertions)]

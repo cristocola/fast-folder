@@ -806,16 +806,14 @@ mod tests {
         assert!(!root.join("a.txt").exists(), "what was as recorded went");
     }
 
-    /// A long removal looks at the moved copy as it goes: once that is not
-    /// the project any more, the old copy may be the only one, and the rest
-    /// of it is kept — on purpose, so nobody is told it is redundant. The
-    /// workers under way when the look fails finish the entry they hold.
-    #[test]
-    fn a_removal_stops_when_the_moved_copy_is_gone() {
+    /// A removal of `entries` files at the root, looking every
+    /// [`GUARD_EVERY`] entries at a moved copy that is not there; what is
+    /// left once it stops.
+    fn guarded_removal_of(entries: usize) -> usize {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join(".fastf-moved-1-3");
         fs::create_dir_all(&root).unwrap();
-        for n in 0..(GUARD_EVERY + 100) {
+        for n in 0..entries {
             fs::write(root.join(format!("f{n}")), "x").unwrap();
         }
         let gone = temp.path().join("moved");
@@ -836,12 +834,34 @@ mod tests {
             panic!("the removal must stop");
         };
         assert!(kept_on_purpose);
-        // The look is every `GUARD_EVERY` entries, not a barrier: workers part
-        // of the way through an entry when it fails finish that one.
+        remaining
+    }
+
+    /// A long removal looks at the moved copy as it goes: once that is not
+    /// the project any more, the old copy may be the only one, and the rest
+    /// of it is kept — on purpose, so nobody is told it is redundant.
+    ///
+    /// The look is not a barrier: the other workers go on removing while one
+    /// of them looks, as many entries as a look takes on a busy machine, so
+    /// the bound is the first look, not a count after it.
+    #[test]
+    fn a_removal_stops_when_the_moved_copy_is_gone() {
+        let extra = 2000;
+        let remaining = guarded_removal_of(GUARD_EVERY + extra);
         assert!(
-            (50..=100).contains(&remaining),
-            "it stopped at the look: {remaining} left"
+            (1..=extra).contains(&remaining),
+            "it stopped at the first look: {remaining} left"
         );
+    }
+
+    /// One worker at a time, the removal stops exactly at the look.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn one_worker_stops_exactly_at_the_look() {
+        let remaining = crate::util::faults::with_thread_fault("pool:serial", || {
+            guarded_removal_of(GUARD_EVERY + 100)
+        });
+        assert_eq!(remaining, 100);
     }
 
     /// A removal is `Removed` only when the folder is provably gone: a mount

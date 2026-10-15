@@ -251,6 +251,12 @@ second one.
 On Windows it opens Windows Terminal (`wt`) when it is installed, and a new
 `cmd` console otherwise — see [windows.md](windows.md).
 
+`fastf term` always opens a new window, because the shell you typed it into
+cannot be moved by a program it started: changing that shell's folder is
+`cd "$(fastf path ID0047)"`. In the app, `$` is the same-window version: your
+shell starts in the project's folder in the app's own terminal, and `exit`
+brings the app back. It needs no display, so it also works over ssh.
+
 ### Starting the agent there
 
 ```bash

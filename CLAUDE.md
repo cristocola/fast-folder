@@ -130,7 +130,8 @@ tell you.
   after a second), `atomic` (THE atomic write), `fs_retry` (the one loop that
   asks a filesystem again, every schedule it asks on, and the read-only
   attribute a publish must set aside), `interrupt`
-  (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
+  (Ctrl-C rollback, SIGHUP, the `set_restore` hook for the second signal, and
+  `hand_over`, which leaves Ctrl-C to a program holding the terminal),
   `login_path` (the `PATH` the user's shell builds, asked once, for a child
   started from a launcher),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
@@ -146,8 +147,9 @@ tell you.
   `contained_destination` and `is_link_like`, base probing under one deadline),
   `shell_open`
   (Windows `ShellExecuteW`), `relaunch` + `notify` (unix-only: the headless-GUI
-  terminal relaunch and `notify-send`), `term_open` (an emulator whose shell
-  starts in a project's folder: `fastf term`, "Open terminal here"), `test_env`
+  terminal relaunch and `notify-send`), `term_open` (the user's shell in a
+  project's folder: an emulator for `fastf term` and `t`, this terminal for
+  `$`), `test_env`
   (the one env-mutation guard, test-only), `tree_size`, `size_scan`,
   `human_bytes`, `clipboard`, `tty` (`require_tty`, `has_display`, the remembered
   cooked mode a signal handler restores), `win` (Windows only: the error codes

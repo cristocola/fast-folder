@@ -627,6 +627,138 @@ fn the_agent_x_starts_is_found_where_the_shell_finds_it() {
     assert_eq!(code, 0, "the app should come back and quit:\n{text}");
 }
 
+/// Ctrl-C typed to the agent `X` started is the agent's: the terminal sends
+/// it to the whole foreground group, the app included, and the app must
+/// still be there when the agent is gone — not quit with `aborted.` on its
+/// first idle look, nor exit from the handler on a second Ctrl-C while the
+/// agent still runs. The agent here keeps the terminal cooked, as a plain
+/// command does.
+#[test]
+fn ctrl_c_typed_to_the_agent_leaves_the_app_running() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Agented", "ID0001", "2026-01-01T00:00:00Z", 256);
+    sb.ok(&["config", "set", "agent", "sleep 5"]);
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("X") // → the agent, in this terminal
+        .pause(800)
+        .ctrl_c() // to the agent, while it runs
+        .pause(800)
+        .enter() // "press Enter to return to fastf"
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch(&sb, script);
+    let text = pty::plain(&out);
+
+    assert!(
+        text.contains("did not finish cleanly"),
+        "the app should have come back and said how the agent ended:\n{text}"
+    );
+    assert!(!text.contains("aborted"), "{text}");
+    assert_eq!(
+        code, 0,
+        "the app should quit on `q`, not on the Ctrl-C:\n{text}"
+    );
+}
+
+/// A `$SHELL` for the tests below: a `/bin/sh` script that appends its
+/// working folder and its argument count to `log`, then runs `then`.
+fn fake_shell(sb: &Sandbox, log: &std::path::Path, then: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let shell = sb.tmp.path().join("fake-shell");
+    fs::write(
+        &shell,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$(pwd -P)\" \"args:$#\" >> '{}'\n{then}\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).unwrap();
+    shell
+}
+
+fn launch_with_shell(
+    sb: &Sandbox,
+    shell: &std::path::Path,
+    script: Vec<pty::Keystroke>,
+) -> (String, i32) {
+    pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("SHELL", shell),
+        ],
+        &script,
+        DEADLINE,
+    )
+}
+
+/// `$` starts the user's shell in the project's folder, in the app's own
+/// terminal, the way a terminal tab starts it — no `-i`, no `-l` — and the
+/// app is back the moment the shell exits, with no Enter to press.
+#[test]
+fn the_shell_dollar_opens_starts_in_the_project_and_gives_the_app_back() {
+    let sb = Sandbox::new();
+    let root = plant_dated_project(&sb, "Shelled", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let log = sb.tmp.path().join("shell.log");
+    let shell = fake_shell(&sb, &log, "exit 0");
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("$") // → the shell, in this terminal
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch_with_shell(&sb, &shell, script);
+    let text = pty::plain(&out);
+
+    let ran = fs::read_to_string(&log).unwrap_or_default();
+    let lines: Vec<&str> = ran.lines().collect();
+    assert_eq!(
+        lines,
+        [root.canonicalize().unwrap().to_str().unwrap(), "args:0"],
+        "the shell should have started once, in the project, with no flags:\n{text}"
+    );
+    assert!(text.contains("exit returns to fastf"), "{text}");
+    assert!(!text.contains("press Enter"), "{text}");
+    assert_eq!(code, 0, "the app should come back and quit:\n{text}");
+}
+
+/// Ctrl-C typed in the shell `$` opened is the shell's: a shell with no job
+/// control of its own leaves its commands in the app's process group, where
+/// the terminal's Ctrl-C reaches the app too.
+#[test]
+fn ctrl_c_typed_in_the_shell_leaves_the_app_running() {
+    let sb = Sandbox::new();
+    plant_dated_project(&sb, "Shelled", "ID0001", "2026-01-01T00:00:00Z", 256);
+    let log = sb.tmp.path().join("shell.log");
+    let shell = fake_shell(&sb, &log, "sleep 5");
+
+    let script = pty::Script::new()
+        .pause(800)
+        .key("$")
+        .pause(800)
+        .ctrl_c() // to the command running in the shell
+        .pause(1500)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = launch_with_shell(&sb, &shell, script);
+    let text = pty::plain(&out);
+
+    assert!(log.exists(), "the shell should have run:\n{text}");
+    assert!(!text.contains("aborted"), "{text}");
+    assert_eq!(
+        code, 0,
+        "the app should quit on `q`, not on the Ctrl-C:\n{text}"
+    );
+}
+
 /// Moving two marked projects reports the batch on the status line, and both
 /// rows land in the target base without a rescan.
 #[cfg(debug_assertions)]

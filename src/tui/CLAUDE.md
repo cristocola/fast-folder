@@ -1047,6 +1047,24 @@ its own; a new console on Windows), dimmed without a display as `t` is; `X` is
 and `Resumed::Agent` re-reads the pane. Both are `Disabled(cli::agent::NO_AGENT)`
 until `Prefs.agent` names one, so the refusal is the command line's sentence.
 
+**`t` and `$` are the same pair for the user's shell** (`OpenTerminal`,
+`ShellHere`): `t` a window (`SpawnKind::Terminal`), `$`
+`Suspended::ProjectShell`, run as `X` is but through
+`util::term_open::run_shell_at` — `$SHELL` as a terminal tab starts it, no
+`-i` and no `-l`; PowerShell on Windows — with no pause on the way back,
+since the shell was left on purpose. `$` needs only a selection, so it is
+the terminal that works over ssh. It never goes through `login_path`: the
+shell builds its own `PATH`. The command line's `fastf term` stays a window:
+a shell typed into cannot be moved by its child, and a shell inside it is
+the nesting `fastf cd` was dropped for.
+
+**While `X` or `$` holds the terminal, Ctrl-C is the program's**
+(`interrupt::hand_over`): the terminal sends it to the whole foreground
+group, the app included whenever the program keeps the app's process group
+(`sh -c`, a shell without job control) and on Windows always, and a flag
+raised then would quit the app the moment the terminal came back. A hang-up
+still stops the app.
+
 **Enter acts, F2 edits, `+` adds.** Enter on a todo ticks it, so rewording one
 needs a key of its own: `PaneEditText` (F2) opens a row's text in place
 (`EditTarget::Todo { ordinal, was }` on a todo, `EditTarget::Description` on the

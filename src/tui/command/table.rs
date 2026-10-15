@@ -842,7 +842,7 @@ pub static COMMANDS: &[Command] = &[
     ),
     cmd!(
         OpenTerminal,
-        "Open terminal here",
+        "Open a terminal window",
         "a new terminal window in the project folder",
         ACTIONS,
         [Key::ch('t')],
@@ -850,6 +850,20 @@ pub static COMMANDS: &[Command] = &[
         palette = true,
         hint = true,
         needs_selection_and_display
+    ),
+    // `t` and `$` are `x` and `X` for a shell: a window of its own, or this
+    // terminal with the app stepping aside. `$` needs no display, so it is
+    // the one that works over ssh.
+    cmd!(
+        ShellHere,
+        "Open a shell here",
+        "your shell in the project folder, in this terminal: the app steps aside until you type exit",
+        ACTIONS,
+        [Key::ch('$')],
+        Project,
+        palette = true,
+        hint = false,
+        needs_selection
     ),
     cmd!(
         Agent,

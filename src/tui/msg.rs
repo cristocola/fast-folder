@@ -162,4 +162,6 @@ pub enum Resumed {
     Agent { project: Box<Project>, ok: bool },
     /// `fg` after Ctrl-Z: the screen is retaken, at whatever size it has now.
     Shell,
+    /// The shell `$` opened in the project's folder exited.
+    ProjectShell { project: Box<Project> },
 }

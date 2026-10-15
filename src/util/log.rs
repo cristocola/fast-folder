@@ -263,6 +263,11 @@ pub(crate) fn rotate(path: &Path, rotate_at: u64) {
     if std::fs::metadata(path).map_or(true, |meta| meta.len() <= rotate_at) {
         return;
     }
+    shift(path);
+}
+
+/// The renames of a rotation, with the lock already held.
+fn shift(path: &Path) {
     let numbered =
         |n: usize| PathBuf::from(format!("{}.{n}", crate::util::paths::display_path(path)));
     let _ = std::fs::remove_file(numbered(KEEP));
@@ -399,13 +404,17 @@ mod tests {
         assert!(events[14_999].ends_with("entry 19999"));
     }
 
+    /// Through `shift`, not `rotate`: the lock's file is inherited by a child
+    /// another test thread forks at that moment, and holds it until that
+    /// child has started its program, so a `rotate` in a busy test binary
+    /// can find it held and rightly leave the work to the holder.
     #[test]
     fn rotation_keeps_the_newest_and_drops_the_oldest() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fastf.log");
         for round in 0..(KEEP + 2) {
             std::fs::write(&path, format!("round {round}\n").repeat(400)).unwrap();
-            rotate(&path, 0);
+            shift(&path);
         }
         let read = |n: usize| {
             std::fs::read_to_string(format!("{}.{n}", path.display()))

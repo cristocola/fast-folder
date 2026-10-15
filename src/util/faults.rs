@@ -410,6 +410,9 @@ pub const ALL_FAULT_POINTS: &[&str] = &[
     // come back while the file is there (`util::paths::stall_if_marked`) —
     // a base on a mount that stopped answering.
     "paths:stall-base",
+    // A decision: a shell asked for its `PATH` is waited for a second, not
+    // five (`util::login_path`), so a test reaches the wait running out.
+    "shell:short-wait",
 ];
 
 #[cfg(all(test, debug_assertions))]

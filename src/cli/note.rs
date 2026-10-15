@@ -288,6 +288,9 @@ fn open_in_editor(editor: &str, cwd: Option<&Path>) -> Result<String> {
     let program = parts.next().unwrap_or(editor);
     let mut command = std::process::Command::new(program);
     command.args(parts).arg(&scratch.0);
+    if let Some(path) = crate::util::login_path::path_for_program(program) {
+        command.env("PATH", path);
+    }
     // Only a folder that is there: a project that vanished between the
     // listing and the keypress should fail on the journal write, in its own
     // words, not on an editor that could not start.

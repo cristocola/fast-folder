@@ -396,6 +396,7 @@ impl Config {
     /// The agent's shell line, or `None` with none configured.
     pub fn resolve_agent(&self) -> Option<String> {
         let line = self.agent.trim();
+        let line = unwrap_whole_quotes(line).unwrap_or(line);
         (!line.is_empty()).then(|| line.to_string())
     }
 
@@ -414,7 +415,8 @@ impl Config {
     /// The editor to start: the `editor` key, else `$EDITOR`, else a fallback.
     pub fn resolve_editor(&self) -> String {
         if !self.editor.is_empty() {
-            return self.editor.clone();
+            return unwrap_whole_quotes(&self.editor)
+                .map_or_else(|| self.editor.clone(), str::to_string);
         }
         std::env::var("EDITOR").unwrap_or_else(|_| {
             if cfg!(windows) {
@@ -424,6 +426,25 @@ impl Config {
             }
         })
     }
+}
+
+/// A command typed with quotes around the whole of it — `"claude --flag"` —
+/// as what is inside them, or `None` when it is not that.
+///
+/// The shell would read the quoted whole as **one program name**, spaces
+/// included, which nobody installs. Only a value that cannot be anything else
+/// is unwrapped: one pair of matching quotes around all of it, no other such
+/// quote inside, a space inside, and a first word that is a plain name — so
+/// `"/opt/My Agent/agent"` and `"$HOME/My Tools/x"` stay the paths they are.
+pub fn unwrap_whole_quotes(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+    let inside = value.strip_prefix(quote)?.strip_suffix(quote)?.trim();
+    let first = inside.split_whitespace().next()?;
+    let plain = !inside.contains(quote)
+        && inside.contains(char::is_whitespace)
+        && !first.contains(['/', '\\', '$', '`']);
+    plain.then_some(inside)
 }
 
 /// Which terminal emulator the headless-GUI relaunch should use.
@@ -524,7 +545,48 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, NameCollision};
+    use super::{Config, NameCollision, unwrap_whole_quotes};
+
+    /// `"claude --flag"` typed with its quotes is the command inside them; a
+    /// quoted path with a space in it is still that path.
+    #[test]
+    fn only_a_command_quoted_whole_loses_its_quotes() {
+        assert_eq!(
+            unwrap_whole_quotes(r#" "claude --dangerously-skip-permissions" "#),
+            Some("claude --dangerously-skip-permissions")
+        );
+        assert_eq!(unwrap_whole_quotes("'code --wait'"), Some("code --wait"));
+        for kept in [
+            "claude --x",
+            r#""claude""#,
+            r#""/opt/My Agent/agent""#,
+            r#""$HOME/My Tools/x" --y"#,
+            r#""$HOME/My Tools/x""#,
+            r#""a "b" c""#,
+            r#""claude --x' "#,
+            r#""""#,
+            r#"""#,
+            "",
+        ] {
+            assert_eq!(unwrap_whole_quotes(kept), None, "{kept:?}");
+        }
+    }
+
+    /// A value an older fastf stored with its quotes runs as the command
+    /// inside them.
+    #[test]
+    fn an_agent_stored_quoted_whole_reads_as_the_command_inside() {
+        let config = Config {
+            agent: r#""claude --dangerously-skip-permissions""#.into(),
+            editor: "'code --wait'".into(),
+            ..Config::default()
+        };
+        assert_eq!(
+            config.resolve_agent().as_deref(),
+            Some("claude --dangerously-skip-permissions")
+        );
+        assert_eq!(config.resolve_editor(), "code --wait");
+    }
 
     /// `on_name_collision` writes the strings a `config.toml` holds
     /// (`"suffix"`, `"error"`), and reads anything else as suffix.

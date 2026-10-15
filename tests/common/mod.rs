@@ -39,10 +39,13 @@ pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 /// `relaunch.rs` fail on one machine and nowhere else, which is the worst shape
 /// a failure can have. `SSH_CONNECTION` does the same over ssh, `FASTF_FAULT`
 /// injects one failure into every case at once, and `FASTF_THEME`, `FASTF_ASCII`
-/// and `NO_COLOR` repaint what the pty suite reads back.
+/// and `NO_COLOR` repaint what the pty suite reads back. `SHELL` is the shell
+/// fastf asks for its `PATH` (`util::login_path`): inherited, every suite would
+/// start the developer's own interactive shell, rc files and all.
 pub const NOT_INHERITED: &[&str] = &[
     "EDITOR",
     "FASTF_ASCII",
+    "FASTF_ASKING_SHELL",
     "FASTF_FAULT",
     "FASTF_NO_RELAUNCH",
     "FASTF_PROJECT_PATH",
@@ -50,6 +53,7 @@ pub const NOT_INHERITED: &[&str] = &[
     "FASTF_THEME",
     "FASTF_TRACE_FILE",
     "NO_COLOR",
+    "SHELL",
     "SSH_CONNECTION",
     "TERMINAL",
 ];

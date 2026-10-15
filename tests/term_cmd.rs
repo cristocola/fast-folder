@@ -369,6 +369,33 @@ fn agent_runs_the_configured_line_in_the_project_folder() {
     assert!(err.contains("exited with"), "{err}");
 }
 
+/// An agent typed with quotes around the whole of it is the command inside
+/// them: the shell would look for one program named `fake-agent --resume`,
+/// spaces and all. The setting says so, and keeps the command alone.
+#[test]
+fn an_agent_typed_inside_quotes_runs_as_the_command_inside_them() {
+    let sb = Sandbox::new();
+    let bin = sb.tmp.path().join("bin");
+    let rec = recorder(&bin, "fake-agent");
+    let said = sb.ok(&["config", "set", "agent", "\"fake-agent --resume\""]);
+    assert!(said.contains("without the outer quotes"), "{said}");
+    let config = std::fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(
+        config.contains("agent = \"fake-agent --resume\""),
+        "{config}"
+    );
+    sb.plant_project(&sb.base, "proj", "ID0001");
+
+    let out = sb
+        .command()
+        .args(["agent", "ID0001"])
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(rec.argv().as_deref(), Some(&["--resume".to_string()][..]));
+}
+
 /// Without an `agent` configured the command refuses by name and runs
 /// nothing.
 #[test]

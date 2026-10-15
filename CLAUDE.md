@@ -131,6 +131,8 @@ tell you.
   asks a filesystem again, every schedule it asks on, and the read-only
   attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, and the `set_restore` hook for the second signal),
+  `login_path` (the `PATH` the user's shell builds, asked once, for a child
+  started from a launcher),
   `faults` (failpoints), `trace` (work counting), `diag` (the one warning sink),
   `pool` (a few threads asking a filesystem several things at once; its width
   comes from `fs_kind`, what kind of filesystem a path is on), `process` (is
@@ -458,13 +460,31 @@ Emulator argv conventions differ and the wrong one silently does something else:
 trailing. `candidate_commands` is pure so each is unit-tested; argv is passed as
 argv, never through a shell.
 
+**A program the user named is found where their shell finds it**
+(`util::login_path`). A launcher's `PATH` is the session's, which no rc has
+touched, so `~/.local/bin` is missing and an agent there is `command not
+found`. fastf asks `$SHELL -i -c` once per process for its `PATH` and puts it
+on the **child only**, never `set_var`: always when fastf leads its session
+(`getsid(0) == getpid()` — a terminal emulator started it; a shell never makes
+its child a leader), otherwise only when the line's first plain word is not on
+fastf's `PATH`, and in both cases only when the shell's adds a folder fastf's
+lacks. Never without a display (a console profile may `exec startx`), over
+ssh, from inside the asking (`FASTF_ASKING_SHELL`), or with `$SHELL` unset —
+which is how every suite stays out of the developer's rc (`SHELL` is in
+`NOT_INHERITED`). `-i` without `-l`, `setsid`, read to the closing marker and
+no further, five seconds: the module doc says what breaks without each.
+`post_create::project_command` is the door for the agent, post-create commands
+and the editor; terminals look on the shell's `PATH` after their own, the named
+one first, so a missing `xdg-terminal-exec` never asks.
+
 `util::tty::mark_interactive_surface` has exactly **two** choke points —
 `require_tty`'s success path and `tui::runtime::Runtime::init` — and `main` reads
 it only to decide whether a relaunched window pauses before closing.
 
 Everything above is `cfg(unix)`: Windows gives a console application launched from
-the shell a console, so these modules do not exist there, and the Windows clippy
-leg must stay clean without them.
+the shell a console, so these modules do not exist there (`login_path` keeps two
+stubs that answer `None`), and the Windows clippy leg must stay clean without
+them.
 
 ---
 

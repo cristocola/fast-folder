@@ -573,6 +573,12 @@ pub fn storable(path: &Path, label: &str) -> Result<String> {
 /// notifier need the same answer about a clipboard tool, a terminal emulator
 /// and `notify-send`, so the lookup lives here rather than three times over.
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
+    find_in(name, &std::env::var_os("PATH")?)
+}
+
+/// [`find_on_path`] over a `PATH` value of the caller's — the one a child will
+/// be started with when it is not fastf's own (`util::login_path`).
+pub fn find_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     // A value with a separator in it is a path, not a name — `PATH` is not
     // consulted for `/usr/bin/konsole`, and joining it onto every `PATH` entry
     // would find nothing. This is what `terminal = "/opt/kitty/bin/kitty"` in
@@ -582,8 +588,7 @@ pub fn find_on_path(name: &str) -> Option<PathBuf> {
         return is_executable(candidate).then(|| candidate.to_path_buf());
     }
 
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    std::env::split_paths(path)
         .map(|dir| dir.join(name))
         .find(|candidate| is_executable(candidate))
 }

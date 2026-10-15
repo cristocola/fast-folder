@@ -62,6 +62,8 @@ fastf config set terminal none                   # never relaunch (fastf term st
 # The agent `fastf agent` and the app's `x` start in a project's folder: one
 # shell line, run as a post-create command is, with the project as its
 # working folder and FASTF_PROJECT_PATH set. Empty = none, and the verbs say so.
+# Found where your shell finds it, ~/.local/bin included, however fastf was
+# opened (cli.md, "Programs you name"); quotes around the whole line are dropped.
 fastf config set agent claude
 fastf config set agent "claude 'read PROJECT_INFO.md and take the first @claude todo'"
 
@@ -145,6 +147,8 @@ questions about a different one. Fix the file, or delete it to start over.
 | `FASTF_PROJECT_PATH` | Set by fastf for a template's post-create commands: the new project's absolute path |
 | `TERMINAL` | Consulted when `terminal` is not configured |
 | `EDITOR` | Used when `editor` is not configured |
+| `SHELL` | The shell fastf asks for its `PATH`, so an agent, editor or terminal in `~/.local/bin` is found when fastf was opened from the app menu ([cli.md](cli.md), *Programs you name*) |
+| `FASTF_ASKING_SHELL` | Set by fastf on that shell while it asks; an rc can test it to skip slow work |
 
 `FASTF_RELAUNCHED` is internal: fastf sets it on the copy of itself it starts
 inside a terminal, and it only ever switches the relaunch *off*, so a process

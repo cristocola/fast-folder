@@ -1060,7 +1060,10 @@ project goes through `post_create::project_command`, which sets the project as
 deprecated. A token already in matching quotes is replaced whole, so `code
 "{path}"` is not double-quoted; Windows paths cannot contain `"`. Commands run
 synchronously through `cmd /c` or `sh -c`, and **there is no sandbox** — template
-authors control this.
+authors control this. `project_command` also puts the `PATH` the user's shell
+builds on the child when fastf's own cannot be trusted to hold what the user
+installed (`util::login_path`; the rule is the root CLAUDE.md's *Answering the
+launcher*), which is why it is told whether it runs a program or a line.
 
 **Reveal on Windows is `util::shell_open` (`ShellExecuteW`), not `cmd /c start`**,
 because `cmd.exe` expands `%VAR%` in the command line it rebuilds, so a folder

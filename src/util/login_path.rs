@@ -474,11 +474,27 @@ mod tests {
     use std::ffi::{OsStr, OsString};
     use std::time::{Duration, Instant};
 
+    /// Written by a process of its own. A script this process held open for
+    /// writing is inherited by a child another test thread forks at that
+    /// moment, and running it fails with `ETXTBSY` until that child has
+    /// started its own program — `ask` would read the shell as silent.
     fn shell_script(dir: &std::path::Path, name: &str, body: &str) -> OsString {
-        use std::os::unix::fs::PermissionsExt;
+        use std::io::Write;
+        use std::process::{Command, Stdio};
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut writer = Command::new("/bin/sh")
+            .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+            .arg(&path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writer
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .unwrap();
+        assert!(writer.wait().unwrap().success());
         path.into_os_string()
     }
 

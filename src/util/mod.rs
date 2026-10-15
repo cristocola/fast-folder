@@ -9,6 +9,7 @@ pub mod human_bytes;
 pub mod interrupt;
 pub mod lockfile;
 pub mod log;
+pub mod login_path;
 pub(crate) mod machine;
 pub mod messages;
 #[cfg(unix)]

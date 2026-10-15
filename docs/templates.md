@@ -296,7 +296,7 @@ print_path = false       # prints the absolute path, useful for pipelines: $(fas
 commands = []            # shell commands, run inside the project folder
 ```
 
-A template-level `post_create:` replaces the global block entirely. Commands run synchronously through the system shell, so only use templates you trust.
+A template-level `post_create:` replaces the global block entirely. Commands run synchronously through the system shell, so only use templates you trust. A command, like the editor, is found where your own shell finds it, `~/.local/bin` included, even when fastf was opened from the app menu ([cli.md](cli.md), *Programs you name*).
 
 ### How a command finds the project
 

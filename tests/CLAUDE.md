@@ -67,6 +67,14 @@ What each suite guards — the intent, not the case list:
   observes `notify-send`) and is **polled**, because fastf spawns and returns
   without waiting. `Sandbox::run_like_a_launcher` gives stdin `/dev/null` and one
   shared **socket** for stdout and stderr, as journald does.
+- `shell_path.rs` (unix) — a program the user named, found where their shell
+  finds it: fastf started with a bare `PATH`, a display and a fake `$SHELL`
+  whose "rc" adds the only folder holding the program, so it is found only if
+  fastf asked. The fake shell logs each ask and whether it could open a
+  terminal. `WAYLAND_DISPLAY` is removed and `DISPLAY` is `:99`, and every
+  terminal is a recorder. **`SHELL` is never inherited** (`NOT_INHERITED`): a
+  suite that wants one sets a fake, or fastf would start the developer's own
+  interactive shell.
 - `term_cmd.rs` (unix) — `fastf term`: which emulator, argv and working directory
   it would open a shell with. **Same rule: every test pins the recorder first**;
   the recorder logs its working directory too, and a test sets `DISPLAY` itself

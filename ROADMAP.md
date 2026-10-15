@@ -170,3 +170,12 @@ fix is the one `Builder::summary` and `transform_example` took: hand it the
 - `fastf agent` exits 1 and prints an error whenever the agent exits
   non-zero, a Ctrl-C out of it included; its help says it exits with the
   agent's status.
+- The shell is asked for its `PATH` on the first program a run starts, so a
+  slow rc pauses `X`, `N` or a create by up to five seconds, silently, with
+  the warning shown only after. The app could ask on a worker as it starts.
+- `util::login_path` is tested against `sh`, bash, zsh and fish only; csh,
+  tcsh, nushell, xonsh and elvish either answer the marker script or fall
+  back to fastf's own `PATH`, and nobody has checked which.
+- From a shell (fastf not leading its session) only the line's first word is
+  looked for: `env FOO=1 claude`, or `npm i && code .`, still runs on fastf's
+  own `PATH`, which from a shell is the right one.

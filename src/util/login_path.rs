@@ -24,10 +24,10 @@
 //!   a reason to ask.
 //!
 //! The child's environment changes only when the shell's `PATH` holds a folder
-//! fastf's does not ([`merged`]), so a `PATH` a shell already built — a
+//! fastf's does not (`merged`), so a `PATH` a shell already built — a
 //! virtualenv, mise, direnv — keeps its order.
 //!
-//! **What must stay true of the asking** ([`ask`]):
+//! **What must stay true of the asking** (`ask`):
 //!
 //! - **`-i`, never `-l`.** An rc file returns early for a shell that is not
 //!   interactive, and a terminal tab is interactive but not a login shell; `-l`

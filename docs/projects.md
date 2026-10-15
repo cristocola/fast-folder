@@ -548,7 +548,10 @@ Linux with a systemd user session it is started through `systemd-run --user
 --scope`, so it belongs to no other program's unit: a desktop launcher that
 stops the app's unit when the app quits does not stop the move with it. The emulator is started only when fastf has been
 asked for something interactive and can prove nothing can read its output, and
-it is given fastf's own arguments as arguments, never through a shell.
+it is given fastf's own arguments as arguments, never through a shell. To find
+a program you named, fastf may ask your own shell (`$SHELL -i -c`) once for its
+`PATH`, in a session of its own and for five seconds at most; that shell reads
+your rc files as a terminal tab does.
 
 **What it trusts.** One OS account. Bases, templates, `config.toml`, the
 counters and the caches are your own files and are trusted as content — a

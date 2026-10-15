@@ -129,6 +129,28 @@ Which emulator gets opened is `terminal` in the config, else `$TERMINAL`, else
 installed. The value names a *program*, not a command line. None of this exists
 on Windows — see [windows.md](windows.md).
 
+#### Programs you name are found where your shell finds them
+
+A desktop session's `PATH` is the one it started with, before any shell read
+your `~/.bashrc`, so `~/.local/bin`, `~/.cargo/bin` and whatever else your rc
+adds are missing from it. A program installed there — an agent, an editor, a
+terminal — runs from any terminal you open and would be `command not found`
+for a fastf opened from the app menu. So fastf asks your shell for its `PATH`
+(`$SHELL -i -c`, as a terminal tab starts it, never as a login shell) and starts
+the program with that one:
+
+- **opened from the app menu or any terminal emulator**, every agent, editor
+  and post-create command gets your shell's `PATH`;
+- **typed into a shell**, fastf's `PATH` already is your shell's, and it asks
+  only when the line's first word is a program it cannot find there.
+
+It asks once per run and at most for five seconds, with `FASTF_ASKING_SHELL=1`
+set, so an rc that does slow work can skip it. It never asks without a display,
+over ssh, or with `$SHELL` unset, and fastf's own environment never changes:
+only the program's, and only when your shell's `PATH` has a folder fastf's
+lacks. A shell that answers nothing leaves things as they were. Not on Windows,
+where a program from the Start menu gets the same `PATH` as one from a console.
+
 ## Browsing projects
 
 `fastf recent` and `fastf search` open the [guided app](app.md) on a
@@ -244,6 +266,9 @@ shell line, run the way a template's `post_create` command runs — the project
 as its working folder, `FASTF_PROJECT_PATH` set, `{path}` rewritten to it —
 and it runs **in the terminal you typed it in**, as if you had opened that
 terminal at the project, and exits with the agent's status. You never `cd`.
+An agent installed where only your shell looks, as `~/.local/bin`, is found
+from the app menu too (see *Programs you name* above), and a line typed with
+quotes around the whole of it — `"claude --flag"` — is the command inside them.
 
 From krunner, rofi or a `.desktop` entry there is no terminal, so the hand-off
 above opens one and runs the same command inside it; on Windows a console

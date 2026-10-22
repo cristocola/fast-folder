@@ -355,7 +355,10 @@ fn config_show_names_the_tenax_key_by_its_last_four_only() {
     sb.ok(&["config", "set", "tenax-model", "claude-test-model"]);
     let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
     assert!(config.contains("tenax = false"), "{config}");
-    assert!(config.contains("tenax_model = \"claude-test-model\""), "{config}");
+    assert!(
+        config.contains("tenax_model = \"claude-test-model\""),
+        "{config}"
+    );
     assert!(!config.contains(key), "{config}");
     let shown = sb.ok(&["config", "show"]);
     assert!(shown.contains("no box, no request"), "{shown}");

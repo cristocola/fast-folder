@@ -403,12 +403,13 @@ mod tests {
     #[test]
     fn only_the_default_model_names_the_fallback() {
         let messages = vec![];
+        let schema = json!({ "type": "object" });
         let request = Request {
-            model: "claude-opus-5-5",
+            model: "claude-another-model",
             system: &["x"],
             tools: None,
             messages: &messages,
-            format: Some(&json!({ "type": "object" })),
+            format: Some(&schema),
         };
         let body = request.body();
         assert!(body.get("fallbacks").is_none());

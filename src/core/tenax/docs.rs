@@ -33,18 +33,30 @@ pub fn lookup(name: &str, heading: Option<&str>) -> Result<String, String> {
             GUIDES.join(", ")
         ));
     };
-    let headings: Vec<(usize, usize, &str)> = text
-        .lines()
-        .scan(0usize, |offset, line| {
-            let at = *offset;
-            *offset += line.len() + 1;
-            Some((at, line))
-        })
-        .filter_map(|(at, line)| {
+    lookup_in(name, text, heading)
+}
+
+/// [`lookup`] over the text of the guide called `name`.
+fn lookup_in(name: &str, text: &str, heading: Option<&str>) -> Result<String, String> {
+    // Offsets count the raw lines, endings and all: a Windows checkout gives
+    // the guides `\r\n`, and `lines()` would hide a byte a line, so a section
+    // would start in the wrong place or inside a character. A `#` line inside
+    // a fenced block is a shell comment, and would end the section it is in.
+    let mut headings: Vec<(usize, usize, &str)> = Vec::new();
+    let mut at = 0usize;
+    let mut fenced = false;
+    for raw in text.split_inclusive('\n') {
+        let line = raw.trim_end_matches(['\n', '\r']);
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        } else if !fenced {
             let level = line.bytes().take_while(|b| *b == b'#').count();
-            (level > 0 && line[level..].starts_with(' ')).then(|| (at, level, line[level..].trim()))
-        })
-        .collect();
+            if level > 0 && line[level..].starts_with(' ') {
+                headings.push((at, level, line[level..].trim()));
+            }
+        }
+        at += raw.len();
+    }
     let Some(wanted) = heading.map(str::trim).filter(|h| !h.is_empty()) else {
         let list: Vec<String> = headings
             .iter()
@@ -71,8 +83,8 @@ pub fn lookup(name: &str, heading: Option<&str>) -> Result<String, String> {
         .iter()
         .find(|(_, other, _)| *other <= level)
         .map_or(text.len(), |(at, _, _)| *at);
-    let section = &text[start..end];
-    Ok(cut(section, SECTION_MAX))
+    let section = text[start..end].replace("\r\n", "\n");
+    Ok(cut(&section, SECTION_MAX))
 }
 
 /// `text` up to `max` bytes, cut at a line, saying so.
@@ -119,6 +131,39 @@ mod tests {
                 .unwrap()
                 .starts_with("## Which bases")
         );
+    }
+
+    /// A Windows checkout gives the guides `\r\n` endings, and the build
+    /// embeds them so: every section reads the same as from an `\n` checkout.
+    #[test]
+    fn a_guide_checked_out_with_crlf_reads_the_same_sections() {
+        for name in GUIDES {
+            let text = guide(name).unwrap();
+            let crlf = text.replace('\n', "\r\n");
+            let list = lookup_in(name, text, None).unwrap();
+            assert_eq!(lookup_in(name, &crlf, None).unwrap(), list, "{name}");
+            for heading in list.lines() {
+                assert_eq!(
+                    lookup_in(name, &crlf, Some(heading)),
+                    lookup_in(name, text, Some(heading)),
+                    "{name}: {heading}"
+                );
+            }
+        }
+    }
+
+    /// A `#` comment in a fenced block is a line of the example, not a
+    /// heading: the settings section holds every `config set` under it.
+    #[test]
+    fn a_comment_in_a_code_block_is_no_heading() {
+        let list = lookup("config", None).unwrap();
+        assert!(!list.contains("Terminal to open"), "{list}");
+        let settings = lookup("config", Some("Settings")).unwrap();
+        assert!(
+            settings.contains("fastf config set tenax off"),
+            "{settings}"
+        );
+        assert!(settings.contains("post_create.print_path"), "{settings}");
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub(crate) mod disk_space;
 pub mod faults;
 pub mod fs_kind;
 pub mod fs_retry;
+pub mod http;
 pub mod human_bytes;
 pub mod interrupt;
 pub mod lockfile;

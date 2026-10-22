@@ -47,6 +47,7 @@ mod actions;
 mod detail;
 mod discovery;
 mod input;
+pub mod tenax;
 
 use actions::*;
 use detail::*;
@@ -82,10 +83,11 @@ pub fn run(
     onboarding: Option<String>,
     theme: Theme,
     motion: crate::tui::motion::Motion,
+    tenax: TenaxStart,
 ) -> Result<Exit> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut runtime = Runtime::init(tx, rx)?;
-    let outcome = runtime.main_loop(entry, onboarding, theme, motion);
+    let outcome = runtime.main_loop(entry, onboarding, theme, motion, tenax);
     runtime.shutdown();
     let (exit, session) = outcome?;
     // After the screen is given back and the sink is gone, so a refusal is
@@ -95,6 +97,16 @@ pub fn run(
         diag::warn(format!("the session state was not saved: {err:#}"));
     }
     Ok(exit)
+}
+
+/// What Tenax starts a run with, read before the screen is taken: whether he
+/// is on and where his key would come from — so his box is in place on the
+/// first frame rather than squeezing the pane when the summary lands — and
+/// the brief the last run left.
+#[derive(Debug, Default)]
+pub struct TenaxStart {
+    pub prefs: crate::tui::app::data::TenaxPrefs,
+    pub brief: Option<crate::tui::app::tenax::Brief>,
 }
 
 /// **Frames are buffered, and a frame is one write.** ratatui queues a cursor
@@ -212,6 +224,7 @@ impl Runtime {
         onboarding: Option<String>,
         theme: Theme,
         motion: crate::tui::motion::Motion,
+        tenax: TenaxStart,
     ) -> Result<(Exit, Session)> {
         // Read before the first frame: a note about a file that could not be
         // read goes through the sink into the channel and lands as a status
@@ -223,6 +236,8 @@ impl Runtime {
             &crate::util::paths::install_dir(),
         ));
         app.has_display = tty::has_display();
+        app.tenax.prefs = tenax.prefs;
+        app.tenax.brief = tenax.brief;
         app.apply_session(&self.remembered);
 
         if let Some(suggested) = onboarding {
@@ -672,6 +687,53 @@ impl Runtime {
                 Effect::SaveSession => {
                     if let Err(err) = Session::capture(app, &self.remembered).save() {
                         diag::warn(format!("the session state was not saved: {err:#}"));
+                    }
+                }
+                Effect::TenaxBrief(request) => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-tenax", move || {
+                        let id = request.request;
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            tenax::brief(&request)
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(crate::core::tenax::ApiError::Garbled(
+                                "the request failed unexpectedly".into(),
+                            ))
+                        });
+                        let _ = tx.send(Msg::TenaxBriefed {
+                            request: id,
+                            result: result.map(Box::new),
+                        });
+                    });
+                }
+                Effect::TenaxChat(request) => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-tenax", move || {
+                        let id = request.request;
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            tenax::chat(&request)
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(crate::core::tenax::turn::Failed {
+                                history: request.history.clone(),
+                                carry: request.user.clone(),
+                                text: String::new(),
+                                error: crate::core::tenax::ApiError::Garbled(
+                                    "the request failed unexpectedly".into(),
+                                ),
+                                calls_left: request.calls_left,
+                            })
+                        });
+                        let _ = tx.send(Msg::TenaxTurned {
+                            request: id,
+                            result: Box::new(result),
+                        });
+                    });
+                }
+                Effect::SaveTenax(brief) => {
+                    if let Err(err) = tenax::save_cache(&brief) {
+                        diag::warn(format!("{err:#}"));
                     }
                 }
                 Effect::LoadJobLog { request, id, title } => self.load_job_log(request, id, title),

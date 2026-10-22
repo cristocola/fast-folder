@@ -130,7 +130,7 @@ pub(super) fn batch_target(app: &App) -> Availability {
     selection_and_not_busy(app)
 }
 
-pub(super) fn not_busy(app: &App) -> Availability {
+pub(crate) fn not_busy(app: &App) -> Availability {
     if app.busy.is_some() || app.job.is_some() {
         Availability::Disabled("working…")
     } else if app.background.starting.is_some() {
@@ -507,4 +507,33 @@ pub(super) fn can_move(app: &App) -> Availability {
     } else {
         Availability::Disabled("only one base is configured — add another under Settings")
     }
+}
+
+/// What `.` says without a key to talk with.
+pub const NO_TENAX_KEY: &str =
+    "Tenax needs an Anthropic API key — Settings, Tenax, API key, or ANTHROPIC_API_KEY";
+
+/// Tenax's verbs: hidden when he is off, waiting for a key without one.
+pub(super) fn tenax_available(app: &App) -> Availability {
+    if !app.tenax_on() {
+        return Availability::Hidden;
+    }
+    if !app.tenax.prefs.key.any() {
+        return Availability::Disabled(NO_TENAX_KEY);
+    }
+    Availability::Enabled
+}
+
+/// "Go to his starting point", once a brief has named one.
+pub(super) fn tenax_has_a_start(app: &App) -> Availability {
+    if !app.tenax_on()
+        || app
+            .tenax
+            .brief
+            .as_ref()
+            .is_none_or(|brief| brief.start.is_none())
+    {
+        return Availability::Hidden;
+    }
+    Availability::Enabled
 }

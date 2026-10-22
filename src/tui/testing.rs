@@ -141,6 +141,7 @@ pub fn sample_summary(projects: usize) -> Summary {
             register_naming_pattern: "{date}_{name}_{id}".to_string(),
             hat: None,
             agent: None,
+            tenax: Default::default(),
         },
         probing: false,
     }

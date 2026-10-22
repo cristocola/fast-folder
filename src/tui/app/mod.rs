@@ -26,6 +26,7 @@ pub mod register;
 pub mod search;
 pub mod settings;
 pub mod studio;
+pub mod tenax;
 pub mod wizard;
 
 mod builder;
@@ -390,6 +391,8 @@ pub struct App {
     /// `None` once that pulse has let go, so an idle app asks for no wake.
     pub focus_moved_at: Option<u64>,
     pub fuzzy: Fuzzy,
+    /// Tenax: his box, his chat, the brief and what he proposed.
+    pub tenax: tenax::TenaxState,
     next_action: u64,
     next_generation: u64,
 }
@@ -455,6 +458,7 @@ impl App {
             rescanning: std::collections::BTreeSet::new(),
             focus_moved_at: None,
             fuzzy: Fuzzy::new(),
+            tenax: tenax::TenaxState::default(),
             next_action: 0,
             next_generation: 0,
         };
@@ -584,5 +588,7 @@ fn needs_a_dialog(text: &str) -> bool {
 
 /// The state machine: the app and one message in, the effects out.
 pub fn update(app: &mut App, msg: Msg) -> Vec<Effect> {
-    app.handle(msg)
+    let mut effects = app.handle(msg);
+    effects.extend(app.tenax_settle());
+    effects
 }

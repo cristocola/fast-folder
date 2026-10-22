@@ -50,6 +50,11 @@ impl App {
             CommandId::DeskRandom => self.desk_random(),
             CommandId::ShowLog => self.open_log(),
             CommandId::Suspend => vec![Effect::Suspend(Suspended::Shell)],
+            CommandId::Tenax => self.open_tenax(),
+            CommandId::TenaxNewChat => self.tenax_new_chat(),
+            CommandId::TenaxBrief => self.tenax_fresh_brief(),
+            CommandId::TenaxStart => self.tenax_go_to_start(),
+            CommandId::TenaxToggle => self.tenax_toggle(),
 
             CommandId::ActionsRun => self.run_chosen_action(),
             CommandId::Guide => self.open_guide_at_cursor(),
@@ -118,6 +123,7 @@ impl App {
                 Some(Modal::TextPrompt(_)) => self.submit_text_prompt(),
                 Some(Modal::Note(_)) => self.save_note(),
                 Some(Modal::Onboarding(_)) => self.submit_onboarding(),
+                Some(Modal::Tenax(_)) => self.tenax_send(),
                 _ => Vec::new(),
             },
             CommandId::PromptNewline => {

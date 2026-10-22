@@ -666,3 +666,122 @@ fn a_text_field_parks_a_visible_caret_after_the_text() {
         "the caret belongs after the text, not at the start of the field:\n{screen}"
     );
 }
+
+/// Tenax, through a real terminal and a stand-in for the API: with a saved
+/// key he briefs once the library is read, a todo he proposes is written to
+/// `PROJECT_INFO.md` only after a yes, and its result goes back to him. The
+/// key never travels in a request's body. Debug builds only — a release build
+/// cannot be pointed anywhere but the real API.
+#[cfg(debug_assertions)]
+#[test]
+fn tenax_briefs_and_writes_only_after_a_yes() {
+    use common::tenax_mock;
+    let sb = Sandbox::new();
+    sb.guide_seen();
+    let project = sb.plant_project(&sb.base, "2026-01-01_Lullaby_ID0001", "ID0001");
+    fs::write(sb.install.join("tenax.key"), "test-key-pty-0001\n").unwrap();
+    let mock = tenax_mock::start(
+        tenax_mock::brief_reply("Morning. Lullaby first.", "ID0001", "", "Mix the bridge"),
+        vec![
+            tenax_mock::tool_reply(
+                "toolu_pty",
+                "add_todo",
+                serde_json::json!({ "project": "ID0001", "folder": null, "text": "bounce a rough mix", "phase": null }),
+            ),
+            tenax_mock::text_reply("Added it."),
+        ],
+    );
+    let script = pty::Script::new()
+        .pause(2500)
+        .key(".")
+        .key("add one")
+        .pause(200)
+        .enter()
+        .pause(2000)
+        .key("y")
+        .pause(2000)
+        .esc()
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_TENAX_URL", std::path::Path::new(&mock.url)),
+        ],
+        &script,
+        DEADLINE,
+    );
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    assert!(
+        some_frame_shows(&out, &[" Tenax ", "Lullaby first"]),
+        "the brief is in his box:\n{}",
+        app_screen(&out)
+    );
+    let info = fs::read_to_string(project.join("PROJECT_INFO.md")).unwrap();
+    assert!(
+        info.contains("bounce a rough mix"),
+        "the yes wrote it:\n{info}"
+    );
+
+    let requests = mock.requests.lock().unwrap().clone();
+    assert!(
+        requests[0].contains("\"json_schema\""),
+        "the brief comes first"
+    );
+    assert!(
+        requests[0].contains("\"effort\":\"high\""),
+        "{}",
+        requests[0]
+    );
+    let result = requests
+        .iter()
+        .find(|body| body.contains("\"tool_use_id\":\"toolu_pty\""))
+        .expect("the todo's result went back");
+    assert!(result.contains("Todo added"), "{result}");
+    assert!(
+        requests
+            .iter()
+            .all(|body| !body.contains("test-key-pty-0001")),
+        "the key is a header, never in a body"
+    );
+}
+
+/// Off, Tenax is nowhere: no box, and not one request — even with a key
+/// saved and an API to ask.
+#[cfg(debug_assertions)]
+#[test]
+fn tenax_off_asks_nothing() {
+    use common::tenax_mock;
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "2026-01-01_Lullaby_ID0001", "ID0001");
+    fs::write(sb.install.join("tenax.key"), "test-key-pty-0002\n").unwrap();
+    sb.ok(&["config", "set", "tenax", "off"]);
+    let mock = tenax_mock::start(tenax_mock::brief_reply("Hello.", "", "", ""), vec![]);
+    let script = pty::Script::new()
+        .pause(2000)
+        .key(".")
+        .pause(300)
+        .key(KEY_QUIT)
+        .build();
+    let (out, code) = pty::run(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+            ("FASTF_TENAX_URL", std::path::Path::new(&mock.url)),
+        ],
+        &script,
+        DEADLINE,
+    );
+    assert_eq!(code, 0, "{}", pty::plain(&out));
+    assert!(
+        !some_frame_shows(&out, &[" Tenax "]),
+        "{}",
+        app_screen(&out)
+    );
+    assert!(mock.requests.lock().unwrap().is_empty(), "off asks nothing");
+}

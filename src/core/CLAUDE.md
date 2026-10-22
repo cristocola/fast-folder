@@ -1119,3 +1119,56 @@ first. `util::messages` keeps
 what a person was shown (`messages.log`, JSON lines, a tolerant reader) and
 writes each to the log too. In a `cfg(test)` build the log writes only where
 `FASTF_INSTALL_DIR` is set, so `cargo test` never fills the developer's own.
+
+## Tenax: the protocol
+
+`core::tenax` is what a request to the Anthropic Messages API holds and how
+its answer is read; the app's half is `tui::app::tenax` (see
+`src/tui/CLAUDE.md`). The decisions that hold it together, each with what a
+change would break:
+
+**Nothing in the prefix moves.** The tools (`tools::definitions`, a
+`OnceLock` over fixed text), then the system blocks — the persona and the
+app's key reference, both fixed per binary — with `cache_control` on the
+last, then a top-level `cache_control` over the history. Whatever changes per
+request — the date, the hat, the selection, the desk — goes in a text block
+of the user turn (`<context>`). A byte that changed in `system` or `tools`
+would cost the cache on every request and turn every replayed thinking block
+into a 400.
+
+**The history is append-only, and an assistant turn is kept whole.** Every
+content block comes back as a `serde_json::Value` and is sent back
+unchanged: a thinking block whose text is empty (only its signature is
+returned), a `fallback` block, a type this build has never seen. Rebuilding
+one from the fields fastf understands drops the signature and fails the next
+request.
+
+**Every `tool_use` gets exactly one `tool_result`, all in one user message,
+in the order the calls came** (`turn::ordered`). A call the app answers, or
+the person, leaves the loop as `Ending::NeedsApp` with its `pending` ids; the
+next request carries every result, then any text the person typed meanwhile —
+text after the results, never inside one. A call left unanswered is a 400 on
+the next request, so the app's ledger answers "declined" for every question
+that went away (a refusal, a cut-off `max_tokens` turn, an exhausted budget,
+the chat closed).
+
+**A turn has a budget of model calls** (`calls_left`, eight per message),
+carried across the app's round trips, so a model that keeps asking to read
+cannot loop on somebody's key; the one retry of a 429, 529 or 5xx counts
+against it. **The wait is injected** (`Setup::wait`): `core` may not sleep,
+so `runtime::tenax` hands it `thread::sleep`, and the tests a closure that
+records the duration. `retry-after` is honoured up to ten seconds.
+
+**The request is the API's current shape, and nothing else**: `model`,
+`max_tokens`, `output_config.effort = "high"`, adaptive thinking (the
+`thinking` field is left out), no `temperature`/`top_p`/`top_k` (refused),
+no `tool_choice`, strict tools with `anyOf [string, null]` for an optional
+field. `fallbacks: "default"` and its beta header go out with the default
+model only, since a fallback is the API's choice for its own model. `stop_reason`
+is read before the content: a `refusal` may carry none. The brief is one
+request with `output_config.format`, a JSON schema, and no tools.
+
+**`util::http` is the only door to the network** (`tests/layering.rs`):
+`post_json`, no retries of its own, loopback never proxied. `api::Https` logs
+the model, the duration and the token counts, or the error's class — never a
+byte of the conversation, and never the key.

@@ -138,6 +138,16 @@ pub enum Msg {
         what: SpawnKind,
         outcome: Result<String, String>,
     },
+    /// Tenax's brief, for the brief `request` numbers.
+    TenaxBriefed {
+        request: u64,
+        result: Result<Box<crate::tui::app::tenax::Brief>, crate::core::tenax::ApiError>,
+    },
+    /// One turn of the chat came back, for the turn `request` numbers.
+    TenaxTurned {
+        request: u64,
+        result: Box<Result<crate::core::tenax::turn::Turn, crate::core::tenax::turn::Failed>>,
+    },
     /// The terminal is ours again after a suspended flow.
     Resumed(Resumed),
     /// A warning from `core`/`util` that would otherwise have hit stderr.

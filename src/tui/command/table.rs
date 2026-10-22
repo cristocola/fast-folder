@@ -57,6 +57,7 @@ const SCROLLERS: &[Context] = &[
     // else. `keys_in` takes `j`, `g`, `Ctrl-u` and the rest back out of what
     // that context advertises, because the field claims them first.
     Context::SearchEdit,
+    Context::Chat,
     Context::Modal,
 ];
 /// Every dialog that closes with Esc — the guide included.
@@ -85,6 +86,9 @@ const READER: &[Context] = &[Context::Guide];
 /// the only keys it can declare.
 const IN_PALETTE: &[Context] = &[Context::Palette];
 const IN_PROMPT: &[Context] = &[Context::Prompt];
+/// A prompt's Enter and Esc, and the chat's: send and close.
+const PROMPT_OR_CHAT: &[Context] = &[Context::Prompt, Context::Chat];
+const IN_CHAT: &[Context] = &[Context::Chat];
 const IN_PANE_EDIT: &[Context] = &[Context::PaneEdit];
 const IN_PICK: &[Context] = &[Context::Pick];
 /// Everywhere the palette can be *opened* from — which is everywhere except
@@ -103,6 +107,7 @@ const OPENS_PALETTE: &[Context] = &[
     Context::Guide,
     Context::Prompt,
     Context::Pick,
+    Context::Chat,
     Context::Modal,
 ];
 
@@ -251,7 +256,7 @@ pub static COMMANDS: &[Command] = &[
         PromptConfirm,
         "Confirm",
         "take what is typed and act on it",
-        IN_PROMPT,
+        PROMPT_OR_CHAT,
         [Key::plain(KeyCode::Enter)],
         Navigate,
         palette = false,
@@ -277,7 +282,7 @@ pub static COMMANDS: &[Command] = &[
         PromptCancel,
         "Cancel",
         "leave it, with nothing changed",
-        IN_PROMPT,
+        PROMPT_OR_CHAT,
         [Key::plain(KeyCode::Esc)],
         Navigate,
         palette = false,
@@ -1504,6 +1509,62 @@ pub static COMMANDS: &[Command] = &[
         palette = false,
         hint = true,
         always
+    ),
+    // --- Tenax --------------------------------------------------------------
+    cmd!(
+        Tenax,
+        "Talk to Tenax",
+        "the assistant: what is on your desk, where to start, how to do it in fastf, and changes he puts to you first",
+        TABS,
+        [Key::ch('.')],
+        Help,
+        palette = true,
+        hint = false,
+        tenax_available
+    ),
+    cmd!(
+        TenaxNewChat,
+        "New chat",
+        "forget this conversation and start another",
+        IN_CHAT,
+        [Key::ctrl('n')],
+        Help,
+        palette = false,
+        hint = true,
+        always
+    ),
+    cmd!(
+        TenaxBrief,
+        "Tenax: a fresh brief",
+        "ask him again what is on the desk and where to start",
+        TABS,
+        [],
+        Help,
+        palette = true,
+        hint = false,
+        tenax_available
+    ),
+    cmd!(
+        TenaxStart,
+        "Tenax: go to his starting point",
+        "select the project his brief said to start with",
+        TABS,
+        [],
+        Help,
+        palette = true,
+        hint = false,
+        tenax_has_a_start
+    ),
+    cmd!(
+        TenaxToggle,
+        "Tenax on or off",
+        "switch the assistant off (no box, no key, no request) or back on",
+        TABS,
+        [],
+        Settings,
+        palette = true,
+        hint = false,
+        not_busy
     ),
     // --- leaving: declared last so their hints come last --------------------
     cmd!(

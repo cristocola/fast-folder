@@ -9,7 +9,12 @@ impl App {
     }
 
     pub fn regions(&self) -> layout::Regions {
-        layout::regions(self.area(), self.pane_live(), self.table_needs())
+        layout::regions(
+            self.area(),
+            self.pane_live(),
+            self.table_needs(),
+            self.tenax_wanted(),
+        )
     }
 
     /// What the table asks of the body (`layout::TableNeeds`): measured over
@@ -162,6 +167,9 @@ impl App {
         let slow = self.busy.is_some()
             || self.background.watching()
             || self.status.expires_at.is_some()
+            // Tenax thinking (a spinner, whatever the motion setting), or
+            // playing the one animation he plays when he speaks.
+            || self.tenax_tick().is_some()
             || (self.library.loaded && self.library.sizes_pending(self.rows_on_screen()));
         slow.then(|| std::time::Duration::from_millis(SLOW_FRAME_MS))
     }

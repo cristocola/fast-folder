@@ -399,6 +399,45 @@ fn ratatui_and_crossterm_stay_under_tui() {
     );
 }
 
+/// The HTTP crate is named in one file, `util::http`.
+///
+/// fastf talks to the network for Tenax alone, and only through
+/// `util::http::post_json`: one place that decides about proxies, timeouts and
+/// what a status means. A second caller of the crate is a second set of those
+/// decisions, and a request that skips the one place that keeps the key out of
+/// every log.
+#[test]
+fn the_network_is_reached_through_util_http_alone() {
+    let mut offenders = Vec::new();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files: Vec<PathBuf> = ["core", "util", "cli", "tui"]
+        .into_iter()
+        .flat_map(sources)
+        .collect();
+    files.push(root.join("src").join("main.rs"));
+    for path in files {
+        if path.file_name().is_some_and(|name| name == "http.rs")
+            && path.parent().is_some_and(|dir| dir.ends_with("util"))
+        {
+            continue;
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        for (number, line) in production_lines(&text) {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("ureq") || line.contains("std::net::TcpStream") {
+                offenders.push(format!("{}:{}  {}", path.display(), number, line.trim()));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "only src/util/http.rs may reach the network:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// Every mutation of the templates directory goes through `core::operations`,
 /// which holds `DataLock`.
 ///

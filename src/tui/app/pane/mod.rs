@@ -842,7 +842,7 @@ fn listing_rows(detail: &ProjectDetail) -> Vec<PaneRow> {
 /// where one fits, inside a word only when the word alone is wider than a
 /// line. The spaces a break lands on are dropped and every other character is
 /// kept, the indent a line starts with included. A `width` of zero is no limit.
-fn wrap_columns(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_columns(text: &str, width: usize) -> Vec<String> {
     if width == 0 || text.width() <= width {
         return vec![text.to_string()];
     }

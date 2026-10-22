@@ -56,7 +56,8 @@ green rather than a checklist to work through. Each one runs locally:
   used only from a failpoint or the tracer is dead there and nowhere else.
 - `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
   from Linux. CI lints on a real Windows runner as well, where some lint
-  thresholds differ.
+  thresholds differ. ring's build script compiles C even under clippy, so this
+  needs the mingw C compiler (`mingw-w64-gcc`) beside the rustup target.
 - `cargo test` and `cargo test --release`.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`, after
   `rm -rf target/doc`: `cargo doc` is incremental and reports a clean run

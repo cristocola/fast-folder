@@ -202,6 +202,10 @@ impl App {
                 self.on_note_from_editor(project, text)
             }
 
+            Msg::TenaxBriefed { request, result } => {
+                self.on_tenax_briefed(request, result.map(|brief| *brief))
+            }
+            Msg::TenaxTurned { request, result } => self.on_tenax_turned(request, *result),
             Msg::Diag(level, text) => {
                 match level {
                     Level::Warn => self.warn(format!("warning: {text}")),
@@ -437,6 +441,11 @@ impl App {
         }
         self.busy = None;
         self.busy_id = None;
+        // One of Tenax's proposals, before the generic paths: a refusal of
+        // his belongs in his chat, never on a settings editor or a pane edit.
+        if self.tenax_runs(id) {
+            return self.on_tenax_action_done(outcome);
+        }
         if self.job.is_some() {
             return self.on_job_item_done(outcome);
         }
@@ -446,7 +455,7 @@ impl App {
         }
     }
 
-    fn on_action_succeeded(&mut self, outcome: Box<ActionOutcome>) -> Vec<Effect> {
+    pub(super) fn on_action_succeeded(&mut self, outcome: Box<ActionOutcome>) -> Vec<Effect> {
         let outcome = *outcome;
         if let Some(entry) = outcome.session {
             crate::tui::frame::record(entry);
@@ -705,6 +714,17 @@ impl App {
                 kept_first = true;
                 Vec::new()
             }
+            // A chat line takes a pasted paragraph whole, its lines joined:
+            // a question pasted from somewhere else is one question.
+            Some(Modal::Tenax(chat)) => {
+                let joined: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                chat.input.paste(&joined.join(" "));
+                Vec::new()
+            }
             Some(_) => {
                 self.info("pasted text ignored — nothing here takes typing");
                 Vec::new()
@@ -792,6 +812,12 @@ fn paste_into_settings(state: &mut settings::SettingsState, text: &str, first: &
             kept_first = true;
         }
         Some(Editing::Bases { area, .. }) => area.paste(text),
+        // A key is one word; a paste that caught a newline keeps the first.
+        Some(Editing::TenaxKey { input, error }) => {
+            input.paste(first);
+            *error = None;
+            kept_first = true;
+        }
         Some(Editing::Filter) => {
             state.filter.paste(first);
             state.apply_filter();

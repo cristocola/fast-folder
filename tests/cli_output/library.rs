@@ -320,6 +320,53 @@ fn config_show_says_what_is_in_force() {
     );
 }
 
+/// **Tenax's key is never printed.** `config show` names a saved key by its
+/// last four characters, says when the only key is the environment's (which
+/// he uses only when talked to), and the key is in neither `config.toml` nor
+/// any line of output. `tenax` and `tenax-model` are ordinary keys, and a
+/// model id with a space in it is refused.
+#[test]
+fn config_show_names_the_tenax_key_by_its_last_four_only() {
+    let sb = Sandbox::new();
+    let key = "fake-key-for-tests-0000-wxyz";
+    fs::write(sb.install.join("tenax.key"), format!("{key}\n")).unwrap();
+
+    let shown = sb.ok(&["config", "show"]);
+    let line = shown
+        .lines()
+        .find(|line| line.trim_start().starts_with("tenax:"))
+        .unwrap_or_else(|| panic!("no tenax line:\n{shown}"));
+    assert!(line.contains("ending wxyz"), "{line}");
+    assert!(!shown.contains(key), "the key itself was printed:\n{shown}");
+    assert!(shown.contains("claude-sonnet-5-5"), "{shown}");
+
+    fs::remove_file(sb.install.join("tenax.key")).unwrap();
+    let out = sb
+        .command()
+        .env("ANTHROPIC_API_KEY", key)
+        .args(["config", "show"])
+        .output()
+        .unwrap();
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(shown.contains("only ANTHROPIC_API_KEY"), "{shown}");
+    assert!(!shown.contains(key), "the key itself was printed:\n{shown}");
+
+    sb.ok(&["config", "set", "tenax", "off"]);
+    sb.ok(&["config", "set", "tenax-model", "claude-test-model"]);
+    let config = fs::read_to_string(sb.install.join("config.toml")).unwrap();
+    assert!(config.contains("tenax = false"), "{config}");
+    assert!(
+        config.contains("tenax_model = \"claude-test-model\""),
+        "{config}"
+    );
+    assert!(!config.contains(key), "{config}");
+    let shown = sb.ok(&["config", "show"]);
+    assert!(shown.contains("no box, no request"), "{shown}");
+
+    let refused = sb.fails(&["config", "set", "tenax-model", "two words"]);
+    assert!(refused.contains("one word"), "{refused}");
+}
+
 /// **`mouse` is a retired key.** It was a setting in v3.6.0; the app never
 /// takes the mouse now. `config set mouse` is accepted and says so rather than
 /// failing a script that still sets it, a `config.toml` that still names it

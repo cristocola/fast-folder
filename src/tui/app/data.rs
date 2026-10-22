@@ -63,6 +63,34 @@ pub struct Prefs {
     /// The agent's shell line (`Config::resolve_agent`), which the agent
     /// verbs need to be offered at all.
     pub agent: Option<String>,
+    /// Whether Tenax is on, which model he runs on, and where his key would
+    /// come from — never the key itself.
+    pub tenax: TenaxPrefs,
+}
+
+/// Tenax as the configuration has him. The default is off and keyless, so a
+/// fixture that never mentions him draws no box and offers no key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TenaxPrefs {
+    pub enabled: bool,
+    pub key: crate::core::tenax::KeySource,
+    pub model: String,
+}
+
+impl TenaxPrefs {
+    /// Read from a configuration and the key file — the one place both are
+    /// asked, for the summary and for the frame before it.
+    pub fn read(cfg: &crate::core::config::Config) -> Self {
+        Self {
+            enabled: cfg.tenax,
+            key: if cfg.tenax {
+                crate::core::tenax::key::source()
+            } else {
+                crate::core::tenax::KeySource::None
+            },
+            model: cfg.resolve_tenax_model(),
+        }
+    }
 }
 
 /// Every setting the settings screen shows, read once with the screen.
@@ -108,6 +136,10 @@ pub struct Settings {
     pub data_dir: String,
     /// Interrupted work `reconcile` would deal with.
     pub attention: usize,
+    /// Tenax: on or off, the model as the key holds it, where the key is.
+    pub tenax: bool,
+    pub tenax_model: String,
+    pub tenax_key: crate::core::tenax::KeySource,
 }
 
 /// One template read in full: what a form needs to ask for its variables.

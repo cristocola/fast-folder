@@ -117,7 +117,9 @@ pub fn with_fresh_install<R>(serial: &Mutex<()>, body: impl FnOnce(&Path) -> R) 
 /// The three variables every in-process sandbox sets.
 ///
 /// `FASTF_FAULT` is cleared rather than set: it is process-wide like the other
-/// two, and a failpoint left armed by one test fires inside the next.
+/// two, and a failpoint left armed by one test fires inside the next. So are
+/// Tenax's key and endpoint: a developer's own `ANTHROPIC_API_KEY` must never
+/// make a suite reach the network.
 fn sandbox_guard<'a>(serial: &'a Mutex<()>, install: &Path, home: &Path) -> EnvGuard<'a> {
     EnvGuard::apply(
         serial,
@@ -125,6 +127,8 @@ fn sandbox_guard<'a>(serial: &'a Mutex<()>, install: &Path, home: &Path) -> EnvG
             ("FASTF_INSTALL_DIR", Some(install)),
             (home_var(), Some(home)),
             ("FASTF_FAULT", None),
+            ("ANTHROPIC_API_KEY", None),
+            ("FASTF_TENAX_URL", None),
         ],
     )
 }

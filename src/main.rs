@@ -955,6 +955,8 @@ enum ConfigAction {
             recent-limit                Default `fastf recent --limit` (default: 20)\n  \
             register-naming-pattern     Pattern for `fastf register --rename` w/o a template (default: \"{date}_{name}_{id}\")\n  \
             on-name-collision           What to do when the folder name is taken: suffix (add _2, _3…) or error (default: suffix)\n  \
+            tenax                       Tenax, the assistant in the app's sidebar: on or off (default: on; nothing is sent until a key is saved in the app)\n  \
+            tenax-model                 The model Tenax runs on (default: claude-sonnet-5-5)\n  \
             post_create.git_init        Run `git init` automatically (default: false)\n  \
             post_create.reveal          Open folder in file manager automatically (default: false)\n  \
             post_create.open_in_editor  Open folder in $EDITOR automatically (default: false)\n  \

@@ -904,7 +904,8 @@ keystroke run through.
 **What moves, in full**: a row a verb changed (by path in the table, by index in
 the pane — hence `Pulses<K>`); a size cell whose number *changed*; the selected
 row after a reorder; the focus between panes; a status message arriving and
-going; one activity indicator where something is pending. **Not built**: eased
+going; one activity indicator where something is pending; Tenax's face, for
+`sprite::PLAY_MS` when he speaks and while he thinks (see **Tenax**). **Not built**: eased
 scrolling, dialog transitions, cursor trails, a reveal sweep (it fights a held
 arrow). Motion, like colour, appears only where it means something.
 
@@ -1231,6 +1232,71 @@ screen, so a corrupt one stops where the error can be read, and passes a folder 
 suggest when no base exists anywhere; `App::request_onboarding` shows the question
 before the first frame and keeps it up until the folder exists, with the text kept
 on a refusal.
+
+## Tenax
+
+**He is a guest in the sidebar, and leaves no mark when he is not there.**
+`layout::regions(area, pane_open, needs, tenax)` carves `Regions.tenax`
+(`TENAX_ROWS`) off the top of the pane's rectangle, beside or below only,
+and only while the pane keeps `TENAX_PANE_MIN` rows; every pane calculation
+reads `regions().detail`, so it follows. `App::tenax_wanted` is the
+question both call sites ask — on, a tab that lists projects, a key saved or
+a conversation started this run — so a keyless fixture draws every existing
+snapshot unchanged. The box never takes focus.
+
+**State is `app/tenax.rs`, no I/O, like the rest of `app/`.** A request is
+`Effect::TenaxBrief` or `Effect::TenaxChat` (boxed — Windows'
+`large_enum_variant`), carried out by `runtime::tenax` on a worker, which
+resolves the key at send time, runs `core::tenax::turn` with the read tools'
+executor over a `Snapshot` taken in `update`, and answers `Msg::TenaxBriefed`
+or `Msg::TenaxTurned` with the request's number. A brief whose number is not
+the latest is dropped; a chat answer only after Ctrl-n or Tenax turned off.
+
+**Every call he makes is answered once** (the protocol's rule, in
+`src/core/CLAUDE.md`). Reads are answered on the worker, `select_project`
+and `filter_library` at once in `update`, writes by the person through
+`Modal::Confirm` with `ConfirmThen::Tenax(Box<Proposal>)`. `app::update`
+runs `tenax_settle` after every `handle`, which answers "declined" for every
+outstanding call whose question has gone — however the confirm was closed.
+A `Proposal` holds typed fields and becomes the app's own `Action`
+(`AddTodos`, `ToggleTodo`, `SetTodoOwner`, `AppendNote`, `AddTag`,
+`SetDescription`) through `run_action`; `on_action_done` checks
+`tenax_runs(id)` **first**, so the generic paths never put his outcome on a
+Settings editor or the pane's pending edit. **A confirm is never answered
+blind**: it is pushed only while the chat's input is empty, and ignores a
+yes for `ARM_MS` after it appears (`App.elapsed_ms`).
+
+**The chat is `Modal::Tenax`, in `Context::Chat`**: text-entry, on
+`SCROLLERS` (the transcript scrolls with the movement grammar, `update`
+clamping against `tenax_chat_rows`), `PromptConfirm` sends and
+`PromptCancel` closes with the conversation kept, `TenaxNewChat` (Ctrl-n)
+forgets it. Enter while an answer is on its way queues the text, sent after
+the results. `.` is `CommandId::Tenax` over `TABS`: `Disabled(NO_TENAX_KEY)`
+without a key, `Hidden` with Tenax off, as are the palette's three.
+
+**His words stay his.** Model text is `sanitize`d (control characters and
+ESC out; typographic punctuation spelled in ASCII under the ASCII alphabet)
+before it is drawn, and never reaches the status line, `App.log` or the
+outbox: when the box is out of sight an answer is "Tenax answered — `.` to
+read", nothing more.
+
+**The brief runs once per session, by itself, only on plain `fastf` with a
+stored key**, once discovery has settled, the three summary parts are in and
+every record the digest needs has been read (`tenax_read_effects`, sharing
+the desk's cache and `DeskState.pending`). A desk whose fingerprint matches
+the cached brief under twelve hours old asks nothing. The cache is
+`<data dir>/tenax.json` (`Effect::SaveTenax`, on the main thread like
+`SaveSession`), read in `tui::run` beside the key's source, so the box and
+its last brief are there on the first frame and the pane never shrinks under
+a summary landing — never `state.toml`, which holds nothing a project holds.
+
+**His face is `sprite.rs`, pure**: `choose(&Facts, seed)` weighs the
+animations by what is true of the projects (`STUCK_AFTER_DAYS` from
+`core::desk`, as the desk's `⚠` is), each frame a constant width in both
+alphabets (tested). It plays for `PLAY_MS` when he speaks and `Think` while a
+request is out; `tenax_tick` asks `SLOW_FRAME_MS` only then, the spinner
+whatever the motion setting, the face only with motion on and colour, and at
+rest nothing — idle still costs nothing.
 
 ## Testing
 

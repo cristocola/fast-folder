@@ -151,6 +151,20 @@ pub struct Config {
     /// instead, for anyone who would rather be stopped.
     #[serde(default)]
     pub on_name_collision: NameCollision,
+
+    /// Tenax, the assistant at the top of the guided app's sidebar: on
+    /// (default) or off. Off, there is no box, no key and no request — fastf
+    /// never reaches the network. On, nothing is sent until a key is saved on
+    /// the settings screen, or until someone presses the key to talk to him
+    /// with `ANTHROPIC_API_KEY` set.
+    #[serde(default = "default_true")]
+    pub tenax: bool,
+
+    /// The model Tenax runs on. Empty = `claude-sonnet-5-5`.
+    ///
+    /// Never read raw — see [`Config::resolve_tenax_model`].
+    #[serde(default)]
+    pub tenax_model: String,
 }
 
 fn default_date_format() -> String {
@@ -242,6 +256,8 @@ impl Default for Config {
             bases_cache: std::sync::OnceLock::new(),
             register_naming_pattern: default_register_naming_pattern(),
             on_name_collision: NameCollision::default(),
+            tenax: true,
+            tenax_model: String::new(),
         }
     }
 }
@@ -390,6 +406,16 @@ impl Config {
         match std::env::var("TERMINAL") {
             Ok(name) if !name.trim().is_empty() => TerminalPreference::Named(name.trim().into()),
             _ => TerminalPreference::Probe,
+        }
+    }
+
+    /// The model Tenax asks: the `tenax-model` key, else the default.
+    pub fn resolve_tenax_model(&self) -> String {
+        let model = self.tenax_model.trim();
+        if model.is_empty() {
+            crate::core::tenax::DEFAULT_MODEL.to_string()
+        } else {
+            model.to_string()
         }
     }
 

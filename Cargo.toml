@@ -1,6 +1,6 @@
 [package]
 name = "fastf"
-version = "3.19.1"
+version = "3.20.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Fast Folder Creator — template-driven project folder generator with a guided TUI and CLI"
@@ -16,7 +16,8 @@ categories = ["command-line-utilities", "filesystem"]
 # snapshots, both AUR PKGBUILDs and the release workflows — none of which a
 # `cargo install` or a dependent needs. `src/`, `Cargo.lock`, `README.md`,
 # `LICENSE` and the two `CLAUDE.md` files under `src/` are what is left, plus
-# `examples/templates/`, which is the gallery the docs point at.
+# `examples/templates/`, which is the gallery the docs point at, and the
+# guides under `docs/`, which `core::tenax::docs` compiles in.
 exclude = [
     ".github/",
     "packaging/",
@@ -55,6 +56,12 @@ nucleo-matcher = "0.3"
 # Display-column measurement for the line editor and the table cells. Already in
 # the tree through ratatui; named here so `tui` does not reach through it.
 unicode-width = "0.2"
+# Tenax's one HTTPS call, to the Anthropic API. Blocking, which is what a
+# worker thread wants; rustls with ring and the bundled webpki roots, so the
+# static musl build and the Windows exe carry their own TLS and trust store and
+# ask nothing of the system. gzip off: the API answers JSON small enough not to
+# need it. `util::http` is the only module that names it.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

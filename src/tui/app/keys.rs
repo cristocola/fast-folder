@@ -92,6 +92,7 @@ impl App {
             Some(Modal::Guide(_)) => self.on_guide_key(key),
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) => self.on_scroll_modal_key(key),
             Some(Modal::Activity(_)) => self.on_activity_key(key),
+            Some(Modal::Tenax(_)) => self.on_chat_key(key),
             None => Vec::new(),
         }
     }

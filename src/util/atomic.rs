@@ -31,14 +31,26 @@ pub(crate) fn temp_path_for(target: &Path) -> PathBuf {
 /// exceptional, while `create_new` makes PID reuse or a deliberately planted
 /// filename safe: an active writer never truncates a temp it did not create.
 pub(crate) fn create_temp_for(target: &Path) -> Result<(PathBuf, fs::File)> {
+    create_temp_with(target, false)
+}
+
+/// `create_temp_for`, with the temp readable by its owner alone where `private`
+/// is set — a secret must never exist, even for the instant before the rename,
+/// in a file the umask left world-readable.
+fn create_temp_with(target: &Path, private: bool) -> Result<(PathBuf, fs::File)> {
     const MAX_ATTEMPTS: usize = 64;
     for _ in 0..MAX_ATTEMPTS {
         let temp = temp_path_for(target);
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp)
-        {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        match options.open(&temp) {
             Ok(file) => return Ok((temp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -66,6 +78,17 @@ pub(crate) fn create_temp_for(target: &Path) -> Result<(PathBuf, fs::File)> {
 /// (std uses `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING`), so this works for
 /// updates as well as first writes.
 pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    write_with(path, contents.as_ref(), false)
+}
+
+/// `write`, for a secret: on Unix the file is created readable and writable by
+/// its owner alone (`0600`), whatever the umask. On Windows a file in the
+/// user's profile is already the user's alone.
+pub fn write_private(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    write_with(path, contents.as_ref(), true)
+}
+
+fn write_with(path: &Path, contents: &[u8], private: bool) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -77,13 +100,13 @@ pub fn write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
         })?;
     }
 
-    let (tmp, file) = create_temp_for(path)?;
+    let (tmp, file) = create_temp_with(path, private)?;
     let result = (|| -> Result<()> {
         {
             use std::io::Write;
             let mut writer = std::io::BufWriter::new(&file);
             writer
-                .write_all(contents.as_ref())
+                .write_all(contents)
                 .with_context(|| format!("writing {}", crate::util::paths::display_path(&tmp)))?;
             writer
                 .flush()
@@ -222,5 +245,21 @@ mod tests {
         write_json(&target, &vec![1, 2, 3]).unwrap();
         let back: Vec<i32> = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
         assert_eq!(back, vec![1, 2, 3]);
+    }
+
+    /// A secret written over a world-readable file is its owner's alone
+    /// afterwards: the replacement brings its own mode, it does not inherit.
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_is_the_owners_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("secret");
+        fs::write(&target, "old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&target, "new").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 }

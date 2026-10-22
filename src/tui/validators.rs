@@ -109,6 +109,13 @@ pub fn discard_template_prompt(editing: bool) -> String {
     }
 }
 
+/// What a paste into Tenax's key row is refused with when it is not one word.
+pub const TENAX_KEY_SHAPE: &str =
+    "an API key is one word of letters, digits and punctuation — nothing saved";
+/// The question before the saved key is forgotten.
+pub const TENAX_FORGET_KEY: &str =
+    "Remove the saved Tenax key? He stops briefing you until one is saved again";
+
 /// The first-run question, and what skipping it says.
 pub const ONBOARDING_PROMPT: &str = "Where should your projects live?";
 pub const ONBOARDING_SKIPPED: &str = "Skipped — set it anytime in Settings → Base directory.";

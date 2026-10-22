@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use fastf::tui::command::{COMMANDS, Category, CommandId, Context, Key, find, help_lines};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-const CONTEXTS: [Context; 17] = Context::ALL;
+const CONTEXTS: [Context; 18] = Context::ALL;
 
 #[test]
 fn every_command_id_is_declared_exactly_once() {
@@ -214,16 +214,11 @@ fn an_arrow_and_its_vim_letter_are_bound_together() {
         (KeyCode::Left, 'h'),
         (KeyCode::Right, 'l'),
     ];
-    const TYPING: [Context; 5] = [
-        Context::SearchEdit,
-        Context::Palette,
-        Context::Prompt,
-        Context::Pick,
-        Context::PaneEdit,
-    ];
+    // Every context where a field has the keys, read from the one list of
+    // them, so a new text-entry context is exempt the day it is declared.
     for command in COMMANDS
         .iter()
-        .filter(|c| !c.contexts.iter().any(|ctx| TYPING.contains(ctx)))
+        .filter(|c| !c.contexts.iter().any(|ctx| ctx.is_text_entry()))
     {
         for (arrow, letter) in PAIRS {
             let has_arrow = command.keys.contains(&Key::plain(arrow));

@@ -26,6 +26,7 @@ pub mod records;
 pub(crate) mod removal;
 pub mod template;
 pub mod template_import;
+pub mod tenax;
 pub mod transactions;
 pub mod validated;
 pub mod vars;

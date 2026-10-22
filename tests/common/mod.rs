@@ -41,8 +41,12 @@ pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 /// injects one failure into every case at once, and `FASTF_THEME`, `FASTF_ASCII`
 /// and `NO_COLOR` repaint what the pty suite reads back. `SHELL` is the shell
 /// fastf asks for its `PATH` (`util::login_path`): inherited, every suite would
-/// start the developer's own interactive shell, rc files and all.
+/// start the developer's own interactive shell, rc files and all. And
+/// `ANTHROPIC_API_KEY` and `FASTF_TENAX_URL` are Tenax's key and endpoint:
+/// inherited, a suite would send a library to the real API on the developer's
+/// account; a test that wants him points him at `tenax_mock` itself.
 pub const NOT_INHERITED: &[&str] = &[
+    "ANTHROPIC_API_KEY",
     "EDITOR",
     "FASTF_ASCII",
     "FASTF_ASKING_SHELL",
@@ -50,6 +54,7 @@ pub const NOT_INHERITED: &[&str] = &[
     "FASTF_NO_RELAUNCH",
     "FASTF_PROJECT_PATH",
     "FASTF_RELAUNCHED",
+    "FASTF_TENAX_URL",
     "FASTF_THEME",
     "FASTF_TRACE_FILE",
     "NO_COLOR",
@@ -983,4 +988,106 @@ pub struct LauncherRun {
     /// as they do under journald.
     pub output: String,
     pub code: i32,
+}
+
+/// A stand-in for the Anthropic Messages API on this machine's loopback, for
+/// the suites that watch Tenax answer: a debug build reads `FASTF_TENAX_URL`,
+/// and no suite ever reaches the real one.
+///
+/// It answers a brief request (one that asks for a JSON shape) with `brief`,
+/// and every chat request with the next of `chat`, the last one repeating.
+/// Each request's body is kept, in order, for a test to read back.
+pub mod tenax_mock {
+    use std::io::{Read, Write};
+    use std::sync::{Arc, Mutex};
+
+    pub struct Mock {
+        pub url: String,
+        pub requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    /// A reply whose content is one text block.
+    pub fn text_reply(text: &str) -> String {
+        serde_json::json!({
+            "content": [{ "type": "text", "text": text }],
+            "stop_reason": "end_turn",
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        })
+        .to_string()
+    }
+
+    /// A reply that makes one tool call.
+    pub fn tool_reply(id: &str, name: &str, input: serde_json::Value) -> String {
+        serde_json::json!({
+            "content": [{ "type": "tool_use", "id": id, "name": name, "input": input }],
+            "stop_reason": "tool_use",
+            "usage": { "input_tokens": 1, "output_tokens": 1 }
+        })
+        .to_string()
+    }
+
+    /// A brief, as the API would shape it.
+    pub fn brief_reply(say: &str, project: &str, folder: &str, todo: &str) -> String {
+        let shaped = serde_json::json!({
+            "say": say, "start_project": project, "start_folder": folder, "start_todo": todo
+        });
+        text_reply(&shaped.to_string())
+    }
+
+    pub fn start(brief: String, chat: Vec<String>) -> Mock {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("binding the mock");
+        let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            let mut chat = chat.into_iter().collect::<std::collections::VecDeque<_>>();
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let body = read_request(&mut stream);
+                let reply = if body.contains("\"json_schema\"") {
+                    brief.clone()
+                } else if chat.len() > 1 {
+                    chat.pop_front().unwrap()
+                } else {
+                    chat.front()
+                        .cloned()
+                        .unwrap_or_else(|| text_reply("Noted."))
+                };
+                seen.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+            }
+        });
+        Mock { url, requests }
+    }
+
+    fn read_request(stream: &mut std::net::TcpStream) -> String {
+        let mut seen = Vec::new();
+        let mut buf = [0u8; 8192];
+        while let Ok(n) = stream.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            seen.extend_from_slice(&buf[..n]);
+            let text = String::from_utf8_lossy(&seen).to_string();
+            if let Some(end) = text.find("\r\n\r\n") {
+                let length = text[..end]
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                if seen.len() >= end + 4 + length {
+                    return text[end + 4..].to_string();
+                }
+            }
+        }
+        String::new()
+    }
 }

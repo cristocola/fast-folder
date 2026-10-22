@@ -398,6 +398,8 @@ pub enum Modal {
     },
     /// `L`: messages, the journal, jobs and the log.
     Activity(Box<Activity>),
+    /// `.`: the chat with Tenax. The conversation itself is `App.tenax`'s.
+    Tenax(Box<crate::tui::app::tenax::Chat>),
 }
 
 impl Modal {
@@ -430,6 +432,7 @@ impl Modal {
             Modal::Guide(_) => Context::Guide,
             Modal::TextPrompt(_) | Modal::Note(_) | Modal::Onboarding(_) => Context::Prompt,
             Modal::Pick(_) | Modal::MultiPick(_) => Context::Pick,
+            Modal::Tenax(_) => Context::Chat,
             _ => Context::Modal,
         }
     }
@@ -459,6 +462,11 @@ impl ModalStack {
     /// is covered (the settings over the bases panel).
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Modal> {
         self.0.iter_mut()
+    }
+
+    /// Every dialog, the top last.
+    pub fn iter(&self) -> impl Iterator<Item = &Modal> {
+        self.0.iter()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -780,6 +788,10 @@ impl App {
             Some(Modal::Help { .. }) | Some(Modal::Message { .. }) | Some(Modal::Activity(_)) => {
                 self.scroll_top_modal(delta)
             }
+            Some(Modal::Tenax(_)) => {
+                self.tenax_scroll(delta);
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
@@ -821,6 +833,16 @@ impl App {
             | Some(Modal::Message { .. })
             | Some(Modal::Activity(_))
             | Some(Modal::Guide(_)) => self.scroll_top_modal(delta),
+            // A page of the transcript, whatever the list under it pages by.
+            Some(Modal::Tenax(_)) => {
+                let page = self.tenax_chat_window().max(1) as isize;
+                let delta = match delta {
+                    isize::MIN | isize::MAX => delta,
+                    delta => delta.signum() * page,
+                };
+                self.tenax_scroll(delta);
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }

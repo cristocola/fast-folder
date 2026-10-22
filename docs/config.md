@@ -35,6 +35,13 @@ The data folder holds:
   it to start fresh.
 - `messages.log` — every message fastf showed you, in the app and on the
   command line, one per line; `fastf messages` and `L` in the app read it.
+- `tenax.key` — Tenax's Anthropic API key, when one was saved on the
+  settings screen: owner-only (`0600` on Linux and macOS), nothing in it but
+  the key. Removing the key on the settings screen deletes it; see
+  [Tenax](#tenax).
+- `tenax.json` — Tenax's last brief, the starting point he named and the desk
+  it was about, so the box has something to say on the first frame. Delete it
+  and he writes a new one.
 - `logs/fastf.log` — the log: every step of every move, copy and reconcile
   with its count, and every warning, one timestamped line each. It is rotated
   as it grows (`fastf.log.1` to `.3`); `fastf log` and `L` read it, and
@@ -91,6 +98,12 @@ fastf config set motion off                      # on | off
 # off keeps nothing. Messages are kept whatever it says. A job's own log keeps
 # debug and up either way, and is rotated past 16 MiB.
 fastf config set log-level trace                 # trace | debug | info | warn | error | off
+
+# Tenax, the assistant in the app's sidebar. off: no box, no key, no request,
+# and fastf never opens a connection. on (the default) sends nothing until an
+# API key is saved on the settings screen. See "Tenax" below.
+fastf config set tenax off                       # on | off
+fastf config set tenax-model claude-sonnet-5-5   # empty = the default
 
 # Extra folders to index beyond base-dir, comma separated
 fastf config set bases "/mnt/projects/clients,/srv/archive"
@@ -149,6 +162,11 @@ questions about a different one. Fix the file, or delete it to start over.
 | `EDITOR` | Used when `editor` is not configured |
 | `SHELL` | The shell fastf asks for its `PATH`, so an agent, editor or terminal in `~/.local/bin` is found when fastf was opened from the app menu ([cli.md](cli.md), *Programs you name*) |
 | `FASTF_ASKING_SHELL` | Set by fastf on that shell while it asks; an rc can test it to skip slow work |
+| `ANTHROPIC_API_KEY` | Tenax's key when none is saved in fastf — used only when you press `.` to talk to him, never for the brief ([Tenax](#tenax)) |
+| `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | The proxy Tenax's requests go through, read as every other program reads them |
+
+`ANTHROPIC_BASE_URL` is not read: Tenax talks to `api.anthropic.com` and
+nowhere else.
 
 `FASTF_RELAUNCHED` is internal: fastf sets it on the copy of itself it starts
 inside a terminal, and it only ever switches the relaunch *off*, so a process
@@ -196,3 +214,60 @@ and a create that would have to mint one past it fails saying so.
 Losing a counter file is untidy rather than harmful: the highest ID actually in
 your projects is one of the inputs, so the next ID still clears every project
 you have.
+
+## Tenax
+
+Tenax, the assistant in the guided app ([app.md](app.md#tenax)), runs on the
+Anthropic Messages API: `claude-sonnet-5-5` at high effort unless
+`tenax-model` names another model. He needs an API key from
+[the Anthropic Console](https://console.anthropic.com/), and every request is
+billed to that key's account.
+
+**Where the key lives.** Paste it on the settings screen (`,` → Tenax → API
+key). It is written to `tenax.key` in the data folder, owner-only, and never
+to `config.toml`; `fastf config show` says only that a key is saved and its
+last four characters, and no log, message or status line ever holds it.
+**Remove the stored key** on the same screen deletes the file.
+
+**When anything is sent.** With `tenax` off, never. With it on:
+
+- **With a key saved in fastf**, plain `fastf` asks for one brief per session,
+  once the bases have answered — and not even that when the desk has not
+  changed since the last brief and it is under twelve hours old.
+- **With only `ANTHROPIC_API_KEY`**, nothing is sent until you press `.` and
+  talk to him: a key in the environment is there for other programs, and
+  fastf does not spend it on its own.
+- **Talking to him** sends what you type, and each message may take up to
+  eight requests while he reads before he answers.
+
+**What is sent.** The brief carries today's date, the hat, and the desk: for
+each group, its projects' ids, folder names and next open todos with their
+owners, how many are open and done, how long each project has been quiet and
+the names of the programs working in it, and what `!` lists. A chat message
+carries the date, the hat, the selected project's id and folder, and the
+conversation so far. What he reads with his tools goes too: the desk, a search
+over the library (each project's id, folder name, base name, template, tags and
+description), and, for one project, its description, tags, template variables,
+todos, latest notes and its repository's branch and last commit. He reads
+`PROJECT_INFO.md` only, never another file in a project, and is never sent a
+project's full path. Every request carries his persona and the app's key list;
+fastf's guides only as far as he looks something up in them.
+
+**What it costs.** One brief is one request; a chat message is one to eight.
+Requests reuse a cached prefix (the reference and the conversation so far),
+which Anthropic bills at a fraction of the full rate. The Console's usage page
+shows what the key has spent.
+
+**The network.** One HTTPS host, `api.anthropic.com`, through the proxy
+`HTTPS_PROXY` names when one is set. Certificates are checked against the
+Mozilla root store compiled into fastf, so a proxy that intercepts TLS with a
+certificate of its own is refused rather than trusted. A request waits at most
+thirty seconds for a connection and ten minutes for the whole answer; an
+overloaded or rate-limited answer is asked again once, after the wait the API
+asks for (ten seconds at most), and anything else is said in one line in his
+box.
+
+**Choosing a model.** `tenax-model` takes any model id the API accepts; a
+wrong one is named the first time he asks. With the default model, a request
+the API cannot serve on it is answered by its own fallback model rather than
+refused.

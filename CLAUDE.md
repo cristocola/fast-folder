@@ -66,10 +66,18 @@ larger than that, so a debug `fastf.exe` without it overflows before it parses
 anything, and every Windows suite that runs the binary fails at its first
 command.
 
+**TLS is rustls over ring, with the Mozilla roots compiled in** (`ureq`'s
+`rustls` feature, gzip off). ring's build script compiles C with `cc`, which
+honours `+crt-static`, so the Windows exe stays standalone; it also runs under
+`cargo check` and `clippy`, so the local `--target x86_64-pc-windows-gnu`
+clippy needs the mingw C compiler as much as the build does. CI's `musl` job
+builds ring for the static Linux binary before a tag does.
+
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a
 # real Windows runner. Needs `rustup target add x86_64-pc-windows-gnu` plus a
 # pacman-installed mingw-w64-gcc — and a rustup toolchain, not a pacman one.
+# The same compiler is needed for `cargo clippy --target x86_64-pc-windows-gnu`.
 cargo build --release --target x86_64-pc-windows-gnu
 
 # Fault injection — trip a named boundary deterministically:
@@ -121,13 +129,18 @@ tell you.
   `walk` / `transaction` / `staging` / `copy`), `provisioning/` (v2 recovery
   plus report-only pre-v2 discovery, a facade over `create` / `incomplete` /
   `report` / `pass` / `base` / `moves` / `finish` / `recordless`),
+  `tenax/` (the assistant's protocol: a facade over `api` — the request and
+  how its answer is read — `turn` — the loop over his read tools — `tools`,
+  `key`, `persona` and `docs`, the guides compiled in),
   `template_import.rs` (the from-folder engine),
   `assets.rs` (the template-file copy engine: walk, classify, interpolate or
   byte-copy), `body/` (the grammar of `PROJECT_INFO.md`'s body: sections,
   notes, todos), `validated.rs` (typed slugs, relative paths, tags, project
   folder names), `project_info.rs`.
 - `src/util/` — `lockfile` (cross-process `DataLock`; says what it waits for
-  after a second), `atomic` (THE atomic write), `fs_retry` (the one loop that
+  after a second), `atomic` (THE atomic write, and `write_private` for a file
+  only its owner may read), `http` (one HTTPS POST of a JSON body; the only
+  module that names the HTTP crate), `fs_retry` (the one loop that
   asks a filesystem again, every schedule it asks on, and the read-only
   attribute a publish must set aside), `interrupt`
   (Ctrl-C rollback, SIGHUP, the `set_restore` hook for the second signal, and
@@ -183,7 +196,10 @@ tell you.
   key line and hint comes from: `table` declares, `read` and `help` read),
   `guide.rs` (**the one place** an explanation is
   written: the builder's panel, the guide, the coach), `motion.rs` (pure motion
-  arithmetic over milliseconds it is handed), `msg.rs`/`effect.rs`, `theme.rs`
+  arithmetic over milliseconds it is handed), `sprite.rs` (Tenax's face: the
+  frames, and which animation a set of facts draws — pure, like `motion`;
+  his state is `app/tenax`, his worker `runtime/tenax`, his box `view/tenax`
+  and his chat `view/modals/tenax`), `msg.rs`/`effect.rs`, `theme.rs`
   (the palette, a pure function of an `Env`), `session.rs` (what a run leaves for
   the next), `frame.rs` (the session ring), `validators.rs` (the prompt texts),
   `fuzzy.rs`, `layout.rs` (every box's geometry, read by `update` and `view`),
@@ -487,6 +503,36 @@ Everything above is `cfg(unix)`: Windows gives a console application launched fr
 the shell a console, so these modules do not exist there (`login_path` keeps two
 stubs that answer `None`), and the Windows clippy leg must stay clean without
 them.
+
+## Tenax, and the network
+
+Tenax is the only thing in fastf that opens a connection, and he is the
+app's alone: no subcommand reaches him, and `core::tenax` is the protocol
+with no surface. The decisions, each because something breaks without it:
+
+- **Off is off.** `tenax = false` builds no request, draws no box and
+  hides his commands; nothing reads the key. A user who turned him off must
+  be able to tell from the code that fastf never reaches the network.
+- **No box without a key.** Until a key is saved (or a conversation was
+  started this run with `ANTHROPIC_API_KEY`), `layout::regions` carves
+  nothing and the sidebar is the one every snapshot already holds. A box
+  that only says "set a key" is an advertisement in a command centre.
+- **Only a key saved in fastf is spent without asking.** The brief runs by
+  itself only with a stored key (`key::Ask::Automatic`); a key in the
+  environment counts only for `Ask::Interactive`, i.e. `.` and the palette's
+  fresh brief. An environment key is there for other programs, and an
+  upgrade that started billing it would be a surprise on somebody's invoice.
+- **The key never leaves `core::tenax::key` but into a request header.** It
+  is `<data dir>/tenax.key` (`atomic::write_private`), never a `config.toml`
+  key, never in `App`, `Settings`, an `Effect`'s or `Action`'s `Debug`, a
+  status line, the log or `config show` (which prints its last four).
+  `Secret` and `SecretEdit` redact their `Debug` for that reason; the app is
+  told `KeySource` and nothing more.
+- **What he says stays in his box and his chat** — never the status line,
+  `App.log` or `messages.log`, which are a record of what fastf did.
+- **`util::http` is the only door** (`tests/layering.rs`), and
+  `FASTF_TENAX_URL` (an endpoint override for the suites' loopback mock) is
+  compiled out of release builds. `ANTHROPIC_BASE_URL` is not read.
 
 ---
 

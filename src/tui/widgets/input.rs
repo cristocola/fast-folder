@@ -186,6 +186,46 @@ impl LineEdit {
     }
 }
 
+/// A line editor for a secret — the Tenax key. It edits as a [`LineEdit`] does
+/// and is drawn one mask character per character, and its `Debug` never shows
+/// the text, because the settings state that holds it is printed by every
+/// failing test that compares it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SecretEdit(LineEdit);
+
+impl std::fmt::Debug for SecretEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SecretEdit({} chars)", self.0.text.chars().count())
+    }
+}
+
+impl SecretEdit {
+    pub fn apply(&mut self, key: &Key) -> bool {
+        self.0.apply(key)
+    }
+
+    pub fn paste(&mut self, pasted: &str) {
+        self.0.paste(pasted);
+    }
+
+    /// The text, for the one action that saves it.
+    pub fn text(&self) -> &str {
+        self.0.text()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// What is drawn: `mask` for every character, the caret where it is.
+    pub fn masked(&self, mask: char) -> LineEdit {
+        LineEdit {
+            text: std::iter::repeat_n(mask, self.0.text.chars().count()).collect(),
+            cursor: self.0.cursor,
+        }
+    }
+}
+
 /// Byte offset of char `n`, saturating at the end.
 pub(crate) fn byte_index(text: &str, n: usize) -> usize {
     text.char_indices()
@@ -258,7 +298,7 @@ pub fn visible_window(
 
 #[cfg(test)]
 mod tests {
-    use super::{LineEdit, byte_index, visible_window};
+    use super::{LineEdit, SecretEdit, byte_index, visible_window};
     use crate::tui::command::Key;
     use ratatui::crossterm::event::KeyCode;
 
@@ -460,5 +500,20 @@ mod tests {
         assert_eq!((caret.x, caret.y), (5, 0));
         assert_eq!(buf[(0, 0)].symbol(), ">");
         assert_eq!(buf[(2, 0)].symbol(), "a");
+    }
+
+    /// A key typed into the settings is drawn masked and never printed by a
+    /// `Debug` of the state that holds it.
+    #[test]
+    fn a_secret_is_drawn_masked_and_never_printed() {
+        let mut e = SecretEdit::default();
+        e.paste("abc-123");
+        e.apply(&Key::plain(KeyCode::Left));
+        assert_eq!(e.text(), "abc-123");
+        let shown = e.masked('*');
+        assert_eq!(shown.text(), "*******");
+        assert_eq!(shown.cursor(), 6);
+        let printed = format!("{e:?}");
+        assert!(!printed.contains("abc"), "{printed}");
     }
 }

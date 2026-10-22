@@ -24,6 +24,7 @@ pub mod prompt;
 pub mod rows;
 pub mod runtime;
 pub mod session;
+pub mod sprite;
 pub mod testing;
 
 pub mod theme;
@@ -62,7 +63,13 @@ pub fn run(entry: Entry) -> Result<()> {
     let env = theme::Env::read();
     let palette = theme::Theme::detect_with(Some(&cfg.theme));
     let motion = theme::choose_motion(&env, palette.kind, Some(&cfg.motion));
-    match runtime::run(entry, onboarding, palette, motion)? {
+    // Tenax's switch and key, and the brief the last run left — before the
+    // first frame, so his box does not arrive late and squeeze the pane.
+    let tenax = runtime::TenaxStart {
+        prefs: app::data::TenaxPrefs::read(&cfg),
+        brief: cfg.tenax.then(runtime::tenax::load_cache).flatten(),
+    };
+    match runtime::run(entry, onboarding, palette, motion, tenax)? {
         effect::Exit::Normal => {
             if is_menu {
                 println!("Goodbye.");

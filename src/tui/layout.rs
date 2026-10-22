@@ -66,6 +66,9 @@ pub struct Regions {
     /// app draws one of the two.
     pub detail: Option<Rect>,
     pub placement: Option<Placement>,
+    /// Tenax's box, carved from the top of the pane's column (`tenax_box`):
+    /// `None` unless he was asked for and the pane keeps its room under him.
+    pub tenax: Option<Rect>,
     pub status: Rect,
     pub hints: Rect,
 }
@@ -131,10 +134,38 @@ pub fn place_shared(body: Rect, needs: TableNeeds, share: u32) -> (Rect, Rect, P
     (body, body, Placement::Over)
 }
 
+/// Tenax's box: a border and four rows, the figure's height.
+pub const TENAX_ROWS: u16 = 6;
+/// The least the pane keeps under Tenax's box — under this the box is not
+/// drawn, and the pane has the column to itself.
+pub const TENAX_PANE_MIN: u16 = 10;
+
+/// Split Tenax's box off the top of the pane's rectangle, when the pane sits
+/// beside or under the table and keeps `TENAX_PANE_MIN` rows. Over the table
+/// there is no column to share: the box is not drawn, and the chat is a key
+/// away. A pure function of the pane's rectangle, so every calculation that
+/// reads `Regions.detail` — the pane's cursor, its scroll, a page — counts the
+/// rows the pane is actually drawn in.
+pub fn tenax_box(pane: Rect, placement: Placement) -> Option<(Rect, Rect)> {
+    if placement == Placement::Over || pane.height < TENAX_ROWS + TENAX_PANE_MIN {
+        return None;
+    }
+    Some((
+        Rect::new(pane.x, pane.y, pane.width, TENAX_ROWS),
+        Rect::new(
+            pane.x,
+            pane.y + TENAX_ROWS,
+            pane.width,
+            pane.height - TENAX_ROWS,
+        ),
+    ))
+}
+
 /// The bands of the screen, top to bottom, and the table and the pane in the
 /// middle one (`place`). `pane_open` is whether the pane is switched on at
-/// all; `needs` is what the table asks of the body.
-pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
+/// all; `needs` is what the table asks of the body; `tenax` whether Tenax's
+/// box is wanted above the pane (`tenax_box`).
+pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds, tenax: bool) -> Regions {
     let tall = area.height >= TALL_MIN_HEIGHT;
     // Two lines — the tabs and the bases — and a blank one under them where
     // there is room to breathe.
@@ -151,11 +182,14 @@ pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
         .split(area);
     let body = bands[2];
 
-    let (table, detail, placement) = if pane_open {
+    let (table, detail, placement, tenax) = if pane_open {
         let (table, pane, placement) = place(body, needs);
-        (table, Some(pane), Some(placement))
+        match tenax.then(|| tenax_box(pane, placement)).flatten() {
+            Some((tenax, pane)) => (table, Some(pane), Some(placement), Some(tenax)),
+            None => (table, Some(pane), Some(placement), None),
+        }
     } else {
-        (body, None, None)
+        (body, None, None, None)
     };
 
     Regions {
@@ -165,6 +199,7 @@ pub fn regions(area: Rect, pane_open: bool, needs: TableNeeds) -> Regions {
         table,
         detail,
         placement,
+        tenax,
         status: bands[3],
         hints: bands[4],
     }
@@ -183,6 +218,12 @@ pub fn pane_text(pane: Rect) -> Rect {
         inner_w.saturating_sub(2),
         pane.height.saturating_sub(2),
     )
+}
+
+/// The chat with Tenax: most of the window, as a reading dialog is. Read by
+/// the view and by `update`, which clamps the transcript's scroll to it.
+pub fn tenax_chat(area: Rect) -> Rect {
+    sized_dialog(area, area.height)
 }
 
 /// The templates tab's split: the card list and the template's pane, placed
@@ -499,16 +540,16 @@ mod tests {
     fn the_pane_goes_where_the_room_is() {
         let wide = Rect::new(0, 0, 120, 40);
         // The names fit the 60 %: the usual split.
-        let r = regions(wide, true, needs(54, 8));
+        let r = regions(wide, true, needs(54, 8), false);
         assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!((r.table.width, r.detail.map(|d| d.width)), (72, Some(48)));
         // Long names: the table takes what they need, the pane the rest.
-        let r = regions(wide, true, needs(80, 8));
+        let r = regions(wide, true, needs(80, 8), false);
         assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!((r.table.width, r.detail.map(|d| d.width)), (80, Some(40)));
         // Names so long a pane beside them would be a sliver: it goes under
         // the table, which keeps the whole width and the names whole.
-        let r = regions(wide, true, needs(95, 8));
+        let r = regions(wide, true, needs(95, 8), false);
         assert_eq!(r.placement, Some(Placement::Below));
         let pane = r.detail.unwrap();
         assert_eq!((r.table.width, pane.width), (120, 120));
@@ -517,28 +558,28 @@ mod tests {
         assert_eq!(r.table.height + pane.height, r.body.height);
 
         // A standard terminal has neither room: the pane takes the list's place.
-        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 8));
+        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 8), false);
         assert_eq!(r.placement, Some(Placement::Over));
         assert_eq!(r.table, r.body);
         assert_eq!(r.detail, Some(r.body));
 
         // Wide and short: beside, whatever the height.
-        let r = regions(Rect::new(0, 0, 200, 15), true, needs(64, 8));
+        let r = regions(Rect::new(0, 0, 200, 15), true, needs(64, 8), false);
         assert_eq!(r.placement, Some(Placement::Beside));
 
         // Tall and narrow: below, with the table as tall as its projects.
-        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 8));
+        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 8), false);
         assert_eq!(r.placement, Some(Placement::Below));
         assert_eq!(r.table.height, 11);
         assert_eq!(r.detail.unwrap().height, r.body.height - 11);
         // A library too big to show whole takes its share and no more.
-        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 500));
+        let r = regions(Rect::new(0, 0, 60, 45), true, needs(52, 500), false);
         assert_eq!(r.table.height, percent_of(r.body.height, TABLE_BELOW_SHARE));
     }
 
     #[test]
     fn a_standard_terminal_gets_the_compact_layout() {
-        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 12));
+        let r = regions(Rect::new(0, 0, 80, 24), true, needs(64, 12), false);
         assert_eq!(r.header.height, 2);
         assert_eq!(
             r.placement,
@@ -554,11 +595,16 @@ mod tests {
     /// status line.
     #[test]
     fn a_large_terminal_gets_the_pane_and_the_rows_the_strip_used_to_take() {
-        let r = regions(Rect::new(0, 0, 120, 40), true, TableNeeds::default());
+        let r = regions(Rect::new(0, 0, 120, 40), true, TableNeeds::default(), false);
         assert_eq!(r.header.height, 3);
         assert_eq!(r.placement, Some(Placement::Beside));
         assert_eq!(r.table.height, 40 - 3 - 1 - 1 - 1);
-        let r = regions(Rect::new(0, 0, 120, 40), false, TableNeeds::default());
+        let r = regions(
+            Rect::new(0, 0, 120, 40),
+            false,
+            TableNeeds::default(),
+            false,
+        );
         assert!(r.detail.is_none(), "the pane can be closed");
         assert_eq!(r.table, r.body, "and the table has the body");
     }
@@ -577,14 +623,14 @@ mod tests {
         }
         for (w, h) in sizes {
             let area = Rect::new(0, 0, w, h);
-            for open in [false, true] {
+            for (open, tenax) in [(false, false), (true, false), (false, true), (true, true)] {
                 for need in [
                     needs(0, 0),
                     needs(64, 8),
                     needs(118, 86),
                     needs(u16::MAX, 9999),
                 ] {
-                    let r = regions(area, open, need);
+                    let r = regions(area, open, need, tenax);
                     let bands = [r.header, r.search, r.body, r.status, r.hints];
                     let covered: u32 = bands.iter().map(|b| b.height as u32).sum();
                     assert!(covered <= h as u32, "{w}x{h}: the bands overflow");
@@ -595,24 +641,41 @@ mod tests {
                     assert!(inside(r.body, r.table), "{w}x{h}: {r:?}");
                     let Some(pane) = r.detail else {
                         assert!(!open && r.placement.is_none());
+                        assert!(r.tenax.is_none(), "{w}x{h}: Tenax with no pane");
                         assert_eq!(r.table, r.body);
                         continue;
                     };
                     assert!(inside(r.body, pane), "{w}x{h}: {r:?}");
+                    // Tenax sits on top of the pane's column, the pane under
+                    // him keeping its room, the two touching and never
+                    // overlapping — and only where he was asked for.
+                    let column = match r.tenax {
+                        Some(tenax) => {
+                            assert!(open && tenax_wanted_here(tenax, r.placement));
+                            assert!(inside(r.body, tenax), "{w}x{h}: {r:?}");
+                            assert_eq!(tenax.height, TENAX_ROWS);
+                            assert!(pane.height >= TENAX_PANE_MIN);
+                            assert_eq!((tenax.x, tenax.width), (pane.x, pane.width));
+                            assert_eq!(tenax.y + tenax.height, pane.y);
+                            Rect::new(pane.x, tenax.y, pane.width, pane.height + tenax.height)
+                        }
+                        None => pane,
+                    };
                     match r.placement.expect("a pane has a placement") {
                         Placement::Beside => {
-                            assert!(pane.width >= PANE_BESIDE_MIN);
+                            assert!(column.width >= PANE_BESIDE_MIN);
                             assert!(r.table.width >= need.min_width);
-                            assert_eq!(r.table.width + pane.width, r.body.width);
-                            assert_eq!(pane.x, r.table.x + r.table.width);
+                            assert_eq!(r.table.width + column.width, r.body.width);
+                            assert_eq!(column.x, r.table.x + r.table.width);
                         }
                         Placement::Below => {
-                            assert!(pane.height >= PANE_BELOW_MIN);
+                            assert!(column.height >= PANE_BELOW_MIN);
                             assert!(r.table.height >= TABLE_BELOW_MIN);
-                            assert_eq!(r.table.height + pane.height, r.body.height);
+                            assert_eq!(r.table.height + column.height, r.body.height);
                             assert_eq!(r.table.width, r.body.width);
                         }
                         Placement::Over => {
+                            assert!(r.tenax.is_none(), "{w}x{h}: Tenax over the table");
                             assert_eq!(r.table, r.body);
                             assert_eq!(pane, r.body);
                         }
@@ -620,6 +683,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn tenax_wanted_here(_tenax: Rect, placement: Option<Placement>) -> bool {
+        matches!(placement, Some(Placement::Beside | Placement::Below))
+    }
+
+    /// Tenax takes six rows off the top of a beside pane tall enough to keep
+    /// ten under him, and nothing from one that is not.
+    #[test]
+    fn tenax_sits_above_a_pane_with_room_to_spare() {
+        let r = regions(Rect::new(0, 0, 120, 40), true, needs(64, 12), true);
+        let (tenax, pane) = (r.tenax.unwrap(), r.detail.unwrap());
+        assert_eq!(r.placement, Some(Placement::Beside));
+        assert_eq!(tenax.height, TENAX_ROWS);
+        assert_eq!(pane.y, tenax.y + TENAX_ROWS);
+        assert_eq!(pane.y + pane.height, r.body.y + r.body.height);
+
+        let short = regions(Rect::new(0, 0, 120, 18), true, needs(64, 12), true);
+        assert!(
+            short.tenax.is_none(),
+            "a 13-row column keeps the pane whole"
+        );
+        let unasked = regions(Rect::new(0, 0, 120, 40), true, needs(64, 12), false);
+        assert!(unasked.tenax.is_none());
+        assert_eq!(unasked.detail.unwrap().height, r.body.height);
     }
 
     #[test]

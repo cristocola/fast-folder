@@ -54,6 +54,12 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   written back unchanged by a tick.
 - An rclone base on the desk: one read per project, the rows filling in as
   each lands, and a stalled base holding up only its own.
+- Tenax with a real key: the brief on a real library at 80×24 (the status
+  line, no box) and 120×40 (the box), a chat that reads a project and
+  proposes a todo answered `y` and `n`, a wrong `tenax-model` and a revoked
+  key each saying so in one line, a rate limit, and a session behind a real
+  `HTTPS_PROXY`. Then `tenax = false`: no box, no `.`, and nothing on the
+  wire (`ss -tp` while the app is open).
 
 Last reviewed: 2026-10-13.
 
@@ -86,6 +92,12 @@ Unscheduled; nothing here is promised.
 - `ptyxis` (the GNOME 47+ default) in the emulator table, if anyone asks.
 - A watchdog for a clipboard tool that does not fork — the `wl-copy --foreground`
   shape. `clipboard::feed`'s `wait()` has no timeout.
+- Tenax, what was left out of the first version: his answer streamed into the
+  box as it is written (now it lands whole, a minute or more at high effort);
+  a conversation kept across sessions (now only the brief is); and trust in
+  `SSL_CERT_FILE` or the operating system's certificate store, for a network
+  whose proxy intercepts TLS with a certificate of its own (now only the
+  Mozilla roots compiled in are trusted, and such a proxy is refused).
 
 ### Known weaknesses in the code, most serious first
 

@@ -306,7 +306,7 @@ impl DeskState {
 
 /// When a project last moved: the newer of `touched` (its record and its
 /// folder) and the newest file a walk found under it, as stamps.
-fn quiet_since(touched: Option<&str>, newest: Option<String>) -> Option<String> {
+pub fn quiet_since(touched: Option<&str>, newest: Option<String>) -> Option<String> {
     match (touched, newest) {
         (Some(a), Some(b)) => Some(if b.as_str() > a { b } else { a.to_string() }),
         (Some(a), None) => Some(a.to_string()),

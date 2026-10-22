@@ -24,6 +24,7 @@ mod jobs;
 mod lists;
 mod prompts;
 mod reading;
+pub mod tenax;
 
 pub(crate) use bases::base_note_text;
 use bases::*;
@@ -70,6 +71,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) -> Option<Position> {
             render_activity(app, activity, frame, area);
             None
         }
+        Modal::Tenax(chat) => tenax::render_chat(app, chat, frame, area),
         Modal::Message {
             title,
             lines,

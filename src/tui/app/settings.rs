@@ -19,7 +19,7 @@ use crate::tui::app::modal::Modal;
 use crate::tui::command::{self, Context, Key};
 use crate::tui::effect::{Action, Effect, ViewKind};
 use crate::tui::validators;
-use crate::tui::widgets::input::LineEdit;
+use crate::tui::widgets::input::{LineEdit, SecretEdit};
 use crate::tui::widgets::nav;
 use crate::tui::widgets::text_area::TextArea;
 
@@ -39,6 +39,10 @@ pub enum Kind {
     Bases,
     /// Something that runs rather than something that is set.
     Run(Job),
+    /// Tenax's API key: not a configuration key, never `SetConfig`, never
+    /// shown — saved through `Action::StoreTenaxKey` from an empty, masked
+    /// editor.
+    TenaxKey,
 }
 
 impl Kind {
@@ -48,7 +52,7 @@ impl Kind {
         match self {
             Kind::Text(key) | Kind::Bool(key) | Kind::Choice(key, _) => Some(key),
             Kind::Bases => Some("bases"),
-            Kind::Heading | Kind::Run(_) => None,
+            Kind::Heading | Kind::Run(_) | Kind::TenaxKey => None,
         }
     }
 }
@@ -66,6 +70,8 @@ pub enum Job {
     Reconcile,
     /// Where fastf keeps its things.
     DataLocations,
+    /// Forget the Tenax key saved in fastf, after a yes.
+    ForgetTenaxKey,
 }
 
 impl Job {
@@ -76,6 +82,7 @@ impl Job {
             Job::Reindex => "reindexing…",
             Job::Reconcile => "reconciling…",
             Job::DataLocations => "reading…",
+            Job::ForgetTenaxKey => "removing the key…",
         }
     }
 }
@@ -131,6 +138,12 @@ pub enum Editing {
     /// The library bases, one per line.
     Bases {
         area: TextArea,
+        error: Option<String>,
+    },
+    /// Tenax's key, typed or pasted, drawn masked. It opens empty: the saved
+    /// key is never read back into anything that draws.
+    TenaxKey {
+        input: SecretEdit,
         error: Option<String>,
     },
 }
@@ -333,6 +346,10 @@ impl SettingsState {
                 area: TextArea::with_text(&self.settings.bases.join("\n")),
                 error: None,
             }),
+            Kind::TenaxKey => Some(Editing::TenaxKey {
+                input: SecretEdit::default(),
+                error: None,
+            }),
             _ => None,
         };
     }
@@ -360,8 +377,9 @@ impl SettingsState {
             // `config set bases` takes the comma-separated list, which is what
             // the lines are once the blank ones are dropped.
             Editing::Bases { area, .. } => Some(("bases", area.entries().join(","))),
-            // The filter changes what is shown, never what is stored.
-            Editing::Filter => None,
+            // The filter changes what is shown, never what is stored; the key
+            // is saved by an action of its own, never as a configuration value.
+            Editing::Filter | Editing::TenaxKey { .. } => None,
         }
     }
 
@@ -369,7 +387,9 @@ impl SettingsState {
     pub fn fail(&mut self, message: impl Into<String>) {
         let message = message.into();
         match &mut self.editing {
-            Some(Editing::Value { error, .. }) | Some(Editing::Bases { error, .. }) => {
+            Some(Editing::Value { error, .. })
+            | Some(Editing::Bases { error, .. })
+            | Some(Editing::TenaxKey { error, .. }) => {
                 *error = Some(message);
             }
             Some(Editing::Filter) | None => {}
@@ -378,7 +398,9 @@ impl SettingsState {
 
     pub fn error(&self) -> Option<&str> {
         match self.editing.as_ref()? {
-            Editing::Value { error, .. } | Editing::Bases { error, .. } => error.as_deref(),
+            Editing::Value { error, .. }
+            | Editing::Bases { error, .. }
+            | Editing::TenaxKey { error, .. } => error.as_deref(),
             Editing::Filter => None,
         }
     }
@@ -422,6 +444,8 @@ pub fn raw_value(settings: &Settings, key: &str) -> String {
         "post_create.reveal" => settings.reveal.to_string(),
         "post_create.open_in_editor" => settings.open_in_editor.to_string(),
         "post_create.print_path" => settings.print_path.to_string(),
+        "tenax" => settings.tenax.to_string(),
+        "tenax-model" => settings.tenax_model.clone(),
         _ => String::new(),
     }
 }
@@ -489,6 +513,7 @@ pub fn rows(s: &Settings) -> Vec<Row> {
         after_creation(s),
         id_counter(s),
         maintenance(s),
+        tenax(s),
     ]
     .concat()
 }
@@ -699,6 +724,45 @@ fn maintenance(s: &Settings) -> Vec<Row> {
     ]
 }
 
+/// Last, so every screen that ends in the maintenance rows still does.
+fn tenax(s: &Settings) -> Vec<Row> {
+    use crate::core::tenax::KeySource;
+    let mut rows = vec![
+        heading("Tenax"),
+        toggle(
+            "Tenax",
+            "tenax",
+            s.tenax,
+            "the assistant at the top of the sidebar — off is no box, no key and no request, ever",
+        ),
+        text(
+            "Model",
+            "tenax-model",
+            or(&s.tenax_model, crate::core::tenax::DEFAULT_MODEL),
+            "the Claude model he runs on, at high effort; empty is the default",
+        ),
+        Row {
+            label: "API key",
+            value: match &s.tenax_key {
+                KeySource::Stored { last4 } => format!("saved, ending {last4}"),
+                KeySource::Env => "only ANTHROPIC_API_KEY — used when you talk to him".to_string(),
+                KeySource::None => "(none)".to_string(),
+            },
+            hint: "an Anthropic API key, saved in its own file only you can read; nothing is sent until one is saved",
+            kind: Kind::TenaxKey,
+        },
+    ];
+    if s.tenax_key.stored() {
+        rows.push(run(
+            "Remove the saved key",
+            Job::ForgetTenaxKey,
+            String::new(),
+            "Tenax stops briefing you; ANTHROPIC_API_KEY, if set, still answers when you talk to him",
+        ));
+    }
+    rows
+}
+
 impl App {
     /// Enter on the settings list. A yes/no and a two-way choice are written
     /// where they stand: opening a dialog to answer a question with two
@@ -774,6 +838,25 @@ impl App {
                     false
                 }
             }
+            Some(Editing::TenaxKey { input, error }) => {
+                if key.code == KeyCode::Enter {
+                    // Empty is "never mind", not "remove": the field always
+                    // opens empty, so an Enter there is no answer at all.
+                    if input.is_empty() {
+                        state.editing = None;
+                        return Vec::new();
+                    }
+                    let Some(secret) = crate::core::tenax::Secret::new(input.text()) else {
+                        *error = Some(validators::TENAX_KEY_SHAPE.to_string());
+                        return Vec::new();
+                    };
+                    return self.run_action("saving the key…", Action::StoreTenaxKey(Some(secret)));
+                }
+                if input.apply(&key) {
+                    *error = None;
+                }
+                false
+            }
             // A list is a document: Enter is a newline, so Ctrl-S commits.
             Some(Editing::Bases { area, error }) => {
                 if key.code == KeyCode::Char('s') && key.ctrl {
@@ -826,6 +909,14 @@ impl App {
                 PathBuf::new(),
                 ViewKind::DataLocations,
             ),
+            Job::ForgetTenaxKey => {
+                self.modals
+                    .push(Modal::Confirm(crate::tui::app::actions::Confirm {
+                        prompt: validators::TENAX_FORGET_KEY.to_string(),
+                        then: crate::tui::app::actions::ConfirmThen::ForgetTenaxKey,
+                    }));
+                Vec::new()
+            }
         }
     }
 
@@ -1029,6 +1120,55 @@ mod tests {
             state.pending_write(),
             Some(("recent-limit", "20".to_string())),
             "the value is still there to be corrected"
+        );
+    }
+
+    /// The key row opens on nothing — the saved key is never read back into
+    /// a field — and is never written as a configuration value.
+    #[test]
+    fn the_key_row_opens_empty_and_is_never_a_config_write() {
+        let settings = Settings {
+            tenax: true,
+            tenax_key: crate::core::tenax::KeySource::Stored {
+                last4: "wxyz".into(),
+            },
+            ..sample()
+        };
+        let mut state = SettingsState::new(settings);
+        while state.row().unwrap().label != "API key" {
+            state.step(1);
+        }
+        assert_eq!(state.row().unwrap().value, "saved, ending wxyz");
+        assert_eq!(state.immediate_write(), None);
+        state.begin_edit();
+        let Some(Editing::TenaxKey { input, .. }) = &mut state.editing else {
+            panic!("expected the key editor");
+        };
+        assert!(input.is_empty());
+        input.paste("typed-key");
+        assert_eq!(state.pending_write(), None);
+        assert!(!format!("{state:?}").contains("typed-key"));
+    }
+
+    /// "Remove the saved key" is offered only while one is saved.
+    #[test]
+    fn the_remove_row_needs_a_saved_key() {
+        let labels = |key| {
+            rows(&Settings {
+                tenax_key: key,
+                ..sample()
+            })
+            .into_iter()
+            .map(|row| row.label)
+            .collect::<Vec<_>>()
+        };
+        use crate::core::tenax::KeySource;
+        assert!(!labels(KeySource::Env).contains(&"Remove the saved key"));
+        assert!(
+            labels(KeySource::Stored {
+                last4: "1234".into()
+            })
+            .contains(&"Remove the saved key")
         );
     }
 }

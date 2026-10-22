@@ -25,11 +25,6 @@ use crate::tui::app::desk::{ACTIVE_CELL, AGE_CELL, DeskRow, NEXT_TODO_MIN, row_f
 use crate::tui::app::{App, Focus};
 use crate::tui::view::{fit, fit_spans};
 
-/// How many days a todo assigned to an owner may wait with nothing written
-/// in the folder and no program working in it before the row shows the
-/// warning glyph.
-const STUCK_AFTER_DAYS: u64 = 3;
-
 pub fn table(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let g = theme.glyphs;
@@ -213,7 +208,11 @@ fn card_line(
     } else if read
         && matches!(card.assignee(), Assignee::Owner(_))
         && now.is_some_and(|now| {
-            crate::core::desk::quiet_for_days(card.quiet_since.as_deref(), now, STUCK_AFTER_DAYS)
+            crate::core::desk::quiet_for_days(
+                card.quiet_since.as_deref(),
+                now,
+                crate::core::desk::STUCK_AFTER_DAYS,
+            )
         })
     {
         (g.warn.to_string(), theme.warn())

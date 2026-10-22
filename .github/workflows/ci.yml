@@ -100,6 +100,25 @@ jobs:
         shell: pwsh
         run: ./packaging/windows/assert-standalone.ps1 target/release/fastf.exe
 
+  # The static musl binary is what `fast-folder-bin` and the Linux installer
+  # ship, and `ring` (the TLS under `util::http`) compiles C for it with
+  # musl-gcc. Built here, on a PR, so a toolchain problem there is not first
+  # seen when a tag's release build fails.
+  musl:
+    name: build (x86_64-unknown-linux-musl)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # v1
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - run: target/x86_64-unknown-linux-musl/release/fastf --version
+
   # `rust-version` in Cargo.toml is a promise to users on older toolchains, and
   # nothing verified it — the stated MSRV could break with no signal at all.
   msrv:

@@ -93,6 +93,7 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
         }
         Action::TemplateFromFolder(request) => template_from_folder(&request),
         Action::SetConfig { key, value } => set_config(key, value),
+        Action::StoreTenaxKey(secret) => store_tenax_key(secret),
         Action::InitBaseDir(raw) => {
             let resolved = crate::core::config::init_base_dir(&raw)?;
             Ok(ActionOutcome::new(
@@ -499,6 +500,25 @@ fn set_config(key: &'static str, value: String) -> Result<ActionOutcome> {
         ListChange::SummaryOnly
     };
     Ok(ActionOutcome::new(change, said).settings())
+}
+
+/// Save or forget Tenax's key. What it says names no part of the key: the
+/// message goes to the status line, the session's log and `messages.log`.
+fn store_tenax_key(secret: Option<crate::core::tenax::Secret>) -> Result<ActionOutcome> {
+    let message = match secret {
+        Some(secret) => {
+            crate::core::tenax::key::store(&secret)?;
+            "Key saved — Tenax will brief you next time you open fastf.".to_string()
+        }
+        None => {
+            if crate::core::tenax::key::clear()? {
+                "Key removed.".to_string()
+            } else {
+                "No key was saved.".to_string()
+            }
+        }
+    };
+    Ok(ActionOutcome::new(ListChange::SummaryOnly, message).settings())
 }
 
 /// One folder, registered. Shared by the single and the recursive arms so

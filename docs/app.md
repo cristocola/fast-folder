@@ -82,6 +82,10 @@ Top to bottom:
   of sight, the list's bottom border says what it holds for the row under the
   cursor — `2 notes · 1/4 todos done` — and the hint bar leads with `→ details`;
   inside it, with `← list`.
+- **Tenax** — once an Anthropic API key is saved, a small box at the top of
+  the pane's column: his face, and a few lines on what is on your desk and
+  where to start. See [Tenax](#tenax). Without a key, or with `tenax` off,
+  there is no box and the pane is as tall as ever.
 - **The status line and the hint bar** — what the last action did (or, when
   rows are marked, that a verb will act on them rather than on the cursor),
   and the keys that matter where you are.
@@ -227,6 +231,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | what is unfinished: what needs you first, each with its reason — Enter on one offers what settles it (discarding asks for the word) — then what fastf is finishing by itself, and a row that finishes it now |
+| `.` | talk to Tenax — see [Tenax](#tenax). Dimmed, saying where to put one, until there is an API key; not there at all with `tenax` off |
 | `L` | messages, the journal, jobs and the log: every message fastf showed you, from every session; every dated note and every todo added or ticked across every project, with a rule where the desk was last open, so what happened since you last looked reads above it; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
@@ -458,6 +463,60 @@ alone, `--order`, `--as` as the hat for the run, `--random` as `z`. A bare
 `fastf` opens on the desk when it was quit there. [cli.md](cli.md#the-desk)
 has the command line's desk.
 
+## Tenax
+
+**Tenax is the assistant in the corner**: a colleague who has read your desk,
+knows every key fastf has, and would rather you started on something than
+admired the list. He runs on the Anthropic API, so he needs an API key of
+yours; without one nothing about him is drawn or sent.
+
+**Giving him a key.** `,` → **Tenax** → **API key**, and paste it: it is
+masked as you type, and kept in a file of its own beside `config.toml`, never
+in it ([config.md](config.md#tenax)). With the key saved the box appears at
+the top of the pane's column. A key in `ANTHROPIC_API_KEY` works too, but
+only when you press `.` to talk — he never uses it by himself — and the box
+appears once you have.
+
+**The brief.** When plain `fastf` opens with a saved key, he reads the desk
+once the bases have answered — whose next todo is whose, what is stuck, what
+`!` holds — and writes a sentence or two in the box, with the project and the
+todo he would start on under it. That is one request per session, and none at
+all when the desk is the one his last brief was about and that brief is under
+twelve hours old: it is kept between runs and shown on the first frame. **Tenax:
+a fresh brief** in the palette asks again; **Tenax: go to his starting point**
+selects the project he named.
+
+**Talking to him.** `.` opens the chat over the app. Type and Enter sends;
+the conversation scrolls with the arrows and pages; Esc closes it and keeps
+the conversation — an answer on its way still lands, and the box (or, where
+the box has no room, a status line) says he answered. Ctrl-n starts a new
+chat. He can read what the app can read — the desk, a search over the
+library, one project's file, what `!` lists, and fastf's own guides — so ask
+him which key does what, what is on a project, or what to do first.
+
+**He asks before he changes anything.** He can add a todo, tick or untick
+one, give one an owner, add a note or a tag, and set a description — and each
+of those is a confirmation naming the folder and the change, which runs only
+on your `y`, through the same write the app's own keys use. A refusal is said
+back to him, and so is a no; nothing he says is taken as done unless the
+write came back. The confirmation ignores a key pressed in its first half
+second, so a word you were typing never answers it, and waits while you are
+typing to him. He can also select a project or search the library to show
+you something; he never creates, moves, renames, deletes or registers
+anything — he tells you the key.
+
+**What moves.** His face plays a short animation when he speaks and while he
+thinks, and rests otherwise: which one is picked at random, weighted by what
+is true of the projects — a todo stuck for days gets a look, a todo ticked
+today a small celebration, a long list some juggling. With `motion` off he
+is a still frame, and resting he costs nothing.
+
+**Off is off.** `tenax = false` (the settings screen, `fastf config set tenax
+off`, or **Tenax on or off** in the palette) takes away the box, the key's
+use and every request; `.` is unbound, and the app is as it was before him.
+What he says stays in his box and his chat: it is never put on the status
+line, in `L`'s messages or in a log.
+
 ## Settings
 
 `,` opens the **settings**: every setting fastf has, on one screen, grouped,
@@ -470,6 +529,10 @@ library bases are one text area — one folder per line, `Ctrl-S` keeps it —
 because that is what the list is; *Add or remove bases* in a base's menu opens
 the settings on it. The keys and what each one means are in
 [config.md](config.md).
+
+The **Tenax** group, last, switches him on and off, names his model, takes
+his API key (masked, and never shown again once saved — only its last four
+characters) and removes it.
 
 The same screen holds the **ID counter** (what the highest ID is, what the next
 project gets, raising it, and making every mounted base agree on it) and
@@ -601,6 +664,9 @@ seen at once and fades, or eases from one resting state to the other.
   gone the next.
 - **One spinner** wherever something is pending — reading the index, running a
   verb, reading a project — so "it is working" looks the same everywhere.
+- **Tenax's face** plays when he says something and while he thinks, then
+  rests: a few seconds of motion per answer, never a loop while nothing is
+  happening. See [Tenax](#tenax).
 
 Nothing else moves: no sliding dialogs, no eased scrolling, no cursor trails.
 

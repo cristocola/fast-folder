@@ -18,9 +18,39 @@ pub fn show() -> Result<()> {
     println!();
     print_prompts_and_library(&config);
     println!();
+    print_tenax(&config);
+    println!();
     print_post_create(&config);
 
     Ok(())
+}
+
+/// Tenax's two keys, and where his API key would come from — never the key.
+fn print_tenax(config: &Config) {
+    use crate::core::tenax::KeySource;
+    let key = match crate::core::tenax::key::source() {
+        KeySource::Stored { last4 } => format!("key saved, ending {last4}"),
+        KeySource::Env => format!(
+            "only {} — used when you talk to him",
+            crate::core::tenax::key::ENV_KEY
+        ),
+        KeySource::None => "no key — save one in the app's settings".to_string(),
+    };
+    println!(
+        "  {:<26} {}  {}",
+        "tenax:".green(),
+        bool_label(config.tenax),
+        if config.tenax {
+            format!("({key})").dimmed()
+        } else {
+            "(no box, no request)".dimmed()
+        }
+    );
+    println!(
+        "  {:<26} {}",
+        "tenax_model:".green(),
+        config.resolve_tenax_model()
+    );
 }
 
 fn print_data_dir() {
@@ -380,6 +410,16 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
         "recent_limit" | "recent_default_limit" => set_recent_limit(config, value)?,
         "register_naming_pattern" => set_register_naming_pattern(config, value)?,
         "on_name_collision" => set_on_name_collision(config, value)?,
+        "tenax" => {
+            config.tenax = parse_bool(value)?;
+            if config.tenax {
+                "Set tenax = on  (nothing is sent until a key is saved in the app's settings)"
+                    .to_string()
+            } else {
+                "Set tenax = off  — no box, no key, no request".to_string()
+            }
+        }
+        "tenax_model" => set_tenax_model(config, value)?,
         "post_create.git_init" => {
             config.post_create.git_init = parse_bool(value)?;
             format!("Set post_create.git_init = {}", config.post_create.git_init)
@@ -405,7 +445,7 @@ pub fn apply(config: &mut Config, key: &str, value: &str) -> Result<String> {
         other => bail!(
             "unknown config key '{}'. Valid keys: base-dir, bases, editor, terminal, agent, hat, theme, motion, log-level, default-template, date-format, \
          preview-lines, prompt-open-after-create, confirm-create, \
-         recent-limit, register-naming-pattern, on-name-collision, \
+         recent-limit, register-naming-pattern, on-name-collision, tenax, tenax-model, \
          post_create.git_init, post_create.reveal, post_create.open_in_editor, post_create.print_path",
             other
         ),
@@ -423,6 +463,27 @@ fn set_base_dir(config: &mut Config, value: &str) -> Result<String> {
         "Set base_dir = {}",
         crate::util::paths::display_path(&resolved)
     ))
+}
+
+/// A model id is one word; empty goes back to the default. Which ids exist is
+/// the API's to say, and a wrong one is named the first time Tenax asks.
+fn set_tenax_model(config: &mut Config, value: &str) -> Result<String> {
+    let model = value.trim();
+    if model.chars().any(char::is_whitespace) {
+        bail!(
+            "a model id is one word, like {}",
+            crate::core::tenax::DEFAULT_MODEL
+        );
+    }
+    config.tenax_model = model.to_string();
+    Ok(if model.is_empty() {
+        format!(
+            "Set tenax-model = (default: {})",
+            crate::core::tenax::DEFAULT_MODEL
+        )
+    } else {
+        format!("Set tenax-model = {model}")
+    })
 }
 
 /// The hat is an owner's name, by the owner's rule; empty takes it off.

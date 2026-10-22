@@ -42,6 +42,9 @@ pub enum Context {
     /// A row of the detail pane is being edited in place — a line for a
     /// variable or a tag, a text area for the notes. The field has the keys.
     PaneEdit,
+    /// The chat with Tenax: a line to type into over a transcript the
+    /// movement keys scroll.
+    Chat,
     /// Any other dialog: a confirmation, a picker, help, a message.
     Modal,
 }
@@ -65,6 +68,7 @@ impl Context {
             Context::Prompt => "a prompt",
             Context::Pick => "a picker",
             Context::PaneEdit => "editing in the detail pane",
+            Context::Chat => "the chat with Tenax",
             Context::Modal => "dialogs",
         }
     }
@@ -79,6 +83,7 @@ impl Context {
                 | Context::Prompt
                 | Context::Pick
                 | Context::PaneEdit
+                | Context::Chat
         )
     }
 
@@ -103,12 +108,13 @@ impl Context {
                 | Context::Guide
                 | Context::Prompt
                 | Context::Pick
+                | Context::Chat
                 | Context::Modal
         )
     }
 
     /// Every context, for the invariants and the help.
-    pub const ALL: [Context; 17] = [
+    pub const ALL: [Context; 18] = [
         Context::Global,
         Context::Projects,
         Context::Detail,
@@ -125,6 +131,7 @@ impl Context {
         Context::Prompt,
         Context::Pick,
         Context::PaneEdit,
+        Context::Chat,
         Context::Modal,
     ];
 }

@@ -57,6 +57,7 @@ impl App {
         });
         match part {
             SummaryPart::Local { templates, prefs } => {
+                self.tenax.prefs = prefs.tenax.clone();
                 summary.templates = templates;
                 summary.prefs = prefs;
                 // A template written or deleted is a change to the templates

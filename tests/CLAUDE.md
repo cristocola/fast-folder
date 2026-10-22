@@ -37,7 +37,9 @@ What each suite guards — the intent, not the case list:
   would come back. Debug-only.
 - `concurrency.rs` — races real **processes**: a thread test passes against an
   in-process `Mutex` while production stays broken.
-- `tui_update.rs` — the app's state machine with no terminal: a `tui::testing`
+- `tui_update.rs` — the app's state machine with no terminal (Tenax's
+  brief, chat, proposals and their every way of being dismissed are
+  `tests/tui_update/tenax.rs`): a `tui::testing`
   fixture `App`, messages in, effects out. `tui_commands.rs` — the registry's
   invariants. `tui_snapshots.rs` — frames through `TestBackend`, mono theme, fixed
   sizes and dates, `/mnt/projects/…` paths, against `tests/snapshots/*.snap`;
@@ -57,6 +59,8 @@ What each suite guards — the intent, not the case list:
   `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
   `FASTF_SHOT_STALLED=1` for an archive base that stopped answering,
   `FASTF_SHOT_LEFTOVERS=1` for what `!` lists,
+  `FASTF_SHOT_TENAX=1` for Tenax's box with a stored key and the mock
+  answering (`todo` makes his answer a proposed todo),
   `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
   only — drawn in `FASTF_SHOT_THEME`, default `doom-one`). **Look at every
   screen this way before writing its snapshot.**
@@ -162,6 +166,15 @@ the fix missed.
   `Sandbox::command` and `pty::run` drop `common::NOT_INHERITED`, then apply the
   test's own environment. A fastf-opened terminal exports `FASTF_RELAUNCHED` to
   every shell in it, which would otherwise fail the relaunch positives.
+- **No suite reaches the network.** `ANTHROPIC_API_KEY` and `FASTF_TENAX_URL`
+  are in `NOT_INHERITED` and cleared by `with_fresh_install`/`with_sandbox`,
+  because a developer's own key would send a test library to the real API on
+  their account. A test that wants Tenax to answer stores a key in the
+  sandbox and points `FASTF_TENAX_URL` (debug builds only) at
+  `common::tenax_mock`, a loopback server that keeps every request body for
+  the test to read; the state machine's tests need no server at all. **A fake
+  key never looks like a real one** (`sk-ant-api03-…`), or a secret scanner
+  flags the repository: write `fake-key-for-tests` or similar.
 - **`HOME` is always redirected**: an unconfigured `base_dir` falls back to it, and
   a harness that skips it scans the developer's real projects and self-heals the
   counter from them.

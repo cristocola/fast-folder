@@ -49,6 +49,7 @@ pub fn summary_local(cfg: &Config) -> SummaryPart {
             register_naming_pattern: cfg.register_naming_pattern.clone(),
             hat: cfg.resolve_hat(),
             agent: cfg.resolve_agent(),
+            tenax: crate::tui::app::data::TenaxPrefs::read(cfg),
         },
     }
 }
@@ -159,6 +160,9 @@ pub fn settings() -> Result<crate::tui::app::data::Settings> {
         next_id: Counters::format_id("ID", 4, next),
         data_dir: format!("{}   ({})", paths::display_path(&data_dir), mode.label()),
         attention: provisioning::list_incomplete(&cfg).len(),
+        tenax: cfg.tenax,
+        tenax_model: cfg.tenax_model.clone(),
+        tenax_key: crate::core::tenax::key::source(),
     })
 }
 

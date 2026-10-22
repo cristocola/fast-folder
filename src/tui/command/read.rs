@@ -186,7 +186,7 @@ pub fn movement_pair(
     };
     let (up, down) = (by(KeyCode::Up)?, by(KeyCode::Down)?);
     let what = match ctx {
-        Context::Modal | Context::Guide => "scroll",
+        Context::Modal | Context::Guide | Context::Chat => "scroll",
         Context::Palette | Context::Pick | Context::SearchEdit => "move",
         _ => "choose",
     };
@@ -256,9 +256,14 @@ pub fn hint_title(id: CommandId, title: &'static str, app: &App) -> &'static str
         CommandId::MarkToHere => "mark to here",
         CommandId::PaletteRun => "run",
         CommandId::PaletteClose => "close",
+        // In the chat, Enter sends and Esc closes it, the conversation kept.
+        CommandId::PromptConfirm if app.context() == Context::Chat => "send",
         CommandId::PromptConfirm => "confirm",
         CommandId::PromptNewline => "new line",
+        CommandId::PromptCancel if app.context() == Context::Chat => "close",
         CommandId::PromptCancel => "cancel",
+        CommandId::TenaxNewChat => "new chat",
+        CommandId::Tenax => "tenax",
         CommandId::PickChoose => "choose",
         CommandId::PickToggle => "toggle",
         CommandId::PickCancel => "cancel",

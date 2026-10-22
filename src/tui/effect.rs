@@ -115,6 +115,13 @@ pub enum Effect {
     /// way out: a choice of which bases to see is one a person expects to
     /// find again after a crash or a closed window.
     SaveSession,
+    /// Ask Tenax for the brief; answered by `Msg::TenaxBriefed`.
+    TenaxBrief(Box<crate::tui::app::tenax::BriefRequest>),
+    /// One turn of the chat; answered by `Msg::TenaxTurned`.
+    TenaxChat(Box<crate::tui::app::tenax::ChatRequest>),
+    /// Keep the brief for the next run (`<data dir>/tenax.json`), on the main
+    /// thread, so an older brief's write never lands after a newer one's.
+    SaveTenax(Box<crate::tui::app::tenax::Brief>),
     /// Give the terminal back, run something that needs it, take it again.
     Suspend(Suspended),
     Quit(Exit),
@@ -184,6 +191,10 @@ pub enum Action {
         key: &'static str,
         value: String,
     },
+    /// Save Tenax's key, or forget it with `None`. Never `SetConfig`: the
+    /// key is no configuration value, and `apply`'s echo would put it on the
+    /// status line and in both logs.
+    StoreTenaxKey(Option<crate::core::tenax::Secret>),
     /// First run: create the projects folder and record it.
     InitBaseDir(String),
     /// Raise the global counter. It never goes down.

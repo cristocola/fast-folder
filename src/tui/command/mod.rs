@@ -248,10 +248,16 @@ pub enum CommandId {
     ShowLog,
     // Ctrl-Z
     Suspend,
+    // Tenax
+    Tenax,
+    TenaxNewChat,
+    TenaxBrief,
+    TenaxStart,
+    TenaxToggle,
 }
 
 impl CommandId {
-    pub const ALL: [CommandId; 123] = [
+    pub const ALL: [CommandId; 128] = [
         CommandId::Quit,
         CommandId::Back,
         CommandId::Close,
@@ -375,6 +381,11 @@ impl CommandId {
         CommandId::SettingsFilter,
         CommandId::ShowLog,
         CommandId::Suspend,
+        CommandId::Tenax,
+        CommandId::TenaxNewChat,
+        CommandId::TenaxBrief,
+        CommandId::TenaxStart,
+        CommandId::TenaxToggle,
     ];
 }
 

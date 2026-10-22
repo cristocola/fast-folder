@@ -8,6 +8,7 @@ pub mod desk;
 pub mod modals;
 pub mod projects;
 pub mod templates;
+pub mod tenax;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -64,7 +65,7 @@ fn draw(app: &App, frame: &mut Frame) {
         render_too_small(app, frame, area);
         return;
     }
-    let regions = layout::regions(area, app.pane_live(), app.table_needs());
+    let regions = layout::regions(area, app.pane_live(), app.table_needs(), app.tenax_wanted());
 
     dashboard::header(app, frame, regions.header);
     // The tabs share every band but the middle one, so the chrome — the
@@ -99,6 +100,9 @@ fn draw(app: &App, frame: &mut Frame) {
                     None
                 }
             };
+            if let Some(tenax) = regions.tenax {
+                tenax::panel(app, frame, tenax);
+            }
             (caret, pane_caret)
         }
         crate::tui::app::Screen::Templates => {

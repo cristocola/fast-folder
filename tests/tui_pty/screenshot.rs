@@ -45,6 +45,11 @@
 //! looked) and a deleted project's folder (which that reconcile finishes).
 //! Give the app a moment first: `wait:2500 !`.
 //!
+//! `FASTF_SHOT_TENAX=1` saves a Tenax key in the sandbox and points him at a
+//! loopback stand-in for the API (`common::tenax_mock`), so his box and his
+//! chat can be looked at with no key and no network; `FASTF_SHOT_TENAX=todo`
+//! has his first answer propose a todo for the selected project.
+//!
 //! `FASTF_SHOT_STALLED=1` makes the showcase's archive base a mount that
 //! stopped answering (`paths:stall-base`, debug builds): its projects stay
 //! away and the header names it.
@@ -198,6 +203,42 @@ fn screenshot() {
     }
     if stalled.is_some() {
         env.push(("FASTF_FAULT", std::path::Path::new("paths:stall-base")));
+    }
+    // Tenax with a saved key, answering from a loopback stand-in for the API —
+    // never the real one, and never a real key.
+    let tenax = std::env::var("FASTF_SHOT_TENAX").unwrap_or_default();
+    let mock = (!real && !tenax.is_empty()).then(|| {
+        fs::write(sb.install.join("tenax.key"), "test-key-shot\n").unwrap();
+        // `todo`: his first answer proposes a todo, his second says so.
+        let chat = if tenax == "todo" {
+            vec![
+                common::tenax_mock::tool_reply(
+                    "toolu_shot",
+                    "add_todo",
+                    serde_json::json!({
+                        "project": "ID0208", "folder": null,
+                        "text": "Export the cover at 3000px", "phase": null
+                    }),
+                ),
+                common::tenax_mock::text_reply("Done. It's at the end of the list."),
+            ]
+        } else {
+            vec![common::tenax_mock::text_reply(
+                "Lullaby first: the bridge mix is the only thing standing between you and a finished track. Press + in its pane to add the next step, or ask me to.",
+            )]
+        };
+        common::tenax_mock::start(
+            common::tenax_mock::brief_reply(
+                "Morning. Three on your desk; the lullaby mix has sat four days, so start there.",
+                "ID0003",
+                "",
+                "Mix the bridge",
+            ),
+            chat,
+        )
+    });
+    if let Some(mock) = &mock {
+        env.push(("FASTF_TENAX_URL", std::path::Path::new(&mock.url)));
     }
     let (chunks, code) =
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);

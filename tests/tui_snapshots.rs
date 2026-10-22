@@ -736,11 +736,17 @@ fn settings_24_rows() {
             counter_floor: 248,
             next_id: "ID0249".to_string(),
             data_dir: "/home/user/.config/fastf".to_string(),
+            tenax: true,
             ..Default::default()
         })),
     );
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::End)));
-    snap("settings_24_rows", render_to_string(&app, 100, 24));
+    let frame = render_to_string(&app, 100, 24);
+    assert!(
+        frame.contains("API key"),
+        "the list ends on Tenax's group:\n{frame}"
+    );
+    snap("settings_24_rows", frame);
 }
 
 /// Slugs no template on disk answers to — `(registered)`, a template since
@@ -1938,6 +1944,154 @@ fn press_key(app: &mut App, key: Key) {
     let _ = update(app, Msg::Key(key));
 }
 
+/// The dashboard with Tenax on, a key saved, and a brief from the last run.
+fn tenax_fixture(width: u16, height: u16) -> App {
+    let mut app = fixture(12, width, height);
+    app.tenax.prefs = fastf::tui::app::data::TenaxPrefs {
+        enabled: true,
+        key: fastf::core::tenax::KeySource::Stored {
+            last4: "abcd".to_string(),
+        },
+        model: "claude-sonnet-5-5".to_string(),
+    };
+    app.tenax.brief = Some(fastf::tui::app::tenax::Brief {
+        say: "Morning. Three on your desk; the lullaby mix has sat four days, so start there."
+            .to_string(),
+        start: Some(fastf::tui::app::tenax::Start {
+            project: "ID0245".to_string(),
+            folder: "2026-01-10_Lullaby_ID0245".to_string(),
+            todo: "Mix the bridge".to_string(),
+        }),
+        at: "2026-01-20T08:00:00Z".to_string(),
+        fingerprint: "f".to_string(),
+    });
+    app
+}
+
+/// Tenax's chat, open, with one of everything a conversation holds.
+fn tenax_chat(width: u16, height: u16) -> App {
+    use fastf::tui::app::tenax::Said;
+    let mut app = tenax_fixture(width, height);
+    press_key(&mut app, Key::ch('.'));
+    app.tenax.transcript = vec![
+        Said::You("where should I start?".to_string()),
+        Said::Tenax(
+            "Lullaby. The bridge mix is the one thing between you and a finished track, \
+             and it has sat for four days. Want me to add the next step?"
+                .to_string(),
+        ),
+        Said::You("yes, add \"bounce a rough mix\"".to_string()),
+        Said::Done("added \"bounce a rough mix\" to ID0245".to_string()),
+        Said::Declined("tagged ID0245 urgent".to_string()),
+        Said::Trouble("Anthropic's busy. Ask me again in a minute.".to_string()),
+    ];
+    app
+}
+
+/// His box at the top of the pane's column: his face, the brief, where to
+/// start, and the key that talks to him. Mono, so his face is at rest.
+#[test]
+fn tenax_box_120x40() {
+    let app = tenax_fixture(120, 40);
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains(" Tenax "), "the box is drawn:\n{frame}");
+    assert!(frame.contains("Morning."), "the brief is in it:\n{frame}");
+    assert!(
+        frame.contains(". talk"),
+        "the key is on its border:\n{frame}"
+    );
+    snap("tenax_box_120x40", frame);
+}
+
+/// Thinking: the brief stays, and the last line says he is on it.
+#[test]
+fn tenax_box_thinking_120x40() {
+    let mut app = tenax_fixture(120, 40);
+    let _ = app_run_palette(&mut app, "Tenax: a fresh brief");
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains("thinking"), "{frame}");
+    snap("tenax_box_thinking_120x40", frame);
+}
+
+fn app_run_palette(app: &mut App, title: &str) -> Vec<fastf::tui::effect::Effect> {
+    press_key(app, Key::ch(':'));
+    for c in title.chars() {
+        press_key(app, Key::ch(c));
+    }
+    update(app, Msg::Key(Key::plain(KeyCode::Enter)))
+}
+
+/// His box in the ASCII alphabet: his face is ASCII, and no glyph of the
+/// Unicode alphabet is drawn.
+#[test]
+fn tenax_box_ascii_140x30() {
+    use fastf::tui::theme::{Glyphs, Theme};
+    let mut app = tenax_fixture(140, 30);
+    app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+    let frame = render_to_string(&app, 140, 30);
+    assert!(frame.contains("|o o|"), "his ASCII face:\n{frame}");
+    let unicode = Glyphs::unicode();
+    for glyph in [unicode.cursor, unicode.sep, unicode.ellipsis, unicode.warn] {
+        assert!(
+            !frame.contains(glyph),
+            "the ASCII theme drew {glyph:?}:\n{frame}"
+        );
+    }
+    snap("tenax_box_ascii_140x30", frame);
+}
+
+/// The chat: who said what, what came of each change, the line to type on.
+#[test]
+fn tenax_chat_120x40() {
+    let app = tenax_chat(120, 40);
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains("new chat"), "the chat's own keys:\n{frame}");
+    assert!(frame.contains("where should I start?"), "{frame}");
+    snap("tenax_chat_120x40", frame);
+}
+
+/// A change he proposes is a question that names the folder.
+#[test]
+fn tenax_proposal_120x40() {
+    let mut app = tenax_fixture(120, 40);
+    press_key(&mut app, Key::ch('.'));
+    for c in "add a todo".chars() {
+        press_key(&mut app, Key::ch(c));
+    }
+    let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            fastf::tui::effect::Effect::TenaxChat(request) => Some(request.request),
+            _ => None,
+        })
+        .expect("a request");
+    let id = app.library.selected().unwrap().id.clone();
+    let input = serde_json::json!({ "project": id, "folder": null, "text": "bounce a rough mix", "phase": null });
+    let _ = update(
+        &mut app,
+        Msg::TenaxTurned {
+            request,
+            result: Box::new(Ok(fastf::core::tenax::turn::Turn {
+                history: vec![serde_json::json!({ "role": "assistant", "content": "x" })],
+                text: String::new(),
+                ending: fastf::core::tenax::turn::Ending::NeedsApp,
+                carry: Vec::new(),
+                pending: vec![fastf::core::tenax::api::Call {
+                    id: "toolu_1".to_string(),
+                    name: "add_todo".to_string(),
+                    input,
+                }],
+                order: vec!["toolu_1".to_string()],
+                calls_left: 7,
+            })),
+        },
+    );
+    let frame = render_to_string(&app, 120, 40);
+    assert!(frame.contains("Tenax would add the todo"), "{frame}");
+    snap("tenax_proposal_120x40", frame);
+}
+
 /// **Every state draws at every size.** Each screen the suites can build is
 /// built once, then moved through a grid of window sizes the way a person
 /// dragging a corner moves it, and drawn at each. Nothing may panic, and what
@@ -2113,6 +2267,21 @@ fn every_state_draws_at_every_size() {
             press_key(&mut app, Key::plain(KeyCode::Right));
             app
         }),
+        ("tenax's box", || tenax_fixture(120, 40)),
+        ("tenax's box over a focused pane", || {
+            let mut app = tenax_fixture(120, 40);
+            press_key(&mut app, Key::ch('j'));
+            deliver_record(&mut app);
+            press_key(&mut app, Key::plain(KeyCode::Right));
+            press_key(&mut app, Key::ch('G'));
+            app
+        }),
+        ("tenax's chat", || tenax_chat(120, 40)),
+        ("tenax on the desk", || {
+            let mut app = desk_fixture(12, 120, 40);
+            app.tenax.prefs = tenax_fixture(120, 40).tenax.prefs.clone();
+            app
+        }),
         ("an add line", || {
             let mut app = fixture(12, 120, 40);
             press_key(&mut app, Key::ch('j'));
@@ -2138,6 +2307,16 @@ fn every_state_draws_at_every_size() {
                     continue;
                 }
                 let regions = app.regions();
+                // Tenax's box sits on top of the pane, inside the body, and
+                // the pane keeps its room under him.
+                if let (Some(tenax), Some(pane)) = (regions.tenax, regions.detail) {
+                    assert_eq!(tenax.y + tenax.height, pane.y, "{name} at {width}×{height}");
+                    assert!(
+                        tenax.y >= regions.body.y
+                            && pane.y + pane.height <= regions.body.y + regions.body.height
+                    );
+                    assert!(pane.height >= fastf::tui::layout::TENAX_PANE_MIN);
+                }
                 if app.focus == Focus::Detail
                     && app.detail_visible()
                     && let Some(pane) = regions.detail

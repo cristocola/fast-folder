@@ -75,6 +75,44 @@ pub fn help_columns(
     (keys_width, title_width, description_width)
 }
 
+/// Every key the app has, as plain text for Tenax's system prompt: each
+/// command with keys, where it fires, and what it does, grouped as the help
+/// groups them. Read from the registry, so it is the build's own; the same
+/// for every request, so it caches.
+pub fn reference_text() -> String {
+    let mut out = String::from(
+        "The guided app's keys, from its command registry (a command with no key is in the palette, c or :):\n",
+    );
+    for category in Category::ALL {
+        let commands: Vec<&Command> = COMMANDS
+            .iter()
+            .filter(|c| c.category == category && exists_here(c.id))
+            .filter(|c| !c.keys.is_empty() || c.palette)
+            .collect();
+        if commands.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("\n{}:\n", category.label()));
+        for c in commands {
+            let keys: Vec<String> = c.keys.iter().map(|k| k.label()).collect();
+            let keys = if keys.is_empty() {
+                "palette".to_string()
+            } else {
+                keys.join(" or ")
+            };
+            let mut places: Vec<&str> = c.contexts.iter().map(|ctx| ctx.label()).collect();
+            places.dedup();
+            out.push_str(&format!(
+                "- {keys}: {} — {} ({})\n",
+                c.title,
+                c.description,
+                places.join(", ")
+            ));
+        }
+    }
+    out
+}
+
 /// The one sentence for "there are no templates on disk", and the key it names
 /// is the key that makes one.
 pub const NO_TEMPLATES: &str = "no templates yet — n makes one";

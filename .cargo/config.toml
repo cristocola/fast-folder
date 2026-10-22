@@ -17,8 +17,10 @@
 # installer places the same exe.
 #
 # `+crt-static` pulls the runtime into the binary instead (a few hundred KB),
-# leaving only DLLs that are part of Windows itself. Nothing here links C code,
-# so there is no second CRT to conflict with.
+# leaving only DLLs that are part of Windows itself. The one C in the tree is
+# `ring`'s (the TLS under `util::http`), compiled by `cc`, which reads this same
+# target feature and builds it against the static runtime too, so there is no
+# second CRT to conflict with.
 #
 # This applies to native `cargo build` on Windows as well as to CI's
 # `--target x86_64-pc-windows-msvc`. Proc macros keep working either way: the

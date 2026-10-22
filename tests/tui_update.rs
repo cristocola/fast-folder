@@ -58,6 +58,8 @@ mod session;
 mod settings;
 #[path = "tui_update/studio.rs"]
 mod studio;
+#[path = "tui_update/tenax.rs"]
+mod tenax;
 #[path = "tui_update/terminal.rs"]
 mod terminal;
 #[path = "tui_update/theme.rs"]

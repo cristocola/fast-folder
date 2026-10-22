@@ -848,6 +848,9 @@ fn render_settings_footer(
             ("Ctrl-K", "drop the line"),
         ]),
         Some(Editing::Value { .. }) => pairs(&[("Enter", "keep"), ("Esc", "leave it unchanged")]),
+        Some(Editing::TenaxKey { .. }) => {
+            pairs(&[("Enter", "save"), ("Esc", "leave it unchanged")])
+        }
         None => registry_keys(app, Context::Settings, keys.width as usize),
     };
     frame.render_widget(
@@ -881,6 +884,20 @@ fn render_setting_editor(
                 // The same width the list uses, so the editor opens exactly
                 // over the row it belongs to.
                 Span::styled(format!("   {}  ", pad(label, label_width)), theme.accent()),
+                theme.text(),
+            )
+        }
+        // Drawn masked: the key is never on screen, not even while typed.
+        Editing::TenaxKey { input, .. } => {
+            let line = Rect::new(body.x, body.y + row, body.width, 1);
+            super::clear(frame, line, &app.theme);
+            input.masked('*').render_line(
+                line,
+                frame.buffer_mut(),
+                Span::styled(
+                    format!("   {}  ", pad("API key", label_width)),
+                    theme.accent(),
+                ),
                 theme.text(),
             )
         }

@@ -28,6 +28,11 @@ pub struct NextTodo {
     pub index: usize,
 }
 
+/// A todo given to someone in a project nothing has been written in for
+/// this many days, with nobody working there, reads as stuck: the desk marks
+/// it, and Tenax looks at the camera about it.
+pub const STUCK_AFTER_DAYS: u64 = 3;
+
 /// The owner of a project's next open todo, or why it has none.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Assignee {

@@ -167,6 +167,10 @@ pub enum ConfirmThen {
     DiscardTemplate {
         then_quit: Option<crate::tui::effect::Exit>,
     },
+    /// Forget the Tenax key saved in fastf.
+    ForgetTenaxKey,
+    /// A change Tenax proposed.
+    Tenax(Box<crate::tui::app::tenax::Proposal>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -578,6 +582,20 @@ impl App {
     }
 
     pub(super) fn on_confirm_key(&mut self, key: Key) -> Vec<Effect> {
+        // A proposal of Tenax's takes no yes in its first moment: a key
+        // pressed as it appeared was meant for the line under it.
+        let unarmed = matches!(
+            self.modals.top(),
+            Some(Modal::Confirm(Confirm { then: ConfirmThen::Tenax(proposal), .. }))
+                if self.elapsed_ms < proposal.armed_at
+        );
+        let yes = matches!(
+            key.code,
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter
+        ) && !key.ctrl;
+        if unarmed && yes {
+            return Vec::new();
+        }
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') if !key.ctrl => self.answer_confirm(true),
             KeyCode::Char('n') | KeyCode::Char('N') if !key.ctrl => {
@@ -626,6 +644,10 @@ impl App {
                     None => Vec::new(),
                 }
             }
+            ConfirmThen::ForgetTenaxKey => {
+                self.run_action("removing the key…", Action::StoreTenaxKey(None))
+            }
+            ConfirmThen::Tenax(proposal) => self.answer_tenax(*proposal, true),
         }
     }
 

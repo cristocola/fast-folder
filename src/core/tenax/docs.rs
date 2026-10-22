@@ -135,17 +135,19 @@ mod tests {
 
     /// A Windows checkout gives the guides `\r\n` endings, and the build
     /// embeds them so: every section reads the same as from an `\n` checkout.
+    /// Both spellings are made here, since the compiled-in one is whichever
+    /// this checkout has.
     #[test]
     fn a_guide_checked_out_with_crlf_reads_the_same_sections() {
         for name in GUIDES {
-            let text = guide(name).unwrap();
-            let crlf = text.replace('\n', "\r\n");
-            let list = lookup_in(name, text, None).unwrap();
+            let lf = guide(name).unwrap().replace("\r\n", "\n");
+            let crlf = lf.replace('\n', "\r\n");
+            let list = lookup_in(name, &lf, None).unwrap();
             assert_eq!(lookup_in(name, &crlf, None).unwrap(), list, "{name}");
             for heading in list.lines() {
                 assert_eq!(
                     lookup_in(name, &crlf, Some(heading)),
-                    lookup_in(name, text, Some(heading)),
+                    lookup_in(name, &lf, Some(heading)),
                     "{name}: {heading}"
                 );
             }

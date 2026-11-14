@@ -809,6 +809,55 @@ fn q_cancels_the_ambiguity_picker_like_esc() {
     );
 }
 
+/// A move on a terminal lists what uses the folder and asks `Move anyway?` in
+/// place of `Move this project?`: no is the default and moves nothing, yes
+/// moves it past what it named.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_move_in_use_asks_move_anyway_in_place_of_its_question() {
+    let sb = Sandbox::new();
+    let archive = sb.with_bases(&["archive"]).remove(0);
+    let project = sb.plant_project(&sb.base, "proj", "ID0001");
+    let mut sitter = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&project)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let (out, code) = run_cli(
+        &sb,
+        &["move", "ID0001", "archive"],
+        pty::Script::new().pause(1500).enter().pause(600).build(),
+    );
+    let text = pty::plain(&out);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("in use:"), "{text}");
+    assert!(
+        text.contains(&format!("sleep (pid {}) is working in", sitter.id())),
+        "{text}"
+    );
+    assert!(text.contains("Move anyway?"), "{text}");
+    assert!(!text.contains("Move this project?"), "one question: {text}");
+    assert!(text.contains("nothing was moved"), "{text}");
+    assert!(project.is_dir());
+
+    let (out, code) = run_cli(
+        &sb,
+        &["move", "ID0001", "archive"],
+        pty::Script::new().pause(1500).key("y").pause(3000).build(),
+    );
+    let _ = sitter.kill();
+    let _ = sitter.wait();
+    let text = pty::plain(&out);
+    assert_eq!(code, 0, "{text}");
+    assert!(archive.join("proj").is_dir(), "{text}");
+    assert!(
+        text.contains("note:") && text.contains("sleep (pid"),
+        "{text}"
+    );
+}
+
 /// A yes/no answers on the keypress, with no Enter. That is what makes
 /// `fastf new`'s confirmation one keystroke, and a trailing `\r` would survive
 /// into whatever asked next.

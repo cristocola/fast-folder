@@ -646,7 +646,7 @@ mod tests {
     #[test]
     fn a_shell_says_the_path_its_rc_builds() {
         let _flag = flag_down();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::util::test_env::programs_dir();
         let shell = answering_shell(
             dir.path(),
             "echo 'a banner on stdout'\nPATH=/hidden/bin:$PATH; export PATH",
@@ -665,11 +665,11 @@ mod tests {
     #[test]
     fn the_shell_is_asked_interactive_and_without_a_terminal() {
         let _flag = flag_down();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::util::test_env::programs_dir();
         let shell = answering_shell(
             dir.path(),
             &format!(
-                "printf '%s\\n' \"$@\" > {log}\n( : < /dev/tty ) 2>/dev/null && echo tty >> {log}",
+                "printf '%s\\n' \"$@\" > '{log}'\n( : < /dev/tty ) 2>/dev/null && echo tty >> '{log}'",
                 log = dir.path().join("asked").display()
             ),
         );
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn a_job_the_rc_leaves_running_does_not_hold_the_answer() {
         let _flag = flag_down();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::util::test_env::programs_dir();
         let shell = answering_shell(dir.path(), "sleep 5 &");
         let started = Instant::now();
         assert!(matches!(
@@ -707,12 +707,12 @@ mod tests {
     #[test]
     fn a_shell_that_does_not_answer_is_given_up_on_whole() {
         let _flag = flag_down();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::util::test_env::programs_dir();
         let late = dir.path().join("late");
         let shell = shell_script(
             dir.path(),
             "stuck-shell",
-            &format!("(sleep 1; touch {}) &\nsleep 30", late.display()),
+            &format!("(sleep 1; touch '{}') &\nsleep 30", late.display()),
         );
         let started = Instant::now();
         assert_eq!(ask(&shell, Duration::from_millis(300)), Asked::GaveUp);
@@ -731,7 +731,7 @@ mod tests {
     #[test]
     fn a_shell_that_prints_no_markers_is_silent() {
         let _flag = flag_down();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::util::test_env::programs_dir();
         let shell = shell_script(dir.path(), "odd-shell", "echo 'unknown option -i'; exit 2");
         assert_eq!(ask(&shell, Duration::from_secs(5)), Asked::Silent);
         assert_eq!(

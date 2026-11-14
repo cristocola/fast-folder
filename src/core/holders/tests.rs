@@ -1076,7 +1076,9 @@ fn a_writer_is_seen_writing_and_a_sitter_working() {
 /// outside.
 #[test]
 fn a_program_run_from_the_folder_and_one_named_in_its_arguments() {
-    let temp = tempfile::tempdir().unwrap();
+    // The project runs a program copied into it: never the builder's
+    // temporary folder, which may be mounted `noexec`.
+    let temp = crate::util::test_env::programs_dir();
     let root = temp.path().join("project");
     std::fs::create_dir_all(root.join("bin")).unwrap();
     // A shell, which runs under any name: where coreutils is one binary
@@ -1162,15 +1164,20 @@ fn a_library_loaded_from_the_folder_is_seen() {
         eprintln!("no library to copy in this process's maps; skipped");
         return;
     };
-    let temp = tempfile::tempdir().unwrap();
+    // Loaded from the project: never the builder's temporary folder, which
+    // may be mounted `noexec`.
+    let temp = crate::util::test_env::programs_dir();
     let root = temp.path().join("project");
     std::fs::create_dir_all(root.join("lib")).unwrap();
     let copy = root.join("lib").join(library.file_name().unwrap());
     std::fs::copy(&library, &copy).unwrap();
+    // By name, found on the library path: the loader splits `LD_PRELOAD` at
+    // spaces, and the temporary folder may have one in it.
     let loader = spawn(
         std::process::Command::new("sleep")
             .arg("30")
-            .env("LD_PRELOAD", &copy)
+            .env("LD_LIBRARY_PATH", root.join("lib"))
+            .env("LD_PRELOAD", copy.file_name().unwrap())
             .current_dir("/"),
     );
     let pid = loader.0.id();

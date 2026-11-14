@@ -42,9 +42,16 @@ pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 /// shell fastf asks for its `PATH` (`util::login_path`): inherited, every suite
 /// would start the developer's own interactive shell, rc files and all.
 ///
+/// `DISPLAY` and `WAYLAND_DISPLAY` are the builder's own screen, and the AUR
+/// package runs this suite on a desktop: a test that wants a display sets the
+/// fake `:99`, which no window can open on, so a fake terminal that cannot run
+/// (a temporary folder mounted `noexec`) never falls through to a real one
+/// that opens on that screen.
+///
 /// [`not_inherited`] adds every variable the theme reads, which repaint what
 /// the pty suite reads back; iterate that, not this.
 pub const NOT_INHERITED: &[&str] = &[
+    "DISPLAY",
     "EDITOR",
     "FASTF_ASKING_SHELL",
     "FASTF_FAULT",
@@ -55,6 +62,7 @@ pub const NOT_INHERITED: &[&str] = &[
     "SHELL",
     "SSH_CONNECTION",
     "TERMINAL",
+    "WAYLAND_DISPLAY",
 ];
 
 /// Everything a spawned fastf is started without: [`NOT_INHERITED`] and the
@@ -73,6 +81,18 @@ pub struct Sandbox {
     pub tmp: tempfile::TempDir,
     pub install: PathBuf,
     pub base: PathBuf,
+    programs: tempfile::TempDir,
+}
+
+/// A folder for programs a test writes and then runs, under cargo's own
+/// `CARGO_TARGET_TMPDIR` beside the test binaries. The builder's temporary
+/// folder may be mounted `noexec`, as hardening guides advise, and nothing
+/// written there can be started; the build folder always runs programs.
+pub fn programs_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("programs")
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .expect("a folder under CARGO_TARGET_TMPDIR")
 }
 
 impl Sandbox {
@@ -83,7 +103,12 @@ impl Sandbox {
         let base = tmp.path().join("base");
         fs::create_dir_all(install.join("templates")).unwrap();
         fs::create_dir_all(&base).unwrap();
-        let sb = Sandbox { tmp, install, base };
+        let sb = Sandbox {
+            tmp,
+            install,
+            base,
+            programs: programs_dir(),
+        };
         let out = sb.run(&["config", "set", "base-dir", &sb.base.display().to_string()]);
         assert!(out.status.success(), "config set base-dir failed: {out:?}");
         sb
@@ -96,7 +121,18 @@ impl Sandbox {
         let install = tmp.path().join("install");
         let base = tmp.path().join("base");
         fs::create_dir_all(install.join("templates")).unwrap();
-        Sandbox { tmp, install, base }
+        Sandbox {
+            tmp,
+            install,
+            base,
+            programs: programs_dir(),
+        }
+    }
+
+    /// Where this sandbox's fake programs go — a terminal, a shell, an editor,
+    /// a folder put on `PATH` — and are run from ([`programs_dir`]).
+    pub fn programs(&self) -> &Path {
+        self.programs.path()
     }
 
     /// Say the template guide has already been read.
@@ -1068,14 +1104,15 @@ pub fn recorder(dir: &Path, name: &str) -> Recorder {
     let program = dir.join(name);
     // The working directory and the environment go to their own files, written
     // before the argv log: `wait_for_call` polls the argv log, so by the time it
-    // answers, both are already on disk.
+    // answers, both are already on disk. Every path is one quoted word: the
+    // suite's temporary folder may have a space in it.
     fs::write(
         &program,
         format!(
             "#!/bin/sh\npwd >> {}\nenv >> {}\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
-            cwd_log.display(),
-            env_log.display(),
-            log.display()
+            sh_word(&cwd_log),
+            sh_word(&env_log),
+            sh_word(&log)
         ),
     )
     .unwrap();
@@ -1086,6 +1123,15 @@ pub fn recorder(dir: &Path, name: &str) -> Recorder {
         cwd_log,
         env_log,
     }
+}
+
+/// `path` as one word of shell source, whatever it holds. A fake program's
+/// script is the one place a test writes a path into shell source, and the
+/// temporary folder every sandbox lives in is the builder's (`TMPDIR`), which
+/// may have a space in it.
+#[cfg(unix)]
+pub fn sh_word(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
 }
 
 #[cfg(unix)]

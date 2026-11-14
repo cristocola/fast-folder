@@ -19,7 +19,7 @@ use std::fs;
 /// A sandbox whose configured terminal is a recorder, plus that recorder.
 fn sandbox_with_recorder() -> (Sandbox, common::Recorder) {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "fake-terminal");
+    let rec = recorder(&sb.programs().join("bin"), "fake-terminal");
     sb.ok(&[
         "config",
         "set",
@@ -172,7 +172,7 @@ fn path_headless_gui_copies_and_notifies_but_still_prints() {
 
     // A PATH holding nothing but a fake `notify-send`: no clipboard tool is
     // found either, which is the honest state of a machine like this.
-    let bin = sb.tmp.path().join("notify-bin");
+    let bin = sb.programs().join("notify-bin");
     let notify = recorder(&bin, "notify-send");
 
     let run = sb.run_like_a_launcher(

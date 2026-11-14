@@ -279,12 +279,15 @@ pub fn write_verdicts(verdicts: &[Verdict]) {
 pub fn attention(cfg: &Config) -> Attention {
     let bases = cfg.effective_bases();
     let probed = crate::util::paths::probe_dirs(&bases, crate::util::paths::PROBE_TIMEOUT);
-    attention_probed(probed)
+    attention_probed(cfg, probed)
 }
 
 /// [`attention`], over bases already probed — the app's summary probes them
 /// once for both.
-pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> Attention {
+pub fn attention_probed(
+    cfg: &Config,
+    probed: Vec<(PathBuf, crate::util::paths::Probe)>,
+) -> Attention {
     let mut items = Vec::new();
     let mut answering = Vec::new();
     for (base, probe) in probed {
@@ -318,7 +321,7 @@ pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> At
     for incomplete in incomplete {
         let path = PathBuf::from(&incomplete.path);
         items.push(match incomplete.kind {
-            IncompleteKind::Move => move_item(&incomplete, path, &verdict_for),
+            IncompleteKind::Move => move_item(cfg, &incomplete, path, &verdict_for),
             IncompleteKind::Leftover => {
                 let name = path
                     .file_name()
@@ -479,6 +482,7 @@ fn needs_you(what: &str, path: PathBuf, project: Option<String>, verdict: &Verdi
 /// A move's record: finished by a reconcile, unless it began on another
 /// machine, its source is not mounted, or its last pass left a verdict.
 fn move_item<'v>(
+    cfg: &Config,
     incomplete: &provisioning::Incomplete,
     path: PathBuf,
     verdict_for: &impl Fn(&Path, Option<&str>) -> Option<&'v Verdict>,
@@ -523,7 +527,7 @@ fn move_item<'v>(
     // would only be refused, every time the app starts one.
     if let Some(why) = record
         .as_deref()
-        .and_then(|record| paused_in_use(record, &journal))
+        .and_then(|record| paused_in_use(cfg, record, &journal))
     {
         return Item {
             state: State::Waiting,
@@ -554,8 +558,14 @@ fn move_item<'v>(
 }
 
 /// What uses a paused move's original, as the refusal its resume would
-/// give; `None` when the record is not a paused move, or nothing does.
-fn paused_in_use(record: &Path, journal: &transactions::MoveJournal) -> Option<String> {
+/// give — asked the way the resume asks it (`move_engine::
+/// ask_before_resuming`), on every platform, about the folder in both
+/// spellings; `None` when the record is not a paused move, or nothing does.
+fn paused_in_use(
+    cfg: &Config,
+    record: &Path,
+    journal: &transactions::MoveJournal,
+) -> Option<String> {
     let target_base = record.parent()?.parent()?;
     let paused = journal.phase == transactions::MovePhase::Copying
         && transactions::transaction_from_journal(target_base, record, journal.clone()).is_paused();
@@ -563,9 +573,9 @@ fn paused_in_use(record: &Path, journal: &transactions::MoveJournal) -> Option<S
         return None;
     }
     let source = journal.source_base.join(&journal.source_folder);
-    let folder = crate::core::holders::Folder::at(&source, &journal.project_id);
+    let folder = crate::core::holders::Folder::configured(cfg, &source, &journal.project_id);
     let guard = crate::core::holders::Guard::here(false);
-    crate::core::holders::check(&folder, crate::core::holders::Verb::Move, &guard)
+    crate::core::move_engine::ask_before_resuming(&folder, &guard, None)
         .err()
         .map(|error| format!("{error}"))
 }
@@ -945,7 +955,7 @@ mod tests {
         };
 
         plant_conflict(install.path(), &old_copy, Some("20260101T000000Z-1-1"));
-        let attention = attention_probed(bases());
+        let attention = attention_probed(&Config::default(), bases());
         assert_eq!(
             the_move(&attention).state,
             State::Auto,
@@ -957,7 +967,7 @@ mod tests {
             &old_copy,
             Some(&transaction.journal.operation_id),
         );
-        let attention = attention_probed(bases());
+        let attention = attention_probed(&Config::default(), bases());
         let item = the_move(&attention);
         assert_eq!(
             item.state,
@@ -969,7 +979,7 @@ mod tests {
         // A verdict an older fastf wrote names no operation, and is matched
         // by its folder as it always was.
         plant_conflict(install.path(), &old_copy, None);
-        let attention = attention_probed(bases());
+        let attention = attention_probed(&Config::default(), bases());
         assert_eq!(the_move(&attention).state, State::NeedsYou, "{attention:?}");
     }
 

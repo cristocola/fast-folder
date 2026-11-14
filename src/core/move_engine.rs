@@ -414,7 +414,7 @@ fn move_project_unlocked_in_parts(
     }
     // The same move, paused before its publish: it goes on from its copy.
     if let Some(transaction) = paused_move(project, &new_base) {
-        let found = ask_before_resuming(project, asked, guard, in_use)?;
+        let found = ask_before_resuming(asked, guard, in_use)?;
         return resume_in_parts(
             project,
             &new_base,
@@ -667,9 +667,9 @@ pub(crate) fn paused_move(project: &Project, new_base: &Path) -> Option<MoveTran
 /// What uses a paused move's folder, asked **before** its copy is adopted:
 /// a refusal after that would be a failure before the publish, which throws
 /// the copy away. The answer from before the rename when there is one; where
-/// nothing is asked then, Windows' holds.
+/// nothing is asked then, Windows' holds. `attention` asks this too, so what
+/// `!` calls waiting is exactly what a resume would refuse.
 pub(crate) fn ask_before_resuming(
-    project: &Project,
     folder: &Folder,
     guard: &Guard,
     in_use: Option<&Holders>,
@@ -680,7 +680,7 @@ pub(crate) fn ask_before_resuming(
     if holders::BEFORE_THE_RENAME {
         return holders::check(folder, Verb::Move, guard);
     }
-    match holders::held_on_windows(&project.path) {
+    match holders::held_on_windows(&folder.path) {
         Some(held) => anyhow::bail!("{held}"),
         None => Ok(Holders::nothing(folder)),
     }

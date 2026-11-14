@@ -320,15 +320,7 @@ fn reconcile_transaction(
             ));
         }
         MovePhase::Copying if transaction.is_paused() => {
-            reconcile_paused(
-                &found.source_base,
-                target_base,
-                &found.final_path,
-                transaction,
-                &subject,
-                report,
-                pass,
-            );
+            reconcile_paused(cfg, &found, transaction, report, pass);
         }
         MovePhase::Copying => reconcile_copying(&found, transaction, report),
         MovePhase::ReadyToCommit if journal.in_place => {

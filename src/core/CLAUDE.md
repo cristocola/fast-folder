@@ -593,7 +593,11 @@ entry points (`library::move_project`, `move_project_configured_with_outcome`,
 `delete_project_configured`, `rename_project_unlocked`) take it, and no
 surface reaches them — production reaches the engine through jobs and
 `operations::rename`, which ask. Reconcile files an `InUse` paused move under
-`waiting` and touches nothing; `attention` lists it as `Waiting`.
+`waiting` and touches nothing; `attention` lists it as `Waiting`. **Both ask
+`ask_before_resuming` about `Folder::of`/`Folder::configured`**, the job's
+question in both spellings, so what `!` calls waiting is exactly what a resume
+refuses — on Windows, what holds the folder — and the app never starts a
+reconcile every minute that would only be refused.
 
 **On Windows nothing is asked before the rename** (`BEFORE_THE_RENAME`):
 Windows refuses it itself while anything under the folder is open — a file

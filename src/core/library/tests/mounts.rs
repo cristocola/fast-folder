@@ -545,6 +545,166 @@ fn reconcile_keeps_a_paused_moves_copy_while_its_folder_is_in_use() {
     assert_eq!(fs::read(new_path.join("data.bin")).unwrap(), [9_u8; 4096]);
 }
 
+/// **A paused move asks about its folder in both spellings**, as the job
+/// that moves it does: a unit that names the project through the base as it
+/// is configured — a link to where it really is — keeps the move waiting,
+/// and `!` lists it as waiting rather than starting a reconcile every
+/// minute.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_paused_move_waits_for_a_unit_naming_its_folder_through_the_configured_base() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("xdg-config");
+    let units = config.join("systemd").join("user");
+    fs::create_dir_all(&units).unwrap();
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    let tmp0 = tempfile::tempdir().unwrap();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (real_base, new_base) = (tmp1.path(), tmp2.path());
+    let link = tmp0.path().join("Projects");
+    std::os::unix::fs::symlink(real_base, &link).unwrap();
+    write_project(real_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(real_base.join("proj_a/aa-empty.txt"), "").unwrap();
+    fs::write(real_base.join("proj_a/data.bin"), [9_u8; 4096]).unwrap();
+    let cfg = cfg_for(&link, &[new_base]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    let paused = crate::util::faults::with_thread_fault(
+        "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
+        || {
+            crate::core::move_engine::move_project_in_parts(
+                &project,
+                new_base,
+                &crate::core::holders::Guard::off(),
+                &progress,
+                &cancel,
+            )
+        },
+    );
+    assert!(
+        paused
+            .unwrap_err()
+            .downcast_ref::<crate::core::move_engine::Paused>()
+            .is_some()
+    );
+
+    let unit = format!("fastf-test-paused-{}.service", std::process::id());
+    fs::write(
+        units.join(&unit),
+        format!(
+            "[Service]\nWorkingDirectory={}\nExecStart=/bin/true\n",
+            link.join("proj_a").display()
+        ),
+    )
+    .unwrap();
+    let item = crate::core::attention::attention(&cfg)
+        .items
+        .into_iter()
+        .find(|item| {
+            item.project
+                .as_deref()
+                .is_some_and(|p| p.starts_with("ID0001"))
+        });
+    let waiting = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(waiting.resumed, 0, "{waiting:?}");
+    assert!(
+        waiting.waiting.iter().any(|said| said.contains(&unit)),
+        "{waiting:?}"
+    );
+    assert!(real_base.join("proj_a/data.bin").is_file(), "not moved");
+    assert_eq!(v2_transaction_count(new_base), 1, "the record waits");
+    let item = item.expect("the paused move is listed");
+    assert_eq!(
+        item.state,
+        crate::core::attention::State::Waiting,
+        "{item:?}"
+    );
+    assert!(item.reason.contains(&unit), "{}", item.reason);
+
+    fs::remove_file(units.join(&unit)).unwrap();
+    let resumed = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(resumed.resumed, 1, "{resumed:?}");
+    drop(env);
+}
+
+/// **On Windows a paused move whose folder is held waits too**, though
+/// nothing is asked before a rename there: `!` asks what the resume asks —
+/// what holds the folder — so the item is waiting, and the app does not
+/// start a reconcile every minute that would only be refused.
+#[cfg(windows)]
+#[test]
+fn a_paused_move_whose_folder_is_held_on_windows_waits() {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_SHARE_READ: u32 = 0x1;
+    const FILE_SHARE_WRITE: u32 = 0x2;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::create_dir(old_base.join("proj_a/src")).unwrap();
+    fs::write(old_base.join("proj_a/aa-empty.txt"), "").unwrap();
+    fs::write(old_base.join("proj_a/data.bin"), [9_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    let paused = crate::util::faults::with_thread_fault(
+        "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
+        || {
+            crate::core::move_engine::move_project_in_parts(
+                &project,
+                new_base,
+                &crate::core::holders::Guard::off(),
+                &progress,
+                &cancel,
+            )
+        },
+    );
+    assert!(
+        paused
+            .unwrap_err()
+            .downcast_ref::<crate::core::move_engine::Paused>()
+            .is_some()
+    );
+
+    // How a console holds the folder it works in: open, without delete
+    // sharing.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(project.path.join("src"))
+        .unwrap();
+    let item = crate::core::attention::attention(&cfg)
+        .items
+        .into_iter()
+        .find(|item| {
+            item.project
+                .as_deref()
+                .is_some_and(|p| p.starts_with("ID0001"))
+        });
+    let waiting = crate::core::provisioning::reconcile_unlocked(&cfg);
+    drop(held);
+    let item = item.expect("the paused move is listed");
+    assert_eq!(
+        item.state,
+        crate::core::attention::State::Waiting,
+        "{item:?}"
+    );
+    assert!(item.reason.contains("working in"), "{}", item.reason);
+    assert_eq!(waiting.resumed, 0, "{waiting:?}");
+    assert!(project.path.join("data.bin").is_file(), "not moved");
+
+    let resumed = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(resumed.resumed, 1, "{resumed:?}");
+}
+
 /// A staged move that asks nothing about what uses its folder.
 fn unasked(project: &Project) -> (crate::core::holders::Folder, crate::core::holders::Guard) {
     (

@@ -72,6 +72,30 @@ green rather than a checklist to work through. Each one runs locally:
   ```
   A test that reads the terminal clears `theme::Env::VARIABLES` whole, and a
   spawned fastf is started without them (`tests/CLAUDE.md`).
+- `cargo test --release` **in a clean room**: nothing in the environment but
+  `PATH` and `HOME`, the C locale, a strict umask, a time zone far from UTC,
+  and a temporary folder with a space in its path, in a build folder of its
+  own so it never shares one with another run:
+  ```
+  T="$(mktemp -d)/tmp dir with space"; mkdir -p "$T"
+  (umask 077; env -i PATH=/usr/bin:/bin HOME="$HOME" LANG=C \
+    TZ=Pacific/Kiritimati TMPDIR="$T" CARGO_TARGET_DIR="$(mktemp -d)" \
+    cargo test --release)
+  ```
+  and once with a **`noexec` temporary folder**, as hardening guides advise,
+  mounted in a private namespace and run as yourself, not its root (whose
+  permissions would change what the permission tests see). The
+  systemd-unit job test fails there alone: its unit runs outside the
+  namespace and cannot see the folder.
+  ```
+  D=$(mktemp -d); unshare -Urm sh -c "mount -t tmpfs -o noexec tmpfs $D && \
+    exec unshare -U --map-user=$(id -u) --map-group=$(id -g) \
+    env TMPDIR=$D cargo test"
+  ```
+  **Never run a suite on the desktop's own display**: `env -u DISPLAY -u
+  WAYLAND_DISPLAY` in front of every run here, a subagent's included. The
+  suites start nothing on a display (`tests/CLAUDE.md`), and that is what
+  keeps it true while a change to them is being tried.
 - `cargo build --release --locked --target x86_64-unknown-linux-musl`: no PR
   job builds the static musl archive, and it is the one target that compiles
   C (mimalloc). Only the Release workflow would find a break, after the tag.
@@ -88,7 +112,7 @@ Because `gates` is the whole of CI, **any CI failure is a failed release**.
 Every release failure this project has had was a *test* failure — never a
 build, the MSI or the AUR packages — and each one was an environment delta that
 does not reproduce on the maintainer's Arch desktop, which is why `cargo test`
-was green when the tag went up. Eight patterns:
+was green when the tag went up. Nine patterns:
 
 | pattern | platform | nature | how it reads |
 |---|---|---|---|
@@ -100,6 +124,7 @@ was green when the tag went up. Eight patterns:
 | a rustdoc lint | both | deterministic | `docs build clean` failing on `redundant_explicit_links`, or a `pub` item's docs linking to a `pub(crate)` one |
 | a forked child holding a file the test just let go of | Linux, mostly the AUR `check()` | racy | a script just written fails to run (`ETXTBSY`, a shell read as silent), or a lock just dropped is found held |
 | the terminal the suite runs in announcing itself | Linux, the AUR `check()` | deterministic in that terminal | a palette or alphabet assertion (`Ansi` read as `DoomOne`) failing in one emulator and passing in the next |
+| the builder's temporary folder: a space in its path, or mounted `noexec` | Linux, the AUR `check()` | deterministic on that machine | a fake terminal, shell or editor "never started", `Permission denied` running a script just written, a shell line split at a space |
 
 Recognising them: a Windows-only failure in a path comparison is almost always
 the first; `traced()` prints the whole trace file beside its count for the

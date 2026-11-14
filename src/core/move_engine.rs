@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::assets::{JobPhase, Progress};
 use crate::core::config::Config;
@@ -403,6 +403,12 @@ fn move_project_unlocked_in_parts(
         None
     };
     let in_use = in_use.as_ref();
+    // A cancel that came while that look ran is read here, before anything
+    // changes: the next step on one filesystem is the rename, which no
+    // cancel can undo. The look itself is never cut short.
+    if cancel.load(Ordering::Relaxed) {
+        anyhow::bail!("move of '{}' cancelled", project.name);
+    }
     // The same move, paused before its publish: it goes on from its copy.
     if let Some(transaction) = paused_move(project, &new_base) {
         let found = ask_before_resuming(project, asked, guard, in_use)?;
@@ -813,8 +819,6 @@ impl Staged<'_> {
         adopt: bool,
         reached: &mut Reached,
     ) -> Result<(MoveManifest, MoveManifest)> {
-        use std::sync::atomic::Ordering;
-
         let Self {
             project,
             old_base,
@@ -964,8 +968,6 @@ impl Staged<'_> {
         reached: &Reached,
         error: anyhow::Error,
     ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
-        use std::sync::atomic::Ordering;
-
         let Self {
             project,
             new_base,

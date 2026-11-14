@@ -936,8 +936,11 @@ any other fastf can follow it (`fastf jobs watch`, `L` in the app) or cancel
 it. `move`, `copy-to`, `delete` and `reconcile` all take `--detach`.
 
 A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
-after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
-between items. A job whose process was killed shows as `stopped`;
+after that it is too late, and `fastf jobs cancel` says so. A move on one
+drive, which is a rename, is never half done: a cancel that comes while it
+checks what uses the folder moves nothing. A delete stops the same way until
+its folder leaves the library, and a Ctrl-C while the command line itself
+checks starts no job at all. A reconcile stops between items. A job whose process was killed shows as `stopped`;
 `fastf reconcile` finishes what it left, whole.
 
 **A job waits out a filesystem that stops answering.** When nothing has moved

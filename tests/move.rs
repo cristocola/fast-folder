@@ -283,6 +283,37 @@ fn a_cancel_undoes_a_move_before_its_publish_and_changes_nothing_after() {
     });
 }
 
+/// **A cancel that arrives while the move asks what uses the folder moves
+/// nothing**: the look runs to its end, and the rename on one filesystem —
+/// the next thing after it, and done in an instant — never starts. The job
+/// ends `Cancelled`, so the command line and the app say nothing was moved.
+#[test]
+fn a_cancel_raised_before_the_rename_moves_nothing() {
+    use fastf::core::assets::{JobStatus, Progress};
+    use std::sync::atomic::AtomicBool;
+
+    sandboxed(|install| {
+        let (project, base_b) = one_project_two_bases(install);
+        let progress = Mutex::new(Progress::new(&[]));
+        let cancel = AtomicBool::new(true);
+        let result = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        );
+        assert!(
+            result.is_err(),
+            "{:?}",
+            result.map(|outcome| outcome.project)
+        );
+        assert_eq!(progress.lock().unwrap().status, JobStatus::Cancelled);
+        assert!(project.path.is_dir(), "the original is where it was");
+        assert!(!base_b.join(project.path.file_name().unwrap()).exists());
+    });
+}
+
 #[test]
 fn move_project_between_bases_full_round_trip() {
     sandboxed(|install| {

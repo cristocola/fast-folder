@@ -562,7 +562,10 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
   a resume; the rename before its first `rename_dir`; the delete after
   `refuse_mounts_inside`. A paused move is asked **before** its copy is
   adopted (`ask_before_resuming`), never inside `copy_and_publish`: a refusal
-  there is a failure before the publish, which removes the paused copy;
+  there is a failure before the publish, which removes the paused copy. **A
+  cancel that came during the look is read right after it**, before anything
+  changes — the move's rename and the delete's rename aside cannot be taken
+  back — and the look itself runs to its end, as every check does;
 - **the folder in both spellings**: `Folder::of` rebuilds the configured one
   from the configured base whose canonical form is the folder's parent, since
   under the lock the project is canonical and a unit or an argument may spell

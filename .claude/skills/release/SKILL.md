@@ -82,6 +82,11 @@ green rather than a checklist to work through. Each one runs locally:
     TZ=Pacific/Kiritimati TMPDIR="$T" CARGO_TARGET_DIR="$(mktemp -d)" \
     cargo test --release)
   ```
+  **`ls -A "$T"` is empty afterwards**: the AUR build runs in the
+  installer's own temporary folder, and a test that leaves something there
+  (a sealed folder its `TempDir` cannot remove, a job whose last write lands
+  after its sandbox is gone — `Sandbox::wait_for_jobs`) leaves it on every
+  machine that installs fastf.
   and once with a **`noexec` temporary folder**, as hardening guides advise,
   mounted in a private namespace and run as yourself, not its root (whose
   permissions would change what the permission tests see). The

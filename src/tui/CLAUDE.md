@@ -1022,9 +1022,38 @@ toggles at once**: Enter sends `Action::ToggleTodo` and records `App.pane_pendin
 rather than opening a `PaneEdit`, because `App::context()` answers
 `Context::PaneEdit` whenever `pane_edit` is set, and a toggle has no field. Adds
 set `pane_pending` to the new item's ordinal, so the cursor follows it. The hint
-bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`) through
+bar's Enter names what it will do (`edit`, `toggle`, `add`, `show`, `hide`) through
 `command::hint_title`. The edit lives in `App.pane_edit` beside the rows, so what
 is being changed stays in view.
+
+**Open work first: each run's done todos fold** (`todo_rows` over
+`body::todo_groups`, the rule `fastf todo list` prints by). A run is its
+`Phase` heading, its open todos, then one `PaneRow::Fold` — selectable, dim,
+`✓ n done`, `[x] n done` in the ASCII alphabet, since the theme's `+` there
+reads as the add key just below it. **The heading is the phase's progress
+(`done/total` over the whole run) and the fold counts the rows it holds**, so
+neither number moves while Enter toggles inside a run. Enter on a fold
+toggles `App.done_shown` for the selected project — in memory, per project,
+for the session, never in `state.toml` — which shows the done ones under every
+fold of it, in file order; the cursor stays on the fold (`PaneTarget::Fold`)
+and the index-keyed pulses go. **A todo toggled on this visit is held where
+it was drawn** (`App.pane_held`: ordinal → `HeldAt` and the text it read;
+`pane::held_at` reads the place off the rows): a tick keeps its row in the
+open run and an untick under a shown fold stays there, so the cursor never
+jumps and Enter again is the undo. The holds clear when the selection leaves
+the project (`sync_pane`); a landed re-read drops every hold whose ordinal no
+longer reads its text (`release_moved_holds` in `on_detail`), which covers an
+add or a removal by anyone, an outside edit, and a re-read already on its way
+when the tick was made; and hiding the done todos drops the holds under the
+folds, or an untick held there would vanish with them. `App::pane_rows` also
+applies a hold only while its text matches. A todo that went into its fold
+under the cursor — ticked elsewhere — leaves the cursor on that fold
+(`find_row`). **`+` on a fold is `+` in its run** (`place_at`), and the add
+line goes at the end of the run's open todos, above the fold, where the new
+open todo will be drawn (`with_adding`; `End` is the last run's open end);
+a new phase opens below a finished run's fold and what it shows
+(`new_phase_at`). `first_in_section(Todo)` prefers the first open todo over a
+finished run's fold, so `<` and `>` land on work.
 
 **`O` on a todo is its owner** (`PaneOwner`, `[Detail]` only, hidden off a todo
 row): a `Pick` over the owners the project's own list names, the hat, nobody

@@ -41,7 +41,7 @@ mod run;
 mod status;
 mod templates_tab;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::KeyCode;
@@ -270,6 +270,16 @@ pub struct App {
     /// The section `<` or `>` left the pane's cursor in, to land in again
     /// on the next project once its rows are there.
     pane_seek: Option<pane::PaneSection>,
+    /// The projects whose done todos the pane shows under their folds, this
+    /// session; never written to `state.toml`.
+    done_shown: HashSet<PathBuf>,
+    /// The todos toggled on this visit to `pane_for`, by ordinal, each with
+    /// where its row was and the text it read: a tick keeps its row, so
+    /// Enter again is the undo. Cleared when the selection leaves the
+    /// project; a hold whose ordinal no longer reads its text when a
+    /// re-read lands is dropped (`on_detail`), and hiding the done todos
+    /// drops the holds under the folds.
+    pane_held: BTreeMap<usize, (pane::HeldAt, String)>,
     pub focus: Focus,
     pub screen: Screen,
     /// The desk tab's rows, cursor, group filter and order.
@@ -419,6 +429,8 @@ impl App {
             pane_anchor: None,
             pane_for: None,
             pane_seek: None,
+            done_shown: HashSet::new(),
+            pane_held: BTreeMap::new(),
             focus: Focus::Projects,
             screen: Screen::Library,
             desk: desk::DeskState::default(),

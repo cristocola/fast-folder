@@ -727,7 +727,7 @@ pub static COMMANDS: &[Command] = &[
     cmd!(
         PaneEdit,
         "Edit",
-        "act on what is under the cursor: edit the name, the description, a tag, a variable or a note, toggle a todo, or add one",
+        "act on what is under the cursor: edit the name, the description, a tag, a variable or a note, toggle a todo, show or hide the done ones, or add one",
         &[Context::Detail],
         [Key::plain(KeyCode::Enter)],
         Project,

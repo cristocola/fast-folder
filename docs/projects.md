@@ -59,6 +59,8 @@ A new project starts with an empty `## Notes` and no `## Todo`. The two notes an
 
 A `###` line inside `## Todo` is a **phase**: every task under it belongs to it, until the next one. Write them when a list grows long enough to want grouping, and leave them out when it does not. The pane draws each label over the run of tasks it names; a label is not a task, so it changes no numbering and ticking a todo never touches it.
 
+**What a list shows first is not the order of the file.** `fastf todo list` and the pane show each phase's open todos and fold its done ones into one `✓ 2 done` line, because open work is what a list is read for. The file keeps the order you gave it, and a todo's number — what `fastf todo done` takes — is its place in the file, so folding renumbers nothing; `fastf todo list --all` prints every todo with its number in file order.
+
 **A todo's owner and its dates are at the end of its line**, after the
 task. `@claude` is the **owner**: a name you write for yourself to say who the
 todo is with, such as an agent (`@claude`), a client (`@acme`) or your own

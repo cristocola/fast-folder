@@ -110,13 +110,20 @@ impl App {
                     Action::ToggleTodo {
                         project: Box::new(project),
                         ordinal,
-                        was,
+                        was: was.clone(),
                     },
                 );
                 if !effects.is_empty() {
                     self.pane_pending = Some(PaneTarget::Todo(ordinal));
+                    // A tick stays in the open run and an untick under the
+                    // fold, so the cursor never jumps and Enter undoes it.
+                    self.hold_todo(&rows, at, ordinal, was);
                 }
                 effects
+            }
+            PaneRow::Fold { group, .. } => {
+                self.toggle_done_shown(group);
+                Vec::new()
             }
             PaneRow::Tag(tag) => {
                 self.pane_edit = Some(PaneEdit::Line {

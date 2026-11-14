@@ -335,6 +335,87 @@ fn every_label_is_read_with_the_tasks_above_it_empty_ones_too() {
     assert!(phase_labels_in(&doc("## Notes\n\n- a\n")).is_empty());
 }
 
+fn group(phase: Option<&str>, tasks: Range<usize>, open: &[usize], done: &[usize]) -> TodoGroup {
+    TodoGroup {
+        phase: phase.map(str::to_string),
+        tasks,
+        open: open.to_vec(),
+        done: done.to_vec(),
+    }
+}
+
+#[test]
+fn a_list_is_shown_run_by_run_in_file_order_open_apart_from_done() {
+    let content = doc(concat!(
+        "## Todo\n\n",
+        "- [ ] loose\n\n",
+        "### Grade\n\n",
+        "### Setup\n",
+        "- [ ] a\n",
+        "- [x] b\n",
+        "###\n",
+        "### Other\n",
+    ));
+    assert_eq!(
+        todo_groups(&todos_in(&content), &phase_labels_in(&content)),
+        vec![
+            group(None, 0..1, &[0], &[]),
+            group(Some("Grade"), 1..1, &[], &[]),
+            group(Some("Setup"), 1..3, &[1], &[2]),
+            group(Some("Other"), 3..3, &[], &[]),
+        ],
+        "every label is a run, an empty one too"
+    );
+
+    let content = doc("## Todo\n\n- [x] a\n- [ ] b\n- [x] c\n- [ ] d\n");
+    assert_eq!(
+        todo_groups(&todos_in(&content), &phase_labels_in(&content)),
+        vec![group(None, 0..4, &[1, 3], &[0, 2])],
+        "a list without labels is one run, each half in file order"
+    );
+
+    let content = doc("## Todo\n\n### Shoot\n- [x] a\n### Edit\n- [ ] b\n");
+    assert_eq!(
+        todo_groups(&todos_in(&content), &phase_labels_in(&content)),
+        vec![
+            group(Some("Shoot"), 0..1, &[], &[0]),
+            group(Some("Edit"), 1..2, &[1], &[]),
+        ],
+        "a first label above every task leaves no loose run"
+    );
+
+    let content = doc("## Todo\n\n### Edit\n- [ ] a\n### edit\n- [x] b\n### Edit\n- [ ] c\n");
+    let groups = todo_groups(&todos_in(&content), &phase_labels_in(&content));
+    assert_eq!(
+        groups.iter().map(|g| g.tasks.clone()).collect::<Vec<_>>(),
+        vec![0..1, 1..2, 2..3],
+        "a name written twice is two runs, as the file has them"
+    );
+
+    assert!(todo_groups(&[], &[]).is_empty());
+}
+
+#[test]
+fn labels_from_another_reading_of_the_file_never_index_past_its_tasks() {
+    let todos = todos_in(&doc("## Todo\n\n- [ ] a\n- [x] b\n"));
+    let label = |name: &str, before| PhaseLabel {
+        name: name.to_string(),
+        before,
+    };
+    assert_eq!(
+        todo_groups(&todos, &[label("Late", 1), label("Past", 7)]),
+        vec![
+            group(None, 0..1, &[0], &[]),
+            group(Some("Late"), 1..2, &[], &[1]),
+            group(Some("Past"), 2..2, &[], &[]),
+        ]
+    );
+    assert_eq!(
+        todo_groups(&[], &[label("Only", 3)]),
+        vec![group(Some("Only"), 0..0, &[], &[])]
+    );
+}
+
 #[test]
 fn a_phase_is_written_as_the_name_it_reads_back_as() {
     assert_eq!(phase_label("  Grade "), Some("Grade".to_string()));

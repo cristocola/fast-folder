@@ -1018,6 +1018,16 @@ new label on every add. `phase_labels_in` reads every label with the tasks above
 it, empty ones included, for a reader that must draw where the writer will put
 a task.
 
+**`body::todo_groups` is the one rule a list is shown by**: the runs in file
+order — the loose tasks when there are any, then one per label, empty ones
+included — each with its open tasks apart from its done ones. `fastf todo
+list` prints each run's open tasks and folds its done ones into `✓ n done`,
+and the pane draws the same fold. **The file never changes order for it**: a
+todo's number is its place in the file, counted over tasks, so an agent that
+read `list --all` yesterday addresses the same todo today, and showing the
+open ones first renumbers nothing. The desk's next todo is still the first
+open one in file order (`core::desk`).
+
 **A todo's trailer is read from the end of its line and written in one order.**
 `split_trailer` takes the maximal run of trailer tokens at the end of the text
 after the `]` — `@owner`, `added:<stamp>`, `done:<stamp>`, in any order and any

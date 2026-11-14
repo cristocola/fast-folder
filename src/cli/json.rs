@@ -60,6 +60,9 @@ pub struct NoteJson {
 
 #[derive(Serialize)]
 pub struct TodoJson {
+    /// The number `fastf todo` takes, counted from one: the todo's place in
+    /// the file.
+    pub number: usize,
     pub done: bool,
     pub text: String,
     pub phase: Option<String>,
@@ -72,8 +75,10 @@ pub struct TodoJson {
 }
 
 impl TodoJson {
-    pub fn of(todo: &crate::core::body::Todo) -> Self {
+    /// The todo at `ordinal` in its file, from zero.
+    pub fn of(ordinal: usize, todo: &crate::core::body::Todo) -> Self {
         Self {
+            number: ordinal + 1,
             done: todo.done,
             text: todo.text.clone(),
             phase: todo.phase.clone(),

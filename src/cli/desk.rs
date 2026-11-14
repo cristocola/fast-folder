@@ -333,7 +333,12 @@ fn card_json(card: &Card, group: &Group, now: &str) -> CardJson {
 /// One heading per group with its count, one row per project under it:
 /// the id, the name, the next todo (its phase before it), how long the
 /// project has been quiet, and `active` when a program is working in it.
+///
+/// The columns are measured in display columns and the todo's is capped so
+/// an aligned row fits `print_columns`; a longer todo keeps its age two
+/// spaces after it.
 fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
+    use crate::tui::view::pad;
     use unicode_width::UnicodeWidthStr;
     let cards = groups.iter().flat_map(|g| g.cards.iter());
     let id_w = cards
@@ -346,10 +351,13 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
         .map(|c| c.project.name.width())
         .max()
         .unwrap_or(0);
+    // `    ID0047  name  todo  3 days`
+    let room = crate::tui::rows::print_columns().saturating_sub(4 + id_w + 2 + name_w + 2 + 2 + 6);
     let todo_w = cards
         .map(|c| c.next_todo_line(" · ").width())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .min(room);
     let mut first = true;
     for group in groups {
         if !first {
@@ -374,15 +382,12 @@ fn print_plain(groups: &[Group], hat: Option<&str>, now: &str) {
                 format!("  active: {}", card.active.join(", "))
             };
             println!(
-                "    {:<id_w$}  {:<name_w$}  {:<todo_w$}  {:>6}{}",
-                card.project.id.green().bold(),
-                card.project.name,
-                next,
+                "    {}  {}  {}  {:>6}{}",
+                pad(&card.project.id, id_w).green().bold(),
+                pad(&card.project.name, name_w),
+                pad(&next, todo_w),
                 age.dimmed(),
                 active.cyan(),
-                id_w = id_w,
-                name_w = name_w,
-                todo_w = todo_w,
             );
         }
     }

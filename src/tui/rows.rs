@@ -170,6 +170,30 @@ pub fn terminal_columns() -> usize {
         .unwrap_or(0)
 }
 
+/// How wide a printed line may be when stdout is not a terminal: a pipe has
+/// no width, and a reader of one — a script, an agent — is better served by
+/// a modest fixed width than by whatever window the command was started from.
+pub const PIPED_COLUMNS: usize = 100;
+
+/// **How wide a line printed to stdout may be**, the one answer for every
+/// aligned list and live line the command line prints. On a terminal it is
+/// one column short of its width, because the legacy Windows console wraps a
+/// line that reaches the last column and prints a blank row after it; piped,
+/// it is [`PIPED_COLUMNS`]. Stdout is asked first: `terminal::size` answers
+/// for `/dev/tty` even when stdout is a pipe, and a list piped from a wide
+/// window would come out as wide as the window.
+pub fn print_columns() -> usize {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return PIPED_COLUMNS;
+    }
+    match terminal_columns() {
+        columns if columns > 1 => columns - 1,
+        // A terminal that will not say how wide it is.
+        _ => PIPED_COLUMNS,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RowWidths, clamp_label, project_row, size_label};

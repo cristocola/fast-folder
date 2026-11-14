@@ -104,6 +104,171 @@ fn todo_lists_adds_under_a_phase_and_ticks_by_number() {
     assert!(err.contains("empty"), "{err}");
 }
 
+/// The default list shows each phase's open tasks and folds its done ones
+/// into one `✓ n done` line, and a number is still the task's place in the
+/// file — so a folded task keeps its number, `--all` prints it, and `done`
+/// acts on the number shown. An empty label is shown where `add --phase`
+/// would put a task; `--open` has no fold lines; `--all` and `--open` are
+/// two answers to one question.
+#[test]
+fn todo_list_folds_the_done_ones_and_keeps_the_file_numbers() {
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+    let mut file = fs::read_to_string(&pinfo).unwrap();
+    file.push_str(concat!(
+        "\n## Todo\n\n",
+        "- [x] read the brief\n",
+        "- [ ] book the studio\n",
+        "### Shoot\n",
+        "- [x] shoot the band\n",
+        "- [x] shoot the crowd\n",
+        "### Edit\n",
+        "- [x] sync the audio\n",
+        "- [ ] cut the first minute\n",
+        "### Grade\n",
+    ));
+    fs::write(&pinfo, file).unwrap();
+
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    let lines: Vec<&str> = listed.lines().map(str::trim_end).collect();
+    let at = |text: &str| {
+        lines
+            .iter()
+            .position(|line| line.trim() == text)
+            .unwrap_or_else(|| panic!("no line {text:?} in:\n{listed}"))
+    };
+    let book = at("2. [ ] book the studio");
+    let shoot = at("Shoot");
+    let edit = at("Edit");
+    let cut = at("6. [ ] cut the first minute");
+    let grade = at("Grade");
+    assert_eq!(lines[book + 1].trim(), "✓ 1 done", "{listed}");
+    assert_eq!(
+        (shoot + 1, lines[shoot + 1].trim()),
+        (shoot + 1, "✓ 2 done"),
+        "a finished phase is its heading and its count:\n{listed}"
+    );
+    assert!(shoot < edit && edit < cut && cut < grade, "{listed}");
+    assert_eq!(lines[cut + 1].trim(), "✓ 1 done", "{listed}");
+    assert!(
+        lines[book + 1].starts_with("     ✓"),
+        "the count sits where the boxes are: {:?}",
+        lines[book + 1]
+    );
+    for folded in ["read the brief", "shoot the band", "sync the audio"] {
+        assert!(!listed.contains(folded), "{folded} is folded:\n{listed}");
+    }
+    assert!(listed.contains("4/6 done"), "{listed}");
+
+    let open = sb.ok(&["todo", "list", "ID0001", "--open"]);
+    assert!(
+        open.contains("2. [ ] book the studio") && open.contains("6. [ ] cut the first minute"),
+        "{open}"
+    );
+    assert!(
+        !open.contains('✓') && !open.contains("Shoot") && !open.contains("Grade"),
+        "only the open tasks, under the labels they have:\n{open}"
+    );
+
+    let all = sb.ok(&["todo", "list", "ID0001", "--all"]);
+    for (number, line) in [
+        "[x] read the brief",
+        "[ ] book the studio",
+        "[x] shoot the band",
+        "[x] shoot the crowd",
+        "[x] sync the audio",
+        "[ ] cut the first minute",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let wanted = format!("{}. {line}", number + 1);
+        assert!(all.contains(&wanted), "{wanted:?} in:\n{all}");
+    }
+    assert!(!all.contains('✓') && all.contains("Grade"), "{all}");
+
+    let both = sb.run(&["todo", "list", "ID0001", "--all", "--open"]);
+    assert!(!both.status.success(), "{both:?}");
+    let err = String::from_utf8_lossy(&both.stderr);
+    assert!(err.contains("--all") && err.contains("--open"), "{err}");
+
+    // The number a folded todo had is the number it has.
+    let reopened = sb.ok(&["todo", "done", "ID0001", "4", "--undo"]);
+    assert!(reopened.contains("shoot the crowd"), "{reopened}");
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    assert!(
+        listed.contains("4. [ ] shoot the crowd") && listed.contains("✓ 1 done"),
+        "{listed}"
+    );
+}
+
+/// The trailer columns are measured over the todos shown and capped so an
+/// aligned line fits: piped, a hundred columns. A long done todo the
+/// default list folds pads nothing; shown with `--all`, and a long open
+/// one always, keeps its owner and day two spaces after its text while
+/// every other line stays inside the width.
+#[test]
+fn todo_list_aligns_the_trailer_over_what_it_shows_within_the_width() {
+    use unicode_width::UnicodeWidthStr;
+    let sb = Sandbox::new();
+    let dir = sb.plant_project(&sb.base, "proj", "ID0001");
+    let pinfo = dir.join("PROJECT_INFO.md");
+    let long = "trim ".repeat(60);
+    let long = long.trim_end();
+    let mut file = fs::read_to_string(&pinfo).unwrap();
+    file.push_str(&format!(
+        "\n## Todo\n\n\
+         - [x] {long} @sales added:2026-09-01T00:00:00Z done:2026-09-02T00:00:00Z\n\
+         - [ ] cut @claude added:2026-10-01T00:00:00Z\n\
+         - [ ] deliver added:2026-10-02T00:00:00Z\n"
+    ));
+    fs::write(&pinfo, &file).unwrap();
+
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    for line in listed.lines() {
+        assert!(line.width() <= 100, "{} columns: {line}", line.width());
+    }
+    let cut = listed.lines().find(|l| l.contains("cut")).unwrap();
+    let deliver = listed.lines().find(|l| l.contains("deliver")).unwrap();
+    assert_eq!(
+        cut.find("2026-10-01"),
+        deliver.find("2026-10-02"),
+        "the days in one column:\n{listed}"
+    );
+    assert_eq!(
+        cut.find("@claude"),
+        Some(cut.find("cut").unwrap() + "deliver".len() + 2),
+        "the owners two after the widest text shown, not the folded long one: {cut:?}"
+    );
+
+    let all = sb.ok(&["todo", "list", "ID0001", "--all"]);
+    for line in all.lines().filter(|line| !line.contains(long)) {
+        assert!(line.width() <= 100, "{} columns: {line}", line.width());
+    }
+    let row = all.lines().find(|l| l.contains(long)).unwrap();
+    assert!(
+        row.ends_with(&format!("{long}  @sales  2026-09-02")),
+        "its trailer two spaces after it: {row:?}"
+    );
+
+    // Long and open, among todos with owners, itself without one.
+    file = file.replace(
+        &format!("- [x] {long} @sales added:2026-09-01T00:00:00Z done:2026-09-02T00:00:00Z"),
+        &format!("- [ ] {long} added:2026-09-01T00:00:00Z"),
+    );
+    fs::write(&pinfo, &file).unwrap();
+    let listed = sb.ok(&["todo", "list", "ID0001"]);
+    for line in listed.lines().filter(|line| !line.contains(long)) {
+        assert!(line.width() <= 100, "{} columns: {line}", line.width());
+    }
+    let row = listed.lines().find(|l| l.contains(long)).unwrap();
+    assert!(
+        row.ends_with(&format!("{long}  2026-09-01")),
+        "no owner column's padding after a long text: {row:?}"
+    );
+}
+
 /// `edit` and `remove` take the number `list` prints, as `done` does, and
 /// refuse the same wrong numbers in the same words. A reworded todo keeps its
 /// tick and its phase; an empty rewording is refused and pointed at
@@ -151,7 +316,12 @@ fn todo_edit_rewords_and_remove_removes_by_number() {
 
     let listed = sb.ok(&["todo", "list", "ID0001"]);
     assert!(
-        listed.contains("fetch the files") && listed.contains("sort the clips"),
+        listed.contains("2. [ ] sort the clips") && listed.contains("✓ 1 done"),
+        "the done one is counted, the open one keeps its number:\n{listed}"
+    );
+    let listed = sb.ok(&["todo", "list", "ID0001", "--all"]);
+    assert!(
+        listed.contains("1. [x] fetch the files") && listed.contains("2. [ ] sort the clips"),
         "{listed}"
     );
     assert!(
@@ -300,6 +470,9 @@ fn todo_owner_is_set_by_add_and_owner_and_shown_by_list() {
     // `show --json` carries the trailer, as added fields.
     let out = sb.run(&["show", "ID0001", "--json"]);
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    for (index, todo) in json["todos"].as_array().unwrap().iter().enumerate() {
+        assert_eq!(todo["number"], index + 1, "the number `todo` takes: {todo}");
+    }
     assert_eq!(json["todos"][2]["owner"], "me");
     assert!(
         json["todos"][2]["added"]

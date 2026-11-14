@@ -554,8 +554,11 @@ or link into it (`units.rs`: the user's and system's unit folders and the
 generators', read as the manager loads them — the folders in its own order,
 a unit's own file from the first folder holding one and each drop-in name
 from the first folder holding it, every file checked against every folder
-asked about — then `systemctl show` once per manager, killed at two seconds,
-no answer counting). **`Use::weight` is the one table** — physical, advisory,
+asked about; every file, and a `<unit>.d` that is a link, read under one
+deadline on a thread of its own (`paths::answer_within`), since a unit
+file may be a link onto a mount that stopped answering, and one that does
+not answer is a note (`How::UnitSilent`) — then `systemctl show` once per
+manager, killed at two seconds, no answer counting). **`Use::weight` is the one table** — physical, advisory,
 note — and `Holders::refusal`/`notes` the one wording. Asked as
 `holders::check(&Folder, Verb, &Guard)`:
 

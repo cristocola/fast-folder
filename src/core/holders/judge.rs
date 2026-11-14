@@ -99,6 +99,15 @@ pub(super) struct UnitFound {
     pub dormant: bool,
 }
 
+/// What the unit folders say of the folders asked about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct Units {
+    pub found: Vec<UnitFound>,
+    /// Unit files — or a unit's drop-in folder — that did not answer in
+    /// time, `(unit, system, path)`: any of them may name any folder.
+    pub silent: Vec<(String, bool, PathBuf)>,
+}
+
 /// Where `path` lies inside any of `folders`' spellings: each folder it is
 /// in, with the rest of the path.
 pub(super) fn inside(folders: &[Vec<PathBuf>], path: &Path) -> Vec<(usize, PathBuf)> {
@@ -444,13 +453,13 @@ fn push_once(uses: &mut Vec<(usize, Use)>, folder: usize, found: Use) {
 }
 
 /// Everything using each folder: the processes in pid order, then the
-/// mounts, the unit files, the processes that did not answer, and those
-/// never asked.
+/// mounts, the unit files and those that did not answer, the processes that
+/// did not answer, and those never asked.
 pub(super) fn judge(
     folders: &[Vec<PathBuf>],
     pass: &Pass,
     shells: &HashSet<String>,
-    units: &[UnitFound],
+    units: &Units,
 ) -> Vec<Vec<Use>> {
     let mut answer: Vec<Vec<Use>> = vec![Vec::new(); folders.len()];
     let mut seen: Vec<&Seen> = pass.seen.iter().collect();
@@ -479,7 +488,7 @@ pub(super) fn judge(
     for (folder, found) in mount_uses(folders, &pass.host, &foreign) {
         answer[folder].push(found);
     }
-    for unit in units {
+    for unit in &units.found {
         if let Some(uses) = answer.get_mut(unit.folder) {
             uses.push(Use {
                 by: By::Unit {
@@ -491,6 +500,17 @@ pub(super) fn judge(
                     state: unit.state.clone(),
                     dormant: unit.dormant,
                 },
+            });
+        }
+    }
+    for (name, system, path) in &units.silent {
+        for uses in answer.iter_mut() {
+            uses.push(Use {
+                by: By::Unit {
+                    name: name.clone(),
+                    system: *system,
+                },
+                how: How::UnitSilent(path.clone()),
             });
         }
     }

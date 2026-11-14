@@ -480,6 +480,9 @@ look leaves it out too.
   the folder; it shows the old one`. Started with the folder and also working
   in it, holding a file of it or running from it, it counts;
 - a unit that is disabled, stopped and started by nothing;
+- a unit file that could not be read within a second and a half — a link
+  onto a mount that stopped answering, say: `coda.service's file did not
+  answer: …`;
 - a process that did not answer within five seconds — one stuck behind a
   mount that stopped answering, say: fastf names it rather than wait for it.
 

@@ -298,6 +298,9 @@ pub enum How {
         state: String,
         dormant: bool,
     },
+    /// A unit's file — or its drop-in folder, a link — at this path did not
+    /// answer in time: it may name the folder.
+    UnitSilent(PathBuf),
     /// These processes did not answer in time: any of them may use the
     /// folder. One use for all of them, so a mount that stopped answering
     /// under many processes is one note, not one each.
@@ -345,7 +348,7 @@ impl Use {
             How::MountedInside(_) if verb == Verb::Delete => Weight::Physical,
             How::WorkingIn { shell: true, .. } | How::Terminal(_) | How::OpenedOn => Weight::Note,
             How::Unit { dormant: true, .. } => Weight::Note,
-            How::Silent(_) => Weight::Note,
+            How::Silent(_) | How::UnitSilent(_) => Weight::Note,
             _ => Weight::Advisory,
         }
     }
@@ -398,6 +401,10 @@ impl Use {
                 state,
                 ..
             } => format!("{who} ({state}) is a link to {}", at(path)),
+            How::UnitSilent(path) => format!(
+                "{who}'s file did not answer: {}",
+                crate::util::paths::display_path(path)
+            ),
             How::Silent(pids) => format!("{} did not answer", pids_text(pids)),
             How::Unasked(pids) => format!(
                 "{} {} not looked at: the ones before {} did not answer",
@@ -465,6 +472,10 @@ impl Use {
                     tie_text(tie)
                 ),
             },
+            How::UnitSilent(path) => format!(
+                "{who}'s file did not answer ({}), so fastf could not tell whether it names {old}",
+                crate::util::paths::display_path(path)
+            ),
             How::Silent(pids) => format!(
                 "{} did not answer, so fastf could not tell whether {} {old}",
                 pids_text(pids),

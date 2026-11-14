@@ -49,8 +49,12 @@ fn holders_of(uses: Vec<Use>) -> Holders {
 }
 
 fn judged(pass: &Pass, units: &[UnitFound]) -> Holders {
+    let units = judge::Units {
+        found: units.to_vec(),
+        ..judge::Units::default()
+    };
     holders_of(
-        judge::judge(&folders(), pass, &shells(), units)
+        judge::judge(&folders(), pass, &shells(), &units)
             .pop()
             .unwrap(),
     )
@@ -805,22 +809,20 @@ fn a_unit_folder_is_read_as_its_manager_reads_it() {
     std::fs::write(dir.join("notes.txt"), &line).unwrap();
 
     let files = units::unit_files(&dir);
-    let names: Vec<(&str, Option<&str>)> = files
+    let names: Vec<(&str, &units::Part)> = files
         .iter()
-        .map(|file| {
-            (
-                file.unit.as_str(),
-                file.drop_in.as_ref().and_then(|name| name.to_str()),
-            )
-        })
+        .map(|file| (file.unit.as_str(), &file.part))
         .collect();
     assert_eq!(
         names,
         [
-            ("linked.service", None),
-            ("named.service", None),
-            ("named.service", Some("override.conf")),
-            ("plain.service", None)
+            ("linked.service", &units::Part::Own),
+            ("named.service", &units::Part::Own),
+            (
+                "named.service",
+                &units::Part::DropIn("override.conf".into())
+            ),
+            ("plain.service", &units::Part::Own)
         ],
         "{files:?}"
     );
@@ -1312,11 +1314,129 @@ fn a_unit_is_read_as_its_manager_loads_it() {
         ours.sort();
         ours
     };
-    let batched = ours(units::find(&[vec![a.clone()], vec![b.clone()]]));
-    let hidden = ours(units::find(&[vec![p.clone()], vec![q.clone()]]));
+    let batched = ours(units::find(&[vec![a.clone()], vec![b.clone()]]).found);
+    let hidden = ours(units::find(&[vec![p.clone()], vec![q.clone()]]).found);
     drop(env);
     assert_eq!(batched, [(0, batch.clone()), (1, batch.clone())]);
     assert_eq!(hidden, [(1, dropped.clone())]);
+}
+
+/// A unit file whose read does not come back — a link onto a mount that
+/// stopped answering, here a pipe nobody writes — holds nothing up: the
+/// unit folders are read under one deadline, and that file is named as
+/// not answering.
+#[test]
+fn a_unit_file_that_does_not_answer_holds_nothing_up() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let units_dir = config.join("systemd").join("user");
+    std::fs::create_dir_all(&units_dir).unwrap();
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("X");
+    std::fs::create_dir(&project).unwrap();
+    let pipe = temp.path().join("foo.service");
+    let spelled = std::ffi::CString::new(pipe.to_string_lossy().as_bytes()).unwrap();
+    // SAFETY: `mkfifo` reads a NUL-terminated path that outlives the call.
+    assert_eq!(unsafe { libc::mkfifo(spelled.as_ptr(), 0o600) }, 0);
+    let name = format!("fastf-test-pipe-{}.service", std::process::id());
+    let file = units_dir.join(&name);
+    std::os::unix::fs::symlink(&pipe, &file).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = vec![vec![project.clone()]];
+    std::thread::spawn(move || {
+        let _ = tx.send(units::find(&asked));
+    });
+    let answered = rx.recv_timeout(crate::util::paths::PROBE_TIMEOUT + Duration::from_secs(3));
+    drop(env);
+    // Let the read that was given up on come back.
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&pipe);
+    let found = answered.expect("the unit folders are still being read");
+    assert!(
+        found.silent.contains(&(name.clone(), false, file.clone())),
+        "{found:?}"
+    );
+    assert!(found.found.iter().all(|unit| unit.name != name));
+}
+
+/// A unit's drop-in folder that is a link is listed under the deadline too.
+#[cfg(debug_assertions)]
+#[test]
+fn a_linked_drop_in_folder_that_does_not_answer_holds_nothing_up() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let units_dir = config.join("systemd").join("user");
+    std::fs::create_dir_all(&units_dir).unwrap();
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let project = crate::util::paths::canonical(temp.path())
+        .unwrap()
+        .join("X");
+    std::fs::create_dir(&project).unwrap();
+    let drop_ins = temp.path().join("drop-ins");
+    std::fs::create_dir(&drop_ins).unwrap();
+    std::fs::write(
+        drop_ins.join("x.conf"),
+        format!("[Service]\nWorkingDirectory={}\n", project.display()),
+    )
+    .unwrap();
+    let name = format!("fastf-test-linked-{}.service", std::process::id());
+    let folder = units_dir.join(format!("{name}.d"));
+    std::os::unix::fs::symlink(&drop_ins, &folder).unwrap();
+    let marker = drop_ins.join(crate::util::paths::STALL_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = vec![vec![project.clone()]];
+    std::thread::spawn(move || {
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let _ = tx.send(units::find(&asked));
+        });
+    });
+    let answered = rx.recv_timeout(crate::util::paths::PROBE_TIMEOUT + Duration::from_secs(3));
+    drop(env);
+    std::fs::remove_file(&marker).unwrap();
+    let found = answered.expect("the unit folders are still being read");
+    assert!(
+        found
+            .silent
+            .contains(&(name.clone(), false, folder.clone())),
+        "{found:?}"
+    );
+}
+
+/// A unit file that did not answer is a note, for every folder asked
+/// about.
+#[test]
+fn a_unit_file_that_did_not_answer_is_a_note() {
+    let units = judge::Units {
+        silent: vec![(
+            "coda.service".to_string(),
+            false,
+            PathBuf::from("/home/u/.config/systemd/user/coda.service"),
+        )],
+        ..judge::Units::default()
+    };
+    let found = holders_of(
+        judge::judge(&folders(), &Pass::default(), &shells(), &units)
+            .pop()
+            .unwrap(),
+    );
+    assert!(found.refusal(Verb::Move, false).is_none());
+    assert_eq!(
+        found.uses[0].line(),
+        "coda.service's file did not answer: /home/u/.config/systemd/user/coda.service"
+    );
+    assert_eq!(
+        found.notes(Verb::Move),
+        [
+            "coda.service's file did not answer (/home/u/.config/systemd/user/coda.service), so \
+             fastf could not tell whether it names the old folder"
+        ]
+    );
 }
 
 /// The unit folders in the order systemd reads them: a unit's file in an

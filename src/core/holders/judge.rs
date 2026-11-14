@@ -193,6 +193,21 @@ pub(super) fn program_name(argv: &[String], exe: Option<&Path>, comm: Option<&st
         .unwrap_or_else(|| "a program".to_string())
 }
 
+/// The program a process was started as, when it was started by a path
+/// (`/p/.venv/bin/python`, `./serve`): a relative one is taken from the
+/// working folder. Its executable link may say less — a virtualenv's
+/// `python` is a link out of the folder, so `exe` names the system's.
+pub(super) fn started_from(argv: &[String], cwd: Option<&Path>) -> Option<PathBuf> {
+    let first = Path::new(argv.first()?);
+    if !first.as_os_str().to_string_lossy().contains('/') {
+        return None;
+    }
+    if first.is_absolute() {
+        return Some(normalise(first));
+    }
+    cwd.map(|cwd| normalise(&cwd.join(first)))
+}
+
 /// The paths a process's arguments name: each argument after the program,
 /// and its pieces between `=`, `,` and `:` (`--config=/p/c.toml`,
 /// `-v /p/data:/app/data`), the pieces first. A relative one is taken from

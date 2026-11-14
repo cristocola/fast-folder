@@ -302,6 +302,11 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
     if let Some(exe) = &exe_path {
         add(spell(exe), Kind::Exe);
     }
+    if let Some(program) = judge::started_from(&argv, cwd.as_deref())
+        && Some(&program) != exe_path.as_ref()
+    {
+        add(spell(&program), Kind::Exe);
+    }
     if let Ok(descriptors) = std::fs::read_dir(base.join("fd")) {
         for descriptor in descriptors.flatten() {
             let Ok(target) = std::fs::read_link(descriptor.path()) else {

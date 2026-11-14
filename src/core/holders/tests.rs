@@ -291,6 +291,32 @@ fn arguments_name_paths_in_every_form() {
     );
 }
 
+/// A program started by a path inside the project runs from it, though its
+/// executable link leads out (a virtualenv's `python`); a bare name, a
+/// login shell's `-bash` and a rewritten title are no path.
+#[test]
+fn a_program_started_by_its_path_runs_from_there() {
+    let from = |text: &str, cwd: &str| {
+        judge::started_from(&judge::argv(text.as_bytes()), Some(Path::new(cwd)))
+    };
+    assert_eq!(
+        from("/home/u/Projects/X/.venv/bin/python\0serve.py\0", "/"),
+        Some(PathBuf::from("/home/u/Projects/X/.venv/bin/python"))
+    );
+    assert_eq!(
+        from("./bin/serve\0", "/home/u/Projects/X"),
+        Some(PathBuf::from("/home/u/Projects/X/bin/serve"))
+    );
+    assert_eq!(
+        from("X/run.sh\0", "/home/u/Projects"),
+        Some(PathBuf::from(PROJECT).join("run.sh"))
+    );
+    assert_eq!(from("python\0serve.py\0", "/home/u/Projects/X"), None);
+    assert_eq!(from("-bash\0", "/home/u/Projects/X"), None);
+    assert_eq!(from("sshd: u@pts/0", "/"), None);
+    assert_eq!(from("", "/"), None);
+}
+
 /// What a container mounts from inside the project counts, named after its
 /// oldest process; what a sandbox copied from this machine's table does
 /// not, nor a mount of a folder above the project.

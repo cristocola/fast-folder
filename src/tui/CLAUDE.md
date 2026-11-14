@@ -643,13 +643,23 @@ older answer is dropped. **What the dialog names is resolved before the
 question**, so a project gone from the library is the usual refusal and no
 question is asked. A move and a delete put the progress dialog up at once
 (`background.starting`), so Esc hides it and Ctrl-C sets
-`cancel_when_started`; the answer clears `starting` and `hidden` first and
+`cancel_when_started`; the answer clears `starting`, gives `hidden` back as
+the question found it (a job hidden before is not drawn over the picker) and
 takes that flag, so a Ctrl-C during the question starts nothing and cancels
-no later job. One question at a time: a second is refused while one is out.
+no later job. **A rename puts no dialog up**, so it touches neither `hidden`
+nor `cancel_when_started`: both belong to any job started while it is asked
+about. One question at a time: a second is refused while one is out, and
+any while a job is starting, each refusal naming which. **Ctrl-C on the
+picker closes it** (`close_top`, before `interrupt` looks at any job), since
+the job a dialog follows is not what the question is about.
 Nothing in use starts the job (`StartJob { force: false }`) or the rename;
 otherwise a wide `Pick` (`Then::InUse`) offers anyway, the others (a batch
 with free projects; never a rename) and cancel, and hides anyway when a use
-is physical. Esc goes through `close_top`, which says nothing was moved. The
+is physical. **Its cursor rests on Cancel** (`PickState::resting_on`), the
+command line's default no, and a change of its query puts it back there
+while Cancel matches, so neither one Enter nor keys typed into its filter by
+mistake go past a use; a filter that matches nothing closes it as Cancel
+does. Esc goes through `close_top`, which says nothing was moved. The
 runtime asks every platform the same, so `update` behaves the same
 everywhere; off Linux the answer is always empty.
 
@@ -1055,17 +1065,22 @@ toggles `App.done_shown` for the selected project — in memory, per project,
 for the session, never in `state.toml` — which shows the done ones under every
 fold of it, in file order; the cursor stays on the fold (`PaneTarget::Fold`)
 and the index-keyed pulses go. **A todo toggled on this visit is held where
-it was drawn** (`App.pane_held`: ordinal → `HeldAt` and the text it read;
-`pane::held_at` reads the place off the rows): a tick keeps its row in the
-open run and an untick under a shown fold stays there, so the cursor never
-jumps and Enter again is the undo. The holds clear when the selection leaves
-the project (`sync_pane`); a landed re-read drops every hold whose ordinal no
-longer reads its text (`release_moved_holds` in `on_detail`), which covers an
-add or a removal by anyone, an outside edit, and a re-read already on its way
-when the tick was made; and hiding the done todos drops the holds under the
-folds, or an untick held there would vanish with them. `App::pane_rows` also
-applies a hold only while its text matches. A todo that went into its fold
-under the cursor — ticked elsewhere — leaves the cursor on that fold
+it was drawn** (`App.pane_held`: ordinal → `HeldAt` and the texts it may
+read; `pane::held_at` reads the place off the rows): a tick keeps its row in
+the open run and an untick under a shown fold stays there, so the cursor
+never jumps and Enter again is the undo. The holds clear when the selection
+leaves the project (`sync_pane`); a landed re-read drops every hold whose
+ordinal reads none of its texts (`release_moved_holds` in `on_detail`), which
+covers an add or a removal by anyone, an outside edit, and a re-read already
+on its way when the tick was made. The pane's own F2 is not an outside edit:
+when its write lands the hold takes the new words as the reader will return
+them (`hold_through_a_reword`), keeping the old ones until the re-read, so a
+todo ticked and then reworded keeps its row. Hiding the done todos drops the
+holds under the folds, or an untick held there would vanish with them; when
+that leaves a run nothing under its fold, the fold goes, and the cursor goes
+to the run's last todo, the row just above it, rather than to the add line
+at the end of the last run. `App::pane_rows` also applies a hold only while
+one of its texts matches. A todo that went into its fold under the cursor — ticked elsewhere — leaves the cursor on that fold
 (`find_row`). **`+` on a fold is `+` in its run** (`place_at`), and the add
 line goes at the end of the run's open todos, above the fold, where the new
 open todo will be drawn (`with_adding`; `End` is the last run's open end);

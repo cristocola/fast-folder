@@ -395,6 +395,18 @@ impl App {
 
     /// Ctrl-C: cancel what is running, else close the top dialog, else quit.
     fn interrupt(&mut self) -> Vec<Effect> {
+        // The in-use picker is the question being answered: Ctrl-C closes
+        // it and says nothing went, whatever job is running or followed
+        // beside it — that job is not what the question was about.
+        if matches!(
+            self.modals.top(),
+            Some(Modal::Pick(PickState {
+                then: Then::InUse(_),
+                ..
+            }))
+        ) {
+            return self.close_top();
+        }
         // A batch is running: Ctrl-C cancels it rather than quitting
         // under a worker that is still mutating the filesystem.
         if self.job.is_some() {

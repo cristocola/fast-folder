@@ -275,12 +275,13 @@ pub struct App {
     /// session; never written to `state.toml`.
     done_shown: HashSet<PathBuf>,
     /// The todos toggled on this visit to `pane_for`, by ordinal, each with
-    /// where its row was and the text it read: a tick keeps its row, so
-    /// Enter again is the undo. Cleared when the selection leaves the
-    /// project; a hold whose ordinal no longer reads its text when a
-    /// re-read lands is dropped (`on_detail`), and hiding the done todos
-    /// drops the holds under the folds.
-    pane_held: BTreeMap<usize, (pane::HeldAt, String)>,
+    /// where its row was and the texts it may read — the one it was toggled
+    /// with, and any the pane's own F2 gave it since: a tick keeps its row,
+    /// so Enter again is the undo. Cleared when the selection leaves the
+    /// project; a hold whose ordinal reads none of its texts when a re-read
+    /// lands is dropped (`on_detail`), and hiding the done todos drops the
+    /// holds under the folds.
+    pane_held: BTreeMap<usize, (pane::HeldAt, Vec<String>)>,
     pub focus: Focus,
     pub screen: Screen,
     /// The desk tab's rows, cursor, group filter and order.

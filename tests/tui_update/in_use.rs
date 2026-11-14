@@ -26,10 +26,237 @@ fn choose(app: &mut App, label: &str) -> Vec<Effect> {
         .iter()
         .position(|choice| choice == label)
         .unwrap_or_else(|| panic!("no {label} in {:?}", choices(app)));
-    for _ in 0..at {
-        press(app, Key::plain(KeyCode::Down));
+    let from = picker(app).selected.expect("the picker has a cursor");
+    let key = if at < from {
+        KeyCode::Up
+    } else {
+        KeyCode::Down
+    };
+    for _ in 0..at.abs_diff(from) {
+        press(app, Key::plain(key));
     }
     press(app, Key::plain(KeyCode::Enter))
+}
+
+/// The label of the row under the picker's cursor.
+fn under_cursor(app: &App) -> String {
+    picker(app)
+        .chosen()
+        .map(|item| item.label.clone())
+        .unwrap_or_default()
+}
+
+/// Ask `verb` about the selected project and answer that a program works
+/// in it: the picker is up.
+fn busy_question(app: &mut App, verb: &str) {
+    let selected = app.library.selected().unwrap().clone();
+    let effects = match verb {
+        "move" => ask_to_move(app),
+        "delete" => {
+            press(app, Key::ch('D'));
+            type_text(app, "delete");
+            press(app, Key::plain(KeyCode::Enter))
+        }
+        _ => {
+            press(app, Key::ch('r'));
+            press(app, Key::ctrl('u'));
+            type_text(app, "New_Name");
+            press(app, Key::plain(KeyCode::Enter))
+        }
+    };
+    answer_in_use(app, &effects, &[(&selected.path, vec![sitter(9)])]);
+}
+
+/// Whether the effects start the verb: a job, or the rename's write.
+fn starts_something(effects: &[Effect]) -> bool {
+    job_started(effects).is_some()
+        || effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Run(..)))
+}
+
+/// **One Enter on the question goes nowhere.** The cursor starts on
+/// Cancel, as the command line's same question defaults to no, so going
+/// past a use is a deliberate move of the cursor; the rows keep their
+/// order.
+#[test]
+fn one_enter_on_the_question_moves_deletes_and_renames_nothing() {
+    for (verb, past) in [
+        ("move", "moved"),
+        ("delete", "deleted"),
+        ("rename", "renamed"),
+    ] {
+        let mut app = fixture(12, 100, 30);
+        busy_question(&mut app, verb);
+        assert_eq!(choices(&app).last().map(String::as_str), Some("Cancel"));
+        assert_eq!(under_cursor(&app), "Cancel", "{verb}");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(!starts_something(&effects), "{verb}: {effects:?}");
+        assert!(app.modals.is_empty(), "{verb}");
+        assert!(
+            app.status.text.contains(&format!("nothing was {past}")),
+            "{verb}: {}",
+            app.status.text
+        );
+    }
+}
+
+/// **Typing into the picker keeps the cursor off the verb.** Keys meant for
+/// something else land in its filter when the question comes up under
+/// them; while Cancel is among the matches the cursor stays on it, and with
+/// nothing matching, Enter still says nothing was moved.
+#[test]
+fn typing_into_the_question_leaves_the_cursor_on_cancel() {
+    let mut app = fixture(12, 100, 30);
+    busy_question(&mut app, "move");
+    type_text(&mut app, "node");
+    assert_eq!(choices(&app), ["Move anyway", "Cancel"], "both still match");
+    assert_eq!(under_cursor(&app), "Cancel");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(!starts_something(&effects), "{effects:?}");
+    assert!(
+        app.status.text.contains("nothing was moved"),
+        "{}",
+        app.status.text
+    );
+
+    let mut app = fixture(12, 100, 30);
+    busy_question(&mut app, "move");
+    type_text(&mut app, "zqzq");
+    assert!(picker(&app).ranked.is_empty(), "nothing matches");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(!starts_something(&effects), "{effects:?}");
+    assert!(app.modals.is_empty());
+    assert!(
+        app.status.text.contains("nothing was moved"),
+        "{}",
+        app.status.text
+    );
+}
+
+/// **A rename's answer leaves a job started meanwhile its own Ctrl-C.** A
+/// rename puts no dialog up, so a copy can start while it is asked about
+/// and be cancelled on its dialog before it has a worker: the rename's
+/// answer still renames, and the copy is cancelled the moment it starts.
+#[test]
+fn a_renames_answer_leaves_a_copys_cancel_to_the_copy() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('r'));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "New_Name");
+    let rename = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(in_use_asked(&rename).is_some());
+    press(&mut app, Key::ch('C'));
+    type_text(&mut app, "/mnt/backup");
+    let copy = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(job_started(&copy), Some((JobKind::Copy, [_]))));
+    press(&mut app, Key::ctrl('c'));
+
+    let answered = nothing_uses_them(&mut app, &rename);
+    assert!(
+        matches!(action_of(&answered), Action::Rename { name, .. } if name == "New_Name"),
+        "the rename goes ahead: {answered:?} ({})",
+        app.status.text
+    );
+    let started = update(&mut app, Msg::JobStarted(Ok("18d8-1-0".to_string())));
+    assert!(
+        started.contains(&Effect::CancelJob("18d8-1-0".to_string())),
+        "and the copy is cancelled as it starts: {started:?}"
+    );
+}
+
+/// **A refusal says what it waits for**: a question still out is named as
+/// one, and a job still starting by its own word.
+#[test]
+fn a_refused_question_names_what_it_waits_for() {
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('r'));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "New_Name");
+    let rename = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(in_use_asked(&rename).is_some());
+    let again = ask_to_move(&mut app);
+    assert!(in_use_asked(&again).is_none(), "{again:?}");
+    assert_eq!(
+        app.status.text,
+        "still checking what uses the last folders asked about"
+    );
+
+    // The rename prompt is up when a job starts: no key starts one under a
+    // prompt, so the state is set as the job's start would leave it.
+    let mut app = fixture(12, 80, 24);
+    press(&mut app, Key::ch('r'));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "New_Name");
+    app.background.starting = Some("copying…");
+    let refused = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(in_use_asked(&refused).is_none(), "{refused:?}");
+    assert_eq!(app.status.text, "still copying…");
+}
+
+/// **A rename's question leaves a hidden job hidden, and Ctrl-C on the
+/// in-use picker closes the picker**, saying nothing was renamed, rather
+/// than cancelling the job the dialog follows.
+#[test]
+fn ctrl_c_on_a_renames_picker_closes_it_and_leaves_the_hidden_job_alone() {
+    use fastf::core::assets::Progress;
+    let mut app = fixture(12, 100, 30);
+    let id = fastf::tui::testing::follow_job(&mut app, JobKind::Move, Progress::new(&[]));
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(!app.job_dialog_up());
+
+    let selected = app.library.selected().unwrap().clone();
+    press(&mut app, Key::ch('r'));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "New_Name");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(!app.job_dialog_up(), "the rename un-hid the move's dialog");
+    answer_in_use(&mut app, &effects, &[(&selected.path, vec![sitter(3)])]);
+    assert_eq!(choices(&app), ["Rename anyway", "Cancel"]);
+    assert!(!app.job_dialog_up());
+
+    let effects = press(&mut app, Key::ctrl('c'));
+    assert!(
+        !effects.contains(&Effect::CancelJob(id.clone())),
+        "Ctrl-C cancelled the move: {effects:?}"
+    );
+    assert!(app.modals.is_empty(), "the picker is closed");
+    assert!(
+        app.status.text.contains("nothing was renamed"),
+        "{}",
+        app.status.text
+    );
+}
+
+/// **A move's question gives the dialog back as it found it**: the hidden
+/// job it borrowed the dialog from stays hidden behind the picker, and
+/// Ctrl-C there closes the picker, not the job.
+#[test]
+fn a_moves_question_leaves_a_hidden_job_hidden_behind_its_picker() {
+    use fastf::core::assets::Progress;
+    let mut app = fixture(12, 100, 30);
+    let id = fastf::tui::testing::follow_job(&mut app, JobKind::Move, Progress::new(&[]));
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(!app.job_dialog_up());
+
+    busy_question(&mut app, "move");
+    assert_eq!(choices(&app), ["Move anyway", "Cancel"]);
+    assert!(
+        !app.job_dialog_up(),
+        "the hidden job's dialog came back over the question"
+    );
+    let effects = press(&mut app, Key::ctrl('c'));
+    assert!(
+        !effects.contains(&Effect::CancelJob(id.clone())),
+        "Ctrl-C cancelled the other job: {effects:?}"
+    );
+    assert!(app.modals.is_empty(), "the picker is closed");
+    assert!(
+        app.status.text.contains("nothing was moved"),
+        "{}",
+        app.status.text
+    );
+    assert!(!app.job_dialog_up(), "and the other job is still hidden");
 }
 
 /// `m` and the first base, answered up to the question.

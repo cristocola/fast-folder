@@ -1208,7 +1208,7 @@ fn main() {
         }
         let rendered = format!("{e:#}");
         eprintln!("{} {}", colored::Colorize::red("error:"), rendered);
-        if is_config_parse_failure(&rendered) {
+        if is_config_parse_failure(e) {
             // The only command that could repair the file also refuses to run
             // until it is repaired, so say what actually gets the user moving.
             eprintln!("  hint: fix the file, or delete it to start over with defaults");
@@ -1271,14 +1271,15 @@ fn pause_before_the_window_closes() {
 #[cfg(not(unix))]
 fn pause_before_the_window_closes() {}
 
-/// Does this error chain say that the configuration file itself is unreadable?
-///
-/// `Config::load` wraps the TOML failure with `parsing <path>`, so both halves
-/// are present in the rendered chain. Keyed on the pair rather than on either
-/// alone: fastf parses templates and metadata too, and offering to delete one
-/// of those would be terrible advice.
-fn is_config_parse_failure(rendered: &str) -> bool {
-    rendered.contains("parsing") && rendered.contains("config.toml")
+/// Does this error chain say that the configuration file itself does not
+/// parse? Asked of the chain by type (`ConfigUnreadable`), wherever a
+/// `.context()` put it, never of the text: fastf parses templates, metadata
+/// and journals too, any of which may sit under a folder whose name holds
+/// `config.toml`, and offering to delete one of those would be terrible
+/// advice.
+fn is_config_parse_failure(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.is::<fastf::core::config::ConfigUnreadable>())
 }
 
 /// Take `--relaunched` off the command line, recording it, before clap sees it.
@@ -1885,23 +1886,43 @@ mod tests {
     }
 
     /// The whole point of the hint: a config that exists but does not parse
-    /// stops every command, and no command can repair it.
+    /// stops every command, and no command can repair it — wherever a
+    /// caller's `.context()` put the failure in the chain.
     #[test]
     fn a_config_parse_failure_earns_the_hint() {
-        assert!(is_config_parse_failure(
-            "parsing /home/u/.config/fastf/config.toml: TOML parse error at line 9, column 1"
-        ));
+        let unreadable = fastf::core::config::Config::parse(
+            std::path::Path::new("/home/user/.config/fastf/config.toml"),
+            "this is = not [valid toml\n",
+        )
+        .unwrap_err();
+        assert!(is_config_parse_failure(&anyhow::Error::from(unreadable)));
+        let unreadable = fastf::core::config::Config::parse(
+            std::path::Path::new("/home/user/.config/fastf/config.toml"),
+            "[[[",
+        )
+        .unwrap_err();
+        let wrapped = anyhow::Error::from(unreadable).context("loading the configuration");
+        assert!(is_config_parse_failure(&wrapped));
     }
 
     /// "Delete it to start over with defaults" would be ruinous advice about a
     /// template or a project's metadata.
     #[test]
     fn other_parse_failures_do_not() {
-        assert!(!is_config_parse_failure(
-            "parsing /home/u/.config/fastf/templates/general/template.yaml: mapping values are not allowed"
-        ));
-        assert!(!is_config_parse_failure(
-            "reading /home/u/.config/fastf/config.toml: permission denied"
-        ));
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "parsing /home/user/.config/fastf/templates/general/template.yaml: mapping values are not allowed"
+        )));
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "reading /home/user/.config/fastf/config.toml: permission denied"
+        )));
+    }
+
+    /// A create journal in a folder whose path happens to hold `config.toml`
+    /// is no configuration file.
+    #[test]
+    fn a_journal_under_a_folder_named_like_the_config_does_not() {
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "parsing /base/deploy config.toml notes/.fastf-create-v2.json: expected value"
+        )));
     }
 }

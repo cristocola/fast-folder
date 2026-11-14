@@ -4,6 +4,31 @@ use std::fs;
 
 use crate::util::paths;
 
+/// `config.toml` is there and does not parse: what `Config::load` answers,
+/// with the TOML error as its source. **Its own type, so a caller asks the
+/// error's chain and never its text** — every file fastf parses fails as
+/// "parsing <path>", a create journal in a folder whose name holds
+/// `config.toml` included, and the hint `main` gives for this one (fix it
+/// or delete it) is ruinous advice about any other. The message is the one
+/// `with_context` wrote, `parsing <path>`, which the suites assert.
+#[derive(Debug)]
+pub struct ConfigUnreadable {
+    pub path: std::path::PathBuf,
+    source: toml::de::Error,
+}
+
+impl std::fmt::Display for ConfigUnreadable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "parsing {}", paths::display_path(&self.path))
+    }
+}
+
+impl std::error::Error for ConfigUnreadable {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     /// Base directory for new projects. Empty = the user's home directory.
@@ -254,9 +279,15 @@ impl Config {
         }
         let raw = fs::read_to_string(&path)
             .with_context(|| format!("reading {}", crate::util::paths::display_path(&path)))?;
-        let cfg: Self = toml::from_str(&raw)
-            .with_context(|| format!("parsing {}", crate::util::paths::display_path(&path)))?;
-        Ok(cfg)
+        Ok(Self::parse(&path, &raw)?)
+    }
+
+    /// `raw`, read as the configuration file at `path`.
+    pub fn parse(path: &std::path::Path, raw: &str) -> Result<Self, ConfigUnreadable> {
+        toml::from_str(raw).map_err(|source| ConfigUnreadable {
+            path: path.to_path_buf(),
+            source,
+        })
     }
 
     /// Persist the config atomically — a crash mid-write must never truncate it.
@@ -546,6 +577,22 @@ pub fn init_base_dir(raw: &str) -> Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{Config, NameCollision, unwrap_whole_quotes};
+
+    /// A config that does not parse reads, error chain and all, exactly as it
+    /// did when the failure was a `with_context("parsing <path>")`: the
+    /// suites, and anyone who scripted around the message, match on it.
+    #[test]
+    fn an_unreadable_config_says_parsing_its_path_then_why() {
+        let path = std::path::Path::new("/home/user/.config/fastf/config.toml");
+        let raw = "this is = not [valid toml\n";
+        let why = toml::from_str::<Config>(raw).unwrap_err();
+        let err = anyhow::Error::from(Config::parse(path, raw).unwrap_err());
+        assert_eq!(
+            format!("{err:#}"),
+            format!("parsing {}: {why}", crate::util::paths::display_path(path))
+        );
+        assert!(Config::parse(path, "base_dir = \"/srv\"\n").is_ok());
+    }
 
     /// `"claude --flag"` typed with its quotes is the command inside them; a
     /// quoted path with a space in it is still that path.

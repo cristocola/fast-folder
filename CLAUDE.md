@@ -263,7 +263,9 @@ harness redirects `HOME`.
 `Ok(default)` for an *absent* file, so a fallback only masks a parse or I/O error,
 and the config decides which directories are the library. The CLI exits 1 with a
 `hint:` naming the file; the app never takes the screen, and a launcher-started
-`fastf` still opens a window so the error can be read.
+`fastf` still opens a window so the error can be read. The hint is earned by type
+(`config::ConfigUnreadable` anywhere in the chain), never by text: every parse
+failure reads `parsing <path>`, and a path may hold `config.toml` anywhere.
 
 **`config::expand_base_path` / `resolve_base_dir_input` are the only way in for a
 base path.** The first expands `~` and requires absolute; the second also creates

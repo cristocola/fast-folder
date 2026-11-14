@@ -78,14 +78,21 @@ impl App {
         // A silent base alone is nothing a reconcile can finish.
         let finishing = attention.auto() + attention.waiting_work();
         if finishing > 0 {
+            // A paused move held back by what uses its folder waits for that,
+            // not for a base: said apart, when there is one.
+            let in_use = match attention.in_use() {
+                0 => String::new(),
+                1 => ", 1 waiting for what uses its folder".to_string(),
+                n => format!(", {n} waiting for what uses their folders"),
+            };
             items.push(PickItem {
                 label: "Finish now what fastf can".to_string(),
                 detail: format!(
                     "Run a reconcile now rather than wait for the app to: {} for fastf to \
-                     finish, {} waiting for a base to answer. What needs you stays on this \
-                     list until you choose.",
+                     finish, {} waiting for a base to answer{in_use}. What needs you stays on \
+                     this list until you choose.",
                     attention.auto(),
-                    attention.waiting_work()
+                    attention.waiting_work().saturating_sub(attention.in_use())
                 ),
                 value: ATTENTION_FINISH.to_string(),
             });

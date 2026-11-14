@@ -105,18 +105,17 @@ pub(super) fn finish_record(
 /// it made — the rest of it copied, then published and set aside like any
 /// move.
 pub(super) fn reconcile_paused(
-    source_base: &Path,
-    target_base: &Path,
-    final_path: &Path,
+    cfg: &Config,
+    found: &Found<'_>,
     transaction: transactions::MoveTransaction,
-    subject: &str,
     report: &mut ReconcileReport,
     pass: &mut Pass,
 ) {
+    let (subject, final_path) = (found.subject, found.final_path.as_path());
     let source = transaction.source_path();
     let project = match crate::core::project_info::read_metadata(&source) {
         Ok(Some(metadata)) if metadata.id == transaction.journal.project_id => {
-            library::project_from_meta(metadata, source_base, &source)
+            library::project_from_meta(metadata, &found.source_base, &source)
         }
         _ => {
             report.unrecoverable.push(format!(
@@ -126,14 +125,15 @@ pub(super) fn reconcile_paused(
         }
     };
     // What uses the folder, before the copy is taken over: a refusal then
-    // leaves the record and the copy as they are, waiting.
-    let folder = crate::core::holders::Folder::at(&project.path, &project.id);
+    // leaves the record and the copy as they are, waiting. Both spellings, as
+    // the job that moved it asked: a unit or an argument may name the folder
+    // through the base as it is configured.
+    let folder = crate::core::holders::Folder::of(cfg, &project);
     let guard = crate::core::holders::Guard::asked_by(false, pass.asking.clone());
-    let found = match crate::core::move_engine::ask_before_resuming(&project, &folder, &guard, None)
-    {
-        Ok(found) => found,
+    let in_use = match crate::core::move_engine::ask_before_resuming(&folder, &guard, None) {
+        Ok(in_use) => in_use,
         Err(error) => {
-            report.waiting.push(format!(
+            report.in_use.push(format!(
                 "{subject}: {error}; fastf goes on with the paused move once nothing uses it"
             ));
             return;
@@ -145,11 +145,11 @@ pub(super) fn reconcile_paused(
     let cancel = pass.ticker.cancel_flag().unwrap_or(&local_cancel);
     let resumed = crate::core::move_engine::resume_in_parts(
         &project,
-        target_base,
+        found.target_base,
         final_path,
         transaction,
         crate::core::move_engine::Asked {
-            in_use: Some(&found),
+            in_use: Some(&in_use),
             folder: &folder,
             guard: &guard,
         },

@@ -515,9 +515,9 @@ impl Job<'_> {
                 break;
             }
             self.begin_item(index, items.len(), &item.name);
-            match project_for(item)
-                .and_then(|project| crate::core::library::delete_project_in_parts(&project, guard))
-            {
+            match project_for(item).and_then(|project| {
+                crate::core::library::delete_project_in_parts(&project, guard, self.cancel)
+            }) {
                 Ok((housekeeping, notes)) => {
                     deleted += 1;
                     self.ticker().close_step();
@@ -532,6 +532,18 @@ impl Job<'_> {
                     pending.push((index, item, housekeeping, notes));
                 }
                 Err(error) => {
+                    if self.cancelled() {
+                        stopped = true;
+                        self.say(
+                            Level::Warn,
+                            &format!(
+                                "the delete of {} {} was cancelled; nothing was removed",
+                                item.id, item.name
+                            ),
+                        );
+                        self.report(index, failed_report(item, "delete", &error, true));
+                        break;
+                    }
                     failed += 1;
                     self.say(
                         Level::Error,

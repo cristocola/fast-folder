@@ -231,10 +231,51 @@ pub(crate) fn on_second_signal() {
 /// The code a second Ctrl-C exits with: 128 + SIGINT, as a shell reports it.
 const CTRL_C_EXIT: i32 = 130;
 
-/// The code a second closed console exits with on Windows: a hang-up's, as
-/// SIGHUP's would be on unix.
-#[cfg(windows)]
+/// The code a console closed after a Ctrl-C exits with on Windows: a
+/// hang-up's, as SIGHUP's would be on unix. A console closed first exits
+/// with whatever `main` exits with, inside [`CLOSE_GRACE`].
+#[cfg(any(windows, test))]
 const HANG_UP_EXIT: i32 = 129;
+
+/// How long the handler of a closed console, a logoff or a shutdown keeps
+/// Windows from ending the process: Windows ends it as soon as the handler
+/// returns, and at the latest five seconds after the event. Under that, so
+/// `main` has all of it to notice the flag, roll back and exit with its own
+/// code — which ends the handler's thread with the process.
+#[cfg(any(windows, test))]
+const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(4500);
+
+/// The console control events, as Windows hands them to the handler.
+#[cfg(any(windows, test))]
+mod console {
+    pub const CTRL_C: u32 = 0;
+    pub const CTRL_BREAK: u32 = 1;
+    pub const CTRL_CLOSE: u32 = 2;
+    pub const CTRL_LOGOFF: u32 = 5;
+    pub const CTRL_SHUTDOWN: u32 = 6;
+}
+
+/// What the Windows handler does with `event`, `hold` being how it waits;
+/// the answer is what the handler returns — `1` handled, `0` not fastf's.
+///
+/// **A closed console, a logoff and a shutdown hold the handler** for
+/// [`CLOSE_GRACE`] after recording the hang-up: returning would let Windows
+/// end the process there and then, before `main` could roll a create back.
+#[cfg(any(windows, test))]
+fn on_console_event(event: u32, hold: impl FnOnce(std::time::Duration)) -> i32 {
+    match event {
+        console::CTRL_C | console::CTRL_BREAK => {
+            ctrl_c();
+            1 // handled — do not run the default terminator
+        }
+        console::CTRL_CLOSE | console::CTRL_LOGOFF | console::CTRL_SHUTDOWN => {
+            hang_up(HANG_UP_EXIT);
+            hold(CLOSE_GRACE);
+            1
+        }
+        _ => 0,
+    }
+}
 
 /// Record the interrupt. Async-signal-safe: a single relaxed atomic swap, and
 /// on the second signal the surface and cursor restore, which are written for
@@ -298,11 +339,10 @@ pub fn install() {
     install_platform();
 }
 
+/// Ctrl-C and Ctrl+Break, and a closed console, a logoff or a shutdown, each
+/// answered on a thread Windows starts for it ([`on_console_event`]).
 #[cfg(windows)]
 fn install_platform() {
-    // Also covers CTRL_CLOSE_EVENT (window closed) and logoff/shutdown, where
-    // Windows gives a short grace period before killing the process — enough to
-    // notice the flag and unwind.
     unsafe extern "system" {
         fn SetConsoleCtrlHandler(
             handler: Option<unsafe extern "system" fn(u32) -> i32>,
@@ -311,22 +351,7 @@ fn install_platform() {
     }
 
     unsafe extern "system" fn handler(ctrl_type: u32) -> i32 {
-        const CTRL_C_EVENT: u32 = 0;
-        const CTRL_BREAK_EVENT: u32 = 1;
-        const CTRL_CLOSE_EVENT: u32 = 2;
-        const CTRL_LOGOFF_EVENT: u32 = 5;
-        const CTRL_SHUTDOWN_EVENT: u32 = 6;
-        match ctrl_type {
-            CTRL_C_EVENT | CTRL_BREAK_EVENT => {
-                ctrl_c();
-                1 // handled — do not run the default terminator
-            }
-            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
-                hang_up(HANG_UP_EXIT);
-                1
-            }
-            _ => 0,
-        }
+        on_console_event(ctrl_type, std::thread::sleep)
     }
 
     // SAFETY: registers a handler that lives as long as the process and
@@ -440,6 +465,33 @@ mod tests {
         ctrl_c();
         assert!(is_set(), "given back, Ctrl-C is fastf's again");
         reset();
+    }
+
+    /// **A closed console holds Windows off while `main` unwinds**: the
+    /// hang-up is recorded, then the handler waits under Windows' five
+    /// seconds rather than returning, which would end the process before a
+    /// create could roll back. Ctrl-C is answered at once.
+    #[test]
+    fn a_closed_console_holds_the_handler_while_main_unwinds() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
+        let mut held = None;
+        let answer = on_console_event(console::CTRL_CLOSE, |grace| held = Some(grace));
+        assert_eq!(answer, 1);
+        assert!(is_set() && hung_up(), "the hang-up is recorded first");
+        let held = held.expect("the handler waits before it returns");
+        assert!(
+            held >= std::time::Duration::from_secs(4) && held < std::time::Duration::from_secs(5),
+            "{held:?}: long enough to unwind, inside Windows' five seconds"
+        );
+
+        reset();
+        let mut waited = false;
+        assert_eq!(on_console_event(console::CTRL_C, |_| waited = true), 1);
+        assert!(is_set() && !hung_up() && !waited, "Ctrl-C does not wait");
+        reset();
+        assert_eq!(on_console_event(3, |_| waited = true), 0, "not fastf's");
+        assert!(!is_set() && !waited);
     }
 
     #[test]

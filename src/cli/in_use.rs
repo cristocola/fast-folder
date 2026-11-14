@@ -49,6 +49,9 @@ pub(crate) fn before(
         });
     }
     let found = holders::in_use(&Folder::of(cfg, project), &holders::asking_chain());
+    // The look can take seconds; a Ctrl-C during it stops here, before a
+    // question is put or a job is started that it would have to cancel.
+    crate::util::interrupt::check()?;
     if found.physical(verb) {
         anyhow::bail!("{}", found.refusal(verb, true).unwrap_or_default());
     }
@@ -118,4 +121,51 @@ pub(crate) fn hint(verb: Verb, again: &str) -> String {
         "--force {}s it anyway, and the result names what used it: `{again}`",
         verb.word()
     )
+}
+
+// Only where the look is asked before a rename is there a look to stop.
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    /// **A Ctrl-C while the command line looks at what uses the folder goes
+    /// no further**: no question is put and no job starts, and `main` says
+    /// `aborted.` and exits 130 — the look can take seconds, and a job
+    /// started after the Ctrl-C would be cancelled only once it was running.
+    #[test]
+    fn a_ctrl_c_during_the_look_starts_nothing() {
+        let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+        let _flag = crate::util::interrupt::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let base = crate::util::paths::canonical(tmp.path()).unwrap();
+        let path = base.join("proj");
+        std::fs::create_dir(&path).unwrap();
+        let project = Project {
+            id: "ID0001".to_string(),
+            id_number: Some(1),
+            template: "general".to_string(),
+            template_name: "General".to_string(),
+            name: "proj".to_string(),
+            path,
+            base: base.clone(),
+            created: "2026-01-01T00:00:00Z".to_string(),
+            description: String::new(),
+            tags: Vec::new(),
+            exists: true,
+        };
+        let cfg = Config {
+            base_dir: base.display().to_string(),
+            ..Config::default()
+        };
+        let ask = || before(&cfg, &project, Verb::Move, true, false, "", || {});
+
+        crate::util::interrupt::reset();
+        assert!(matches!(ask(), Ok(Go::Ahead { force: false, .. })));
+        crate::util::interrupt::raise_for_test();
+        let stopped = ask();
+        crate::util::interrupt::reset();
+        assert!(stopped.is_err(), "nothing goes on after a Ctrl-C");
+    }
 }

@@ -300,6 +300,25 @@ fn print_what_is_still_open(report: &crate::core::provisioning::ReconcileReport)
                 .dimmed()
         );
     }
+    if !report.in_use.is_empty() {
+        println!(
+            "   {} {} item{} waiting for what uses {} folder{}:",
+            "in use".cyan().bold(),
+            report.in_use.len(),
+            crate::util::plural::s(report.in_use.len()),
+            crate::util::plural::of(report.in_use.len(), "its", "their"),
+            crate::util::plural::s(report.in_use.len())
+        );
+        for item in &report.in_use {
+            println!("     - {}", item.cyan());
+        }
+        println!(
+            "     {}",
+            "fastf changed nothing about these and goes on with each once nothing uses its \
+             folder: stop what uses it, or move it again with --force."
+                .dimmed()
+        );
+    }
     if !report.unrecoverable.is_empty() {
         println!(
             "   {} {} {} a look:",

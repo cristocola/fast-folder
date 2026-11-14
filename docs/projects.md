@@ -508,8 +508,10 @@ The job asks again, under the library's lock, before anything changes, and
 that look is the one that decides: something that started using the folder
 since the question was asked refuses the job the same way. A move that paused
 waiting for a mount is asked before it goes on: while its folder is in use,
-`fastf reconcile` leaves its copy and its record as they are and goes on once
-nothing uses it, and `!` lists it as waiting.
+`fastf reconcile` leaves its copy and its record as they are, lists it as
+*in use* with what uses it, and goes on once nothing does; `!` lists it as
+waiting. Stop what uses it, or move the project again with `--force` (in the
+app, *Move anyway*), which goes on from the copy.
 
 **What it cannot see.** Linux shows a user only their own processes' folders
 and files: another user's — root's, a system service's — are seen by their

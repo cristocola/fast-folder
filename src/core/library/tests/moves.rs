@@ -983,10 +983,11 @@ fn a_delete_and_a_rename_refuse_until_forced() {
     );
 
     let sitter = sitter_in(&b.path);
-    let error = delete_project_in_parts(&b, &asking).unwrap_err();
+    let go_on = AtomicBool::new(false);
+    let error = delete_project_in_parts(&b, &asking, &go_on).unwrap_err();
     assert!(crate::core::holders::is_in_use(&error), "{error:#}");
     assert!(b.path.join(project_info::RESERVED_FILENAME).is_file());
-    let (housekeeping, notes) = delete_project_in_parts(&b, &forced).unwrap();
+    let (housekeeping, notes) = delete_project_in_parts(&b, &forced, &go_on).unwrap();
     drop(sitter);
     assert!(
         notes.iter().any(|note| note.contains("the deleted folder")),
@@ -994,4 +995,25 @@ fn a_delete_and_a_rename_refuse_until_forced() {
     );
     finish_delete(&b.name, housekeeping, crate::core::progress::Ticker::none());
     assert!(!b.path.exists());
+}
+
+/// **A delete cancelled before its folder leaves the library deletes
+/// nothing**: a cancel that came while it asked what uses the folder is read
+/// before the rename aside, which no cancel could undo.
+#[test]
+fn a_cancel_raised_before_the_rename_aside_deletes_nothing() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+
+    let cancel = AtomicBool::new(true);
+    let guard = crate::core::holders::Guard::here(false);
+    assert!(delete_project_in_parts(&project, &guard, &cancel).is_err());
+    assert!(project.path.join(project_info::RESERVED_FILENAME).is_file());
+    assert!(retired_folders(base).is_empty(), "nothing was set aside");
+    assert_eq!(discover(&cfg).len(), 1, "still in the library");
 }

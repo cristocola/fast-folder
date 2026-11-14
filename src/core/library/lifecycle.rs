@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::config::Config;
 use crate::core::holders::{self, Folder, Guard, Verb};
@@ -87,7 +88,8 @@ pub fn delete_project_configured(project: &Project) -> Result<()> {
 /// [`delete_project_configured`], asking what uses the folder first, as
 /// `guard` says; answers what the delete went past.
 pub fn delete_project_guarded(project: &Project, guard: &Guard) -> Result<Vec<String>> {
-    let (housekeeping, notes) = delete_project_in_parts(project, guard)?;
+    let cancel = AtomicBool::new(false);
+    let (housekeeping, notes) = delete_project_in_parts(project, guard, &cancel)?;
     finish_delete(
         &project.name,
         housekeeping,
@@ -100,15 +102,20 @@ pub fn delete_project_guarded(project: &Project, guard: &Guard) -> Result<Vec<St
 /// under the data lock — and hand back the removal of its hidden folder,
 /// which needs no lock and can take minutes on a cloud mount, with what the
 /// delete went past (`core::holders`).
+///
+/// **`cancel` is honoured until the folder leaves the library**, and read
+/// once what uses it has been asked: nothing before that changes anything,
+/// and nothing after it can be taken back.
 pub fn delete_project_in_parts(
     project: &Project,
     guard: &Guard,
+    cancel: &AtomicBool,
 ) -> Result<(crate::core::move_cleanup::Housekeeping, Vec<String>)> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
     let asked = asked_about(&config, &project, guard);
-    delete_checked(&project, &asked, guard)
+    delete_checked(&project, &asked, guard, cancel)
 }
 
 /// The folder a verb asks about: both spellings when it looks at all.
@@ -159,13 +166,15 @@ pub(crate) fn delete_project_inner(
     project: &Project,
 ) -> Result<crate::core::move_cleanup::Housekeeping> {
     let asked = Folder::at(&project.path, &project.id);
-    delete_checked(project, &asked, &Guard::off()).map(|(housekeeping, _)| housekeeping)
+    delete_checked(project, &asked, &Guard::off(), &AtomicBool::new(false))
+        .map(|(housekeeping, _)| housekeeping)
 }
 
 fn delete_checked(
     project: &Project,
     asked: &Folder,
     guard: &Guard,
+    cancel: &AtomicBool,
 ) -> Result<(crate::core::move_cleanup::Housekeeping, Vec<String>)> {
     let path =
         crate::util::paths::canonical(&project.path).unwrap_or_else(|_| project.path.clone());
@@ -197,6 +206,14 @@ fn delete_checked(
     refuse_mounts_inside(&path)?;
     // What uses the folder, before it leaves the library either way.
     let notes = holders::check(asked, Verb::Delete, guard)?.notes(Verb::Delete);
+    // A cancel that came while that look ran stops it here: the next step
+    // takes the project out of the library, which no cancel undoes.
+    if cancel.load(Ordering::Relaxed) {
+        anyhow::bail!(
+            "the delete of '{}' was cancelled; nothing was removed",
+            project.name
+        );
+    }
     if crate::core::transactions::RetireStrategy::for_base(&base)
         == crate::core::transactions::RetireStrategy::InPlace
     {

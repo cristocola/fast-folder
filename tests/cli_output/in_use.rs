@@ -316,3 +316,49 @@ fn what_the_command_is_piped_to_or_from_is_left_out() {
     );
     assert!(archive.join("second").is_dir() && !second.exists());
 }
+
+/// **A paused move held back by what uses its folder is said as that**, not
+/// as a base that does not answer: `fastf reconcile` lists it under its own
+/// heading, with what to do — stop what uses it, or move it again with
+/// `--force` — and never sends anyone to mount a base that is there.
+#[cfg(debug_assertions)]
+#[test]
+fn reconcile_says_a_paused_move_waits_for_what_uses_its_folder() {
+    let sb = Sandbox::new();
+    let (project, archive) = project_and_archive(&sb);
+    fs::write(project.join("data.bin"), [9_u8; 4096]).unwrap();
+    let paused = sb
+        .command()
+        .args(["move", "ID0001", "archive", "--yes"])
+        .env(
+            "FASTF_FAULT",
+            "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
+        )
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&paused.stderr);
+    assert!(said.contains("paused"), "{paused:?}");
+    assert!(archive.join(".fastf-transactions").is_dir(), "{said}");
+    let sitter = working_in(&project, "sleep", &["30"]);
+
+    let out = sb.run(&["reconcile"]);
+    drop(sitter);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("1 item waiting for what uses its folder:"),
+        "{said}"
+    );
+    assert!(said.contains("sleep (pid"), "{said}");
+    assert!(
+        said.contains("stop what uses it, or move it again with --force"),
+        "{said}"
+    );
+    assert!(!said.contains("base to answer"), "{said}");
+    assert!(!said.contains("mount it"), "{said}");
+    assert!(project.join("data.bin").is_file(), "not moved");
+}

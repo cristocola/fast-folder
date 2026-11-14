@@ -163,9 +163,12 @@ A second Ctrl-C, hang-up or terminate ends fastf at once, after giving the
 terminal back — the prompt's rows cleared, the app's screen left, the cursor
 shown, the terminal cooked — and exits with the code a shell reports for that
 signal: **130** when the second was a Ctrl-C (SIGINT), **129** a hang-up,
-**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130 and a
-second closed console 129. Any other failure exits 1 with an `error:` line,
-and a command line fastf cannot read exits 2.
+**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130, and a
+console closed after a Ctrl-C exits 129. A console closed first asks the way
+Ctrl-C does: Windows ends a program five seconds after its console closes, and
+fastf rolls back and exits inside them; whatever is still working then is
+ended by Windows. Any other failure exits 1 with an `error:` line, and a
+command line fastf cannot read exits 2.
 
 ## Browsing projects
 
@@ -875,7 +878,8 @@ fastf reconcile --resolve <path> keep-moved   # settle one item that needs you
 
 `--list` sorts what is unfinished by who finishes it: **fastf** (a reconcile
 does — the app starts one by itself), **waiting** (for a base that is not
-mounted or does not answer), or **needs you**, each with its reason and the
+mounted or does not answer, or a paused move for what uses its folder to
+stop), or **needs you**, each with its reason and the
 exact commands that settle it. Only a few things need you: an old copy holding
 something that differs from the moved copy (`keep-moved` or `take-old`), an
 old copy whose project fastf cannot find (`put-back` or `discard`), a move
@@ -936,8 +940,11 @@ any other fastf can follow it (`fastf jobs watch`, `L` in the app) or cancel
 it. `move`, `copy-to`, `delete` and `reconcile` all take `--detach`.
 
 A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
-after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
-between items. A job whose process was killed shows as `stopped`;
+after that it is too late, and `fastf jobs cancel` says so. A move on one
+drive, which is a rename, is never half done: a cancel that comes while it
+checks what uses the folder moves nothing. A delete stops the same way until
+its folder leaves the library, and a Ctrl-C while the command line itself
+checks starts no job at all. A reconcile stops between items. A job whose process was killed shows as `stopped`;
 `fastf reconcile` finishes what it left, whole.
 
 **A job waits out a filesystem that stops answering.** When nothing has moved

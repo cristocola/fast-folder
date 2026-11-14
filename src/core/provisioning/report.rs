@@ -27,6 +27,13 @@ pub struct ReconcileReport {
     /// is not mounted or does not answer, a path it could not look at. Nothing
     /// was changed, and nothing about it needs a person yet.
     pub waiting: Vec<String>,
+    /// Paused moves held back because something uses their folder: the base
+    /// answers, and fastf goes on with each once nothing uses it, or when it
+    /// is moved again past what uses it. Nothing was changed. Kept apart from
+    /// [`Self::waiting`], whose advice — mount it, wait for the connection —
+    /// would never settle these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_use: Vec<String>,
     /// The pass stopped for a cancel before it had looked at everything;
     /// what it did not reach is as it was, and the next pass takes it up.
     pub cancelled: bool,
@@ -80,6 +87,7 @@ impl ReconcileReport {
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
             && self.waiting.is_empty()
+            && self.in_use.is_empty()
             && !self.cancelled
     }
 
@@ -96,7 +104,7 @@ impl ReconcileReport {
             "Nothing to reconcile — every project is fully provisioned.".to_string()
         } else {
             format!(
-                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}{}",
+                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}{}{}",
                 self.resumed,
                 self.completed,
                 self.rolled_back,
@@ -105,6 +113,11 @@ impl ReconcileReport {
                 match self.waiting.len() {
                     0 => String::new(),
                     n => format!("; {n} waiting for a base to answer"),
+                },
+                match self.in_use.len() {
+                    0 => String::new(),
+                    1 => "; 1 waiting for what uses its folder".to_string(),
+                    n => format!("; {n} waiting for what uses their folders"),
                 },
                 match self.unrecoverable.len() + self.leftovers.len() {
                     0 => String::new(),

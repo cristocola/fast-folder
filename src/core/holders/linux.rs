@@ -79,6 +79,7 @@ struct Context {
     /// The foreign mount tables found so far, each once: its text's hash,
     /// its text, the table.
     tables: Mutex<Vec<(u64, Vec<u8>, Table)>>,
+    /// The names a shell goes by ([`shells`]).
     shells: HashSet<String>,
     /// The parent of every shell read so far.
     shell_parents: Mutex<HashSet<u32>>,
@@ -232,7 +233,8 @@ pub(super) fn within<R: Send + 'static>(
         if now >= end {
             break;
         }
-        if let Ok((pid, answer)) = rx.recv_timeout(end.min(next_look) - now)
+        if let Ok((pid, answer)) =
+            rx.recv_timeout(end.min(next_look).saturating_duration_since(now))
             && waiting.remove(&pid)
         {
             answers.extend(answer);

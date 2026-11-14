@@ -265,10 +265,12 @@ anything else of it is removed, and the rest only through the merge, entry by
 entry.**
 
 `library::move_project` is the compatibility shape (lock, revalidate);
-applications use `operations::move_project` →
-`move_project_configured_with_outcome`, which also revalidates the target against
-freshly loaded configuration. Targets are **configured bases only**, so a moved
-project stays discoverable.
+applications move through a job (`move_project_in_parts`) or
+`operations::move_project` → `move_project_with_outcome`, each with a `Guard`
+saying how what uses the folder is weighed, and each revalidating the target
+against freshly loaded configuration. `move_project_configured_with_outcome` is
+the same shape asking nothing (`Guard::off`), for the tests and library callers.
+Targets are **configured bases only**, so a moved project stays discoverable.
 
 A same-filesystem move is a plain `fs::rename` with no journal. The staged path is
 taken **only** for Unix `EXDEV` or Windows `ERROR_NOT_SAME_DEVICE`; every other
@@ -382,7 +384,7 @@ for a cancel** (the merge
 walks the moved copy on `ticker.uncancellable()`), because a check stopped part
 of the way reads as one that failed; the removal after it stops when its ticker
 honours one, leaving a redundant leftover. The public entry
-points (`move_project_configured_with_outcome`, `copy_project_configured`,
+points (`move_project_with_outcome`, `copy_project_configured`,
 `operations::reconcile_with`) end the progress through
 `core::progress::settle`: `Done`, `Cancelled` when the flag stopped it, `Failed`
 with the reason. `Ticker::none()` is what every caller with nobody to tell
@@ -737,9 +739,10 @@ own look.
 removal, owned, so it outlives the lock); `finish_housekeeping` runs it after
 the lock is released. `delete_project_in_parts` does the same for a delete, and
 `reconcile_locked_with` defers its removals (`Deferred`, `finish_deferred`)
-until its lock is dropped. The combined entry points (`move_project_configured_
-with_outcome`, `delete_project_configured`, `reconcile_unlocked`) run both halves
-in-process, so library callers and tests keep their meaning.
+until its lock is dropped. The combined entry points (`move_project_with_outcome`
+and its guard-off `move_project_configured_with_outcome`,
+`delete_project_guarded`, `reconcile_unlocked`) run both halves in-process, so
+library callers and tests keep their meaning.
 `SourceOutcome::SetAside` is what a move says before its housekeeping has run.
 
 **A live job's records are its own.** An operation id carries the pid of the

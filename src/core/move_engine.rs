@@ -163,9 +163,11 @@ impl MoveOutcome {
 /// The compatibility shape, kept for library callers: it holds the
 /// coarse data lock, revalidates the recorded source base and identity beneath
 /// it, and runs with throwaway progress/cancel handles. Applications use
-/// [`move_project_configured_with_outcome`], which also revalidates the target
-/// against freshly loaded configuration. **It asks nothing about what uses
-/// the folder** (`Guard::off`): the tests drive it, and no surface reaches it.
+/// [`move_project_with_outcome`] (`operations::move_project`) or, as a job,
+/// [`move_project_in_parts`], each with a [`Guard`], and each revalidating the
+/// target against freshly loaded configuration. **It asks nothing about what
+/// uses the folder** (`Guard::off`): the tests drive it, and no surface
+/// reaches it.
 ///
 /// **Safety invariant: the source is never removed until the destination is
 /// fully copied AND verified.** Same-filesystem moves take an instant, atomic
@@ -194,12 +196,9 @@ pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
     Ok(outcome.project)
 }
 
-/// Application move entry point. It reloads configuration under the coarse
-/// mutation lock, then revalidates both source and target against that fresh
-/// snapshot before touching either path. Removing the old copy runs after the
-/// lock is released ([`move_project_in_parts`], [`finish_housekeeping`]).
-/// Like [`move_project`], it asks nothing about what uses the folder;
-/// [`move_project_with_outcome`] does.
+/// The compatibility shape of [`move_project_with_outcome`], asking nothing
+/// about what uses the folder (`Guard::off`), like [`move_project`]: the
+/// tests and library callers drive it, and no surface reaches it.
 pub fn move_project_configured_with_outcome(
     project: &Project,
     new_base: &Path,
@@ -209,8 +208,12 @@ pub fn move_project_configured_with_outcome(
     move_project_with_outcome(project, new_base, &Guard::off(), progress, cancel)
 }
 
-/// [`move_project_configured_with_outcome`], asking what uses the folder
-/// first, as `guard` says.
+/// Application move entry point (`operations::move_project`). It reloads
+/// configuration under the coarse mutation lock, revalidates both source and
+/// target against that fresh snapshot before touching either path, and asks
+/// what uses the folder first, as `guard` says. Removing the old copy runs
+/// after the lock is released ([`move_project_in_parts`],
+/// [`finish_housekeeping`]), and the progress is settled at the end.
 pub fn move_project_with_outcome(
     project: &Project,
     new_base: &Path,

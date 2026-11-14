@@ -75,6 +75,16 @@ larger than that, so a debug `fastf.exe` without it overflows before it parses
 anything, and every Windows suite that runs the binary fails at its first
 command.
 
+**The static musl build allocates through mimalloc** (`src/main.rs`, a
+`cfg(target_env = "musl")` dependency): musl's own allocator serialises
+threads, and every pass that reads all the projects on several threads ran
+1.6 to 2 times as slow as on glibc (about 1.2 with mimalloc). It is the one C library fastf compiles, for
+that target alone — the AUR `fast-folder-bin` package ships it — and no PR job
+builds musl, so build it before a tag: `cargo build --release --locked
+--target x86_64-unknown-linux-musl` (needs `musl-gcc`, from the `musl`
+package), and `cargo test --target x86_64-unknown-linux-musl` runs every suite
+against it.
+
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a
 # real Windows runner. Needs `rustup target add x86_64-pc-windows-gnu` plus a
@@ -542,7 +552,8 @@ skips the `$EDITOR` fallback `cfg.resolve_editor()` applies.
 - **Windows APIs are declared by hand** (`unsafe extern "system"` beside the one
   call that needs them; the numbers more than one module names are in
   `util::win`), and `libc` is the only platform crate. No bindings crate is
-  added for a handful of calls.
+  added for a handful of calls. (mimalloc, the musl build's allocator, is
+  no binding: see *Build commands*.)
 - `util::yaml` is the only module that names the YAML crate, and
   `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins its output: users
   diff, commit and hand-edit these files, so the bytes may not move.

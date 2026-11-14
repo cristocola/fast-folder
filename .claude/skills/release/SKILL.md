@@ -61,6 +61,9 @@ green rather than a checklist to work through. Each one runs locally:
   from Linux. CI lints on a real Windows runner as well, where some lint
   thresholds differ.
 - `cargo test` and `cargo test --release`.
+- `cargo build --release --locked --target x86_64-unknown-linux-musl`: no PR
+  job builds the static musl archive, and it is the one target that compiles
+  C (mimalloc). Only the Release workflow would find a break, after the tag.
 - `cargo deny --locked check licenses bans sources`, by `deny.toml`
   (cargo-deny 0.20; duplicate versions are warnings). Advisories are the
   `audit` job's, `rustsec/audit-check`.

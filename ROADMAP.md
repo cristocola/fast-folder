@@ -54,10 +54,23 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
   written back unchanged by a tick.
 - An rclone base on the desk: one read per project, the rows filling in as
   each lands, and a stalled base holding up only its own.
+- The pane's folds on a real keyboard and library: Enter on `✓ n done` and
+  back, a tick that stays in its row until the selection leaves, `+` with the
+  cursor on a fold, `<` and `>` past a finished phase.
+- A project something really uses, from the app and the command line: a
+  Docker or Podman container mounting a folder of it, a dev server running in
+  it, an editor with it open, a user unit naming it — refused with each named,
+  *Move anyway* / `--force` going past and saying what it went past.
 
-Last reviewed: 2026-10-13.
+Last reviewed: 2026-11-14.
 
 ## Backlog
+- **4.0.0: Linux only.** 3.20.0 is the last release with a native Windows
+  build, and it keeps working. Remove the Windows code paths, the two Windows
+  test suites, the Windows CI and release legs, the MSI and its WiX source,
+  `install.ps1`, `docs/windows.md`, `build.rs` and the crt-static config, and
+  write a short guide to running fastf on Windows inside WSL. Names Windows
+  cannot hold stay refused: the bases are often NTFS drives Windows reads too.
 
 Unscheduled; nothing here is promised.
 
@@ -167,6 +180,14 @@ fix is the one `Builder::summary` and `transform_example` took: hand it the
 - The app's journal page prints a stamp's UTC time and `fastf journal` the
   local one. The page's snapshot fixes the bytes, so local time there needs
   a clock the test can pin.
+- The app offers *Move anyway* only from its own question. Something that
+  starts using a folder between that question and the job's own look fails
+  the job's item with what used it, in the report dialog; the command line
+  offers `--force` there, the app does not yet.
+- What uses a folder is seen from this user's processes and every process's
+  mount table and arguments. A root container working in a folder it mounted
+  from above the project (all of `~/Projects`, say) is not seen; reading
+  root's working folders needs root.
 - `fastf agent` exits 1 and prints an error whenever the agent exits
   non-zero, a Ctrl-C out of it included; its help says it exits with the
   agent's status.

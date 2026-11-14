@@ -64,6 +64,13 @@ libc = "0.2"
 # the inline prompts both depend on it.
 crossterm = { version = "0.29", default-features = false, features = ["events", "use-dev-tty"] }
 
+# The static musl build's allocator (src/main.rs). musl's own serialises
+# threads: the passes that read every project on several at once — reindex,
+# search, the app's reads — ran 1.6-2x slower than on glibc, and about 1.2x
+# with this, for half a millisecond more at start.
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "0.1"
+
 # Also a dev-dependency so integration tests (separate crates) can drive fastf
 # through a real pty — a prompt refuses to draw without a TTY, so the
 # confirmations and pickers are otherwise untestable. Already vendored for unix

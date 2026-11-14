@@ -1,5 +1,11 @@
 use fastf::{bootstrap, cli, tui};
 
+/// The static musl build allocates through mimalloc; why is beside the
+/// dependency in `Cargo.toml`.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 

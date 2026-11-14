@@ -13,9 +13,10 @@
 //!   person can stop; every process's mount table, whoever owns it, so a
 //!   container or sandbox that mounts part of the folder is seen; another
 //!   filesystem mounted inside it; a systemd unit file that names it or is a
-//!   link into it. Every process is read at once under one deadline, and one
-//!   that does not answer — stuck behind a dead mount — is named as such,
-//!   never waited for.
+//!   link into it. Every process, and every unit file, is read under one
+//!   deadline, and one that does not answer — stuck behind a dead mount — is
+//!   named as such, never waited for; a process no reader reached is named
+//!   as not looked at.
 //! - **Windows** (`windows.rs`): what holds anything in the tree. Windows
 //!   refuses the rename itself then, so that is physical, and asked when the
 //!   rename refuses, or after a staged move's scan.
@@ -162,7 +163,7 @@ impl Folder {
 
     /// [`Self::of`], for the folder at `path`, called `label`.
     pub fn configured(cfg: &Config, path: &Path, label: &str) -> Self {
-        let path = crate::util::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = resolved(path);
         let spelled = match (path.parent(), path.file_name()) {
             (Some(parent), Some(name)) => {
                 let configured: Vec<PathBuf> = cfg
@@ -197,7 +198,7 @@ impl Folder {
     /// A folder known by its path alone.
     pub fn at(path: &Path, label: &str) -> Self {
         Self {
-            path: crate::util::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf()),
+            path: resolved(path),
             spelled: None,
             label: label.to_string(),
         }
@@ -209,6 +210,14 @@ impl Folder {
             .chain(self.spelled.clone())
             .collect()
     }
+}
+
+/// `path`, canonical, under the deadline a base is given; as given when it
+/// does not answer. Canonicalizing a folder on a mount that stopped
+/// answering blocks for the kernel's own timeout, and the question would
+/// never come back.
+fn resolved(path: &Path) -> PathBuf {
+    crate::util::paths::canonical_in_time(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Everything using one folder.
@@ -264,6 +273,16 @@ pub enum How {
     Loaded(PathBuf),
     /// Started with a path there among its arguments.
     Named(PathBuf),
+    /// Started with the folder itself among its arguments, and tied to it
+    /// by nothing else: a file manager or a viewer opened on it, whose
+    /// window goes on showing the old path. It holds nothing of the folder.
+    OpenedOn,
+    /// A terminal: a program that is no shell, hosting one (a shell among
+    /// its children, working wherever it works), tied only by its working
+    /// folder, here at `.0`, and the folder itself among its arguments — an
+    /// emulator, a multiplexer, `npm run`. Its children are judged
+    /// themselves.
+    Terminal(PathBuf),
     /// A folder from inside it is mounted at `at` — a container's or a
     /// sandbox's mount, or a bind on this machine.
     Mounts {
@@ -280,10 +299,16 @@ pub enum How {
         state: String,
         dormant: bool,
     },
+    /// A unit's file — or its drop-in folder, a link — at this path did not
+    /// answer in time: it may name the folder.
+    UnitSilent(PathBuf),
     /// These processes did not answer in time: any of them may use the
     /// folder. One use for all of them, so a mount that stopped answering
     /// under many processes is one note, not one each.
     Silent(Vec<u32>),
+    /// These processes were never asked, since every reader was on one
+    /// that did not answer: nothing is known of them.
+    Unasked(Vec<u32>),
     /// Windows: a program holds this file.
     Held(PathBuf),
     /// Windows: a program works in this folder.
@@ -314,15 +339,17 @@ impl Use {
     /// **The one table.** Windows' holds are physical, and so is a
     /// filesystem mounted inside a folder being deleted — the removal would
     /// keep it, and the hidden folder with it, for good. A shell whose only
-    /// tie is its prompt, a unit nothing will start, and a process that did
-    /// not answer are notes. Everything else advises.
+    /// tie is its prompt, the terminal hosting a shell, a program opened on
+    /// the folder and holding nothing of it, a unit nothing will start, and
+    /// a process that did not answer are notes. Everything else advises — a
+    /// process never asked included, since nothing was learned of it.
     pub fn weight(&self, verb: Verb) -> Weight {
         match &self.how {
             How::Held(_) | How::BusyFolder(_) => Weight::Physical,
             How::MountedInside(_) if verb == Verb::Delete => Weight::Physical,
-            How::WorkingIn { shell: true, .. } => Weight::Note,
+            How::WorkingIn { shell: true, .. } | How::Terminal(_) | How::OpenedOn => Weight::Note,
             How::Unit { dormant: true, .. } => Weight::Note,
-            How::Silent(_) => Weight::Note,
+            How::Silent(_) | How::UnitSilent(_) => Weight::Note,
             _ => Weight::Advisory,
         }
     }
@@ -350,6 +377,8 @@ impl Use {
             How::Runs(path) => format!("{who} runs {}", at(path)),
             How::Loaded(path) => format!("{who} has {} loaded", at(path)),
             How::Named(path) => format!("{who} was started with {}", at(path)),
+            How::OpenedOn => format!("{who} was opened on {}", at(Path::new(""))),
+            How::Terminal(path) => format!("{who} has a terminal in {}", at(path)),
             How::Mounts { folder, at: point } if self.by == By::Nobody => format!(
                 "{} is mounted at {} too",
                 at(folder),
@@ -373,7 +402,17 @@ impl Use {
                 state,
                 ..
             } => format!("{who} ({state}) is a link to {}", at(path)),
+            How::UnitSilent(path) => format!(
+                "{who}'s file did not answer: {}",
+                crate::util::paths::display_path(path)
+            ),
             How::Silent(pids) => format!("{} did not answer", pids_text(pids)),
+            How::Unasked(pids) => format!(
+                "{} {} not looked at: the ones before {} did not answer",
+                processes_text(pids),
+                crate::util::plural::of(pids.len(), "was", "were"),
+                crate::util::plural::of(pids.len(), "it", "them")
+            ),
             How::Held(path) => format!("{who} has {} open", at(path)),
             How::BusyFolder(path) => format!("a program is working in {}", at(path)),
         }
@@ -394,9 +433,18 @@ impl Use {
                 _ => format!("{who} has its prompt in {old}; cd to the new one"),
             },
             How::WorkingIn { .. } => format!("{who} was working in {old}; {again}"),
+            How::Terminal(_) => format!("{who} has a terminal in {old}"),
             How::Open { .. } | How::Runs(_) | How::Loaded(_) | How::Named(_) => {
                 format!("{who} was using {old} ({}); {again}", self.what())
             }
+            How::OpenedOn => format!(
+                "{who} was opened on the folder; it shows {}",
+                match verb {
+                    Verb::Move => "the old one",
+                    Verb::Rename => "the old name",
+                    Verb::Delete => "a folder that is gone",
+                }
+            ),
             How::Mounts { folder, at: point } if self.by == By::Nobody => format!(
                 "{} of {old} is still mounted at {}; mount it again from where it is now",
                 at(folder),
@@ -425,9 +473,19 @@ impl Use {
                     tie_text(tie)
                 ),
             },
+            How::UnitSilent(path) => format!(
+                "{who}'s file did not answer ({}), so fastf could not tell whether it names {old}",
+                crate::util::paths::display_path(path)
+            ),
             How::Silent(pids) => format!(
                 "{} did not answer, so fastf could not tell whether {} {old}",
                 pids_text(pids),
+                crate::util::plural::of(pids.len(), "it used", "they used")
+            ),
+            How::Unasked(pids) => format!(
+                "{} {} not looked at, so fastf could not tell whether {} {old}",
+                processes_text(pids),
+                crate::util::plural::of(pids.len(), "was", "were"),
                 crate::util::plural::of(pids.len(), "it used", "they used")
             ),
             How::Held(path) | How::BusyFolder(path) => {
@@ -473,6 +531,15 @@ fn pids_text(pids: &[u32]) -> String {
         (n, _) if n <= NAMED => format!("pids {} and {}", named[..n - 1].join(", "), named[n - 1]),
         (n, _) => format!("pids {} and {} more", named.join(", "), n - NAMED),
     }
+}
+
+/// `1 process`, `68 processes`.
+fn processes_text(pids: &[u32]) -> String {
+    format!(
+        "{} {}",
+        pids.len(),
+        crate::util::plural::of(pids.len(), "process", "processes")
+    )
 }
 
 fn tie_text(tie: &Tie) -> String {
@@ -545,6 +612,11 @@ impl Holders {
         let (word, past) = (verb.word(), verb.past());
         let label = &self.label;
         Some(match refusing.as_slice() {
+            // Nothing to stop: a look that could not be made is made again.
+            [one] if matches!(one.how, How::Unasked(_)) => format!(
+                "{}, so {label} was not {past}; {word} it again in a moment",
+                one.line()
+            ),
             [one] => {
                 let stop = if mounts_only { "unmount it" } else { "stop it" };
                 format!(
@@ -702,9 +774,9 @@ pub fn in_use_all(folders: &[Folder], asking: &[Asking]) -> Vec<Holders> {
     {
         crate::util::trace::hit("what uses a folder");
         let spellings: Vec<Vec<PathBuf>> = folders.iter().map(Folder::spellings).collect();
-        let pass = linux::read(&spellings, asking, linux::Want::Everything);
-        let units = units::find(&spellings);
         let shells = linux::shells();
+        let pass = linux::read(&spellings, asking, linux::Want::Everything, &shells);
+        let units = units::find(&spellings);
         judge::judge(&spellings, &pass, &shells, &units)
             .into_iter()
             .zip(folders)
@@ -854,7 +926,12 @@ fn working(roots: &[PathBuf]) -> Vec<(usize, u32, String)> {
             .iter()
             .map(|root| vec![crate::util::paths::canonical(root).unwrap_or_else(|_| root.clone())])
             .collect();
-        let pass = linux::read(&spellings, &[], linux::Want::WorkingFolders);
+        let pass = linux::read(
+            &spellings,
+            &[],
+            linux::Want::WorkingFolders,
+            &Default::default(),
+        );
         pass.seen
             .into_iter()
             .flat_map(|seen| {

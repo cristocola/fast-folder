@@ -68,6 +68,10 @@ pub(super) struct Seen {
     pub program: String,
     /// The foreign namespace it lives in, by its index in [`Pass::foreign`].
     pub ns: Option<usize>,
+    /// Its working folder could not be read — another user's process — and
+    /// so neither could what it holds open: only its arguments and its
+    /// mounts are known.
+    pub opaque: bool,
     pub facts: Vec<Fact>,
 }
 
@@ -77,6 +81,11 @@ pub(super) struct Pass {
     pub seen: Vec<Seen>,
     /// Processes that did not answer by the deadline.
     pub silent: Vec<u32>,
+    /// Processes never asked: the ones before them did not answer.
+    pub unasked: Vec<u32>,
+    /// Every process with a shell among its children, wherever that shell
+    /// works: a terminal, a multiplexer, a script runner.
+    pub shell_parents: HashSet<u32>,
     /// This process's mount table.
     pub host: Vec<MountLine>,
     /// Every other table some process has, once each.
@@ -92,6 +101,15 @@ pub(super) struct UnitFound {
     pub tie: Tie,
     pub state: String,
     pub dormant: bool,
+}
+
+/// What the unit folders say of the folders asked about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct Units {
+    pub found: Vec<UnitFound>,
+    /// Unit files — or a unit's drop-in folder — that did not answer in
+    /// time, `(unit, system, path)`: any of them may name any folder.
+    pub silent: Vec<(String, bool, PathBuf)>,
 }
 
 /// Where `path` lies inside any of `folders`' spellings: each folder it is
@@ -268,32 +286,68 @@ pub(super) fn named_paths(argv: &[String], cwd: Option<&Path>, cwd_inside: bool)
     paths
 }
 
-/// Each process's most telling fact in each folder, as a use. A shell whose
-/// fact there is its working folder is named as one: its prompt is the only
-/// tie, and whatever it started is judged itself.
-pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize, Use)> {
-    let mut best: Vec<(usize, &Fact)> = Vec::new();
+impl Fact {
+    /// An argument naming the folder itself, not a path inside it.
+    fn names_the_folder(&self) -> bool {
+        self.kind == Kind::Arg && self.path.as_os_str().is_empty()
+    }
+}
+
+/// Each process's most telling fact in each folder, as a use; among
+/// arguments, one naming a path inside the folder before the folder itself.
+/// A shell whose fact there is its working folder is named as one: its
+/// prompt is the only tie, and whatever it started is judged itself. A
+/// process whose only tie is the folder itself among its arguments was
+/// opened on it — a file manager, a viewer — and holds nothing of it, once
+/// what it holds could be read (not [`Seen::opaque`]). A
+/// process that is no shell, `hosts_shell` (a shell among its children),
+/// tied only by its working folder and the folder itself among its
+/// arguments, is that shell's terminal: its children are judged themselves.
+pub(super) fn process_uses(
+    seen: &Seen,
+    shells: &HashSet<String>,
+    hosts_shell: bool,
+) -> Vec<(usize, Use)> {
+    let shell = shells.contains(&seen.program);
+    let mut folders: Vec<usize> = Vec::new();
     for fact in &seen.facts {
-        match best.iter_mut().find(|(folder, _)| *folder == fact.folder) {
-            Some((_, kept)) if fact.kind.rank() < kept.kind.rank() => *kept = fact,
-            Some(_) => {}
-            None => best.push((fact.folder, fact)),
+        if !folders.contains(&fact.folder) {
+            folders.push(fact.folder);
         }
     }
-    best.into_iter()
-        .map(|(folder, fact)| {
-            let path = fact.path.clone();
-            let how = match fact.kind {
-                Kind::Cwd => How::WorkingIn {
-                    at: path,
-                    shell: shells.contains(&seen.program),
-                },
-                Kind::Exe => How::Runs(path),
-                Kind::Open { writing } => How::Open { at: path, writing },
-                Kind::Loaded => How::Loaded(path),
-                Kind::Arg => How::Named(path),
+    folders
+        .into_iter()
+        .filter_map(|folder| {
+            let facts: Vec<&Fact> = seen
+                .facts
+                .iter()
+                .filter(|fact| fact.folder == folder)
+                .collect();
+            let working = facts.iter().find(|fact| fact.kind == Kind::Cwd);
+            let how = if !seen.opaque && facts.iter().all(|fact| fact.names_the_folder()) {
+                How::OpenedOn
+            } else if let Some(working) = working
+                && hosts_shell
+                && !shell
+                && facts
+                    .iter()
+                    .all(|fact| fact.kind == Kind::Cwd || fact.names_the_folder())
+            {
+                How::Terminal(working.path.clone())
+            } else {
+                let best = facts
+                    .iter()
+                    .min_by_key(|fact| (fact.kind.rank(), fact.names_the_folder()))?;
+                let path = best.path.clone();
+                match best.kind {
+                    Kind::Cwd => How::WorkingIn { at: path, shell },
+                    Kind::Exe => How::Runs(path),
+                    Kind::Open { writing } => How::Open { at: path, writing },
+                    Kind::Loaded => How::Loaded(path),
+                    Kind::Arg => How::Named(path),
+                }
             };
-            (
+            Some((
                 folder,
                 Use {
                     by: By::Process {
@@ -302,7 +356,7 @@ pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize,
                     },
                     how,
                 },
-            )
+            ))
         })
         .collect()
 }
@@ -404,18 +458,20 @@ fn push_once(uses: &mut Vec<(usize, Use)>, folder: usize, found: Use) {
 }
 
 /// Everything using each folder: the processes in pid order, then the
-/// mounts, the unit files, and the processes that did not answer.
+/// mounts, the unit files and those that did not answer, the processes that
+/// did not answer, and those never asked.
 pub(super) fn judge(
     folders: &[Vec<PathBuf>],
     pass: &Pass,
     shells: &HashSet<String>,
-    units: &[UnitFound],
+    units: &Units,
 ) -> Vec<Vec<Use>> {
     let mut answer: Vec<Vec<Use>> = vec![Vec::new(); folders.len()];
     let mut seen: Vec<&Seen> = pass.seen.iter().collect();
     seen.sort_by_key(|seen| seen.pid);
     for process in &seen {
-        for (folder, found) in process_uses(process, shells) {
+        let hosts_shell = pass.shell_parents.contains(&process.pid);
+        for (folder, found) in process_uses(process, shells, hosts_shell) {
             answer[folder].push(found);
         }
     }
@@ -437,7 +493,7 @@ pub(super) fn judge(
     for (folder, found) in mount_uses(folders, &pass.host, &foreign) {
         answer[folder].push(found);
     }
-    for unit in units {
+    for unit in &units.found {
         if let Some(uses) = answer.get_mut(unit.folder) {
             uses.push(Use {
                 by: By::Unit {
@@ -452,11 +508,28 @@ pub(super) fn judge(
             });
         }
     }
-    if !pass.silent.is_empty() {
+    for (name, system, path) in &units.silent {
+        for uses in answer.iter_mut() {
+            uses.push(Use {
+                by: By::Unit {
+                    name: name.clone(),
+                    system: *system,
+                },
+                how: How::UnitSilent(path.clone()),
+            });
+        }
+    }
+    for (pids, how) in [
+        (&pass.silent, How::Silent as fn(Vec<u32>) -> How),
+        (&pass.unasked, How::Unasked),
+    ] {
+        if pids.is_empty() {
+            continue;
+        }
         for uses in answer.iter_mut() {
             uses.push(Use {
                 by: By::Nobody,
-                how: How::Silent(pass.silent.clone()),
+                how: how(pids.clone()),
             });
         }
     }

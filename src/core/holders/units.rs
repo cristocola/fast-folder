@@ -7,7 +7,8 @@
 //! file that is a link into the folder (`systemctl --user link`) names it
 //! too.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -15,7 +16,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use super::Tie;
-use super::judge::{self, UnitFound};
+use super::judge::{self, UnitFound, Units};
 
 /// How long `systemctl show` is given before it is killed and its units
 /// counted as they would be with no answer.
@@ -48,8 +49,13 @@ const BEFORE: &[char] = &['=', '"', '\'', '-', '@', '+', '!', ':', ';', ',', '('
 /// Characters that end a path: a folder inside it goes on with `/`.
 const AFTER: &[char] = &['/', '"', '\'', ':', ';', ',', ')'];
 
-/// The folders a manager loads unit files from: `(folder, system)`.
-fn unit_dirs() -> Vec<(PathBuf, bool)> {
+/// The folders a manager loads unit files from, `(folder, system)`, in the
+/// order it reads them (`systemd-analyze [--user] unit-paths`): a unit's
+/// own file in an earlier folder hides one in a later folder, and a drop-in
+/// one of the same name. Generators write into the `generator` folders:
+/// Podman's Quadlet turns a `.container` into a service, fstab lines become
+/// mounts.
+pub(super) fn unit_dirs() -> Vec<(PathBuf, bool)> {
     let home = crate::util::paths::home_dir();
     let env_or = |key: &str, fallback: &str| {
         std::env::var_os(key)
@@ -57,33 +63,30 @@ fn unit_dirs() -> Vec<(PathBuf, bool)> {
             .filter(|path| path.is_absolute())
             .or_else(|| home.as_ref().map(|home| home.join(fallback)))
     };
-    let mut dirs = Vec::new();
-    for dir in [
-        env_or("XDG_CONFIG_HOME", ".config"),
-        env_or("XDG_DATA_HOME", ".local/share"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        dirs.push((dir.join("systemd/user"), false));
-    }
-    dirs.push((PathBuf::from("/etc/systemd/user"), false));
-    // Generators write here: Podman's Quadlet turns a `.container` into a
-    // service, fstab lines become mounts.
-    if let Ok(me) = std::fs::metadata("/proc/self") {
+    let run = std::fs::metadata("/proc/self").ok().map(|me| {
         use std::os::unix::fs::MetadataExt;
-        for generated in ["generator", "generator.early", "generator.late"] {
-            dirs.push((
-                PathBuf::from(format!("/run/user/{}/systemd/{generated}", me.uid())),
-                false,
-            ));
-        }
-    }
-    dirs.push((PathBuf::from("/etc/systemd/system"), true));
-    for generated in ["generator", "generator.early", "generator.late"] {
-        dirs.push((PathBuf::from(format!("/run/systemd/{generated}")), true));
-    }
-    dirs
+        PathBuf::from(format!("/run/user/{}/systemd", me.uid()))
+    });
+    let generated = |kind: &str| run.as_ref().map(|run| run.join(kind));
+    let user = [
+        generated("generator.early"),
+        env_or("XDG_CONFIG_HOME", ".config").map(|dir| dir.join("systemd/user")),
+        Some(PathBuf::from("/etc/systemd/user")),
+        generated("generator"),
+        env_or("XDG_DATA_HOME", ".local/share").map(|dir| dir.join("systemd/user")),
+        generated("generator.late"),
+    ];
+    let system = [
+        "/run/systemd/generator.early",
+        "/etc/systemd/system",
+        "/run/systemd/generator",
+        "/run/systemd/generator.late",
+    ];
+    user.into_iter()
+        .flatten()
+        .map(|dir| (dir, false))
+        .chain(system.into_iter().map(|dir| (PathBuf::from(dir), true)))
+        .collect()
 }
 
 /// Whether a file name is a unit's.
@@ -92,27 +95,124 @@ fn is_unit(name: &str) -> bool {
         .is_some_and(|(stem, kind)| !stem.is_empty() && UNIT_KINDS.contains(&kind))
 }
 
-/// Every unit file naming one of `folders`, with what systemd says of it.
-pub(super) fn find(folders: &[Vec<PathBuf>]) -> Vec<UnitFound> {
-    let home = crate::util::paths::home_dir();
-    let mut found: Vec<(usize, String, bool, Tie)> = Vec::new();
+/// What a file of a unit folder is to its unit.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Part {
+    /// The unit's own file.
+    Own,
+    /// A drop-in, by its name in `<unit>.d/`.
+    DropIn(OsString),
+    /// A `<unit>.d` folder that is a link: listed when the files are read,
+    /// under their deadline, since what it leads to may not answer.
+    LinkedDropIns,
+}
+
+/// One file of a unit folder.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct UnitFile {
+    /// The unit it is for.
+    pub unit: String,
+    pub part: Part,
+    pub path: PathBuf,
+}
+
+/// What reading one [`UnitFile`] found: what ties each file it held to the
+/// folders — the file itself, or each drop-in a linked folder holds — by
+/// drop-in name (`None` for a unit's own file).
+type Ties = Vec<(Option<OsString>, Vec<(usize, Tie)>)>;
+
+/// Every unit file naming one of `folders`, with what systemd says of it,
+/// and those that did not answer. Only what a manager loads is read: a
+/// unit's own file from the first folder holding one, each drop-in name from
+/// the first folder holding it; and every file is checked against every
+/// folder.
+pub(super) fn find(folders: &[Vec<PathBuf>]) -> Units {
+    let mut mains: HashSet<(String, bool)> = HashSet::new();
+    let mut drop_ins: HashSet<(String, bool, OsString)> = HashSet::new();
+    let mut loaded: Vec<(UnitFile, bool)> = Vec::new();
     for (dir, system) in unit_dirs() {
-        let needles: Vec<Vec<String>> = folders
-            .iter()
-            .map(|spellings| needles(spellings, (!system).then_some(home.as_deref()).flatten()))
-            .collect();
-        for (unit, file) in unit_files(&dir) {
-            if found
-                .iter()
-                .any(|(_, name, kept, _)| *name == unit && *kept == system)
-            {
-                continue;
-            }
-            for (folder, tie) in tie_of(&file, folders, &needles) {
-                found.push((folder, unit.clone(), system, tie));
+        for file in unit_files(&dir) {
+            let first = match &file.part {
+                Part::Own => mains.insert((file.unit.clone(), system)),
+                Part::DropIn(name) => drop_ins.insert((file.unit.clone(), system, name.clone())),
+                Part::LinkedDropIns => true,
+            };
+            if first {
+                loaded.push((file, system));
             }
         }
     }
+    let reads = read_all(folders, &loaded);
+    // What a linked folder held is known only now: a drop-in of a name read
+    // from an earlier folder hides it.
+    let mut named: HashSet<(String, bool, OsString)> = HashSet::new();
+    let mut found: Vec<(usize, String, bool, Tie)> = Vec::new();
+    let mut silent = Vec::new();
+    for ((file, system), read) in loaded.iter().zip(reads) {
+        let Some(read) = read else {
+            silent.push((file.unit.clone(), *system, file.path.clone()));
+            continue;
+        };
+        for (name, ties) in read {
+            if let Some(name) = name
+                && !named.insert((file.unit.clone(), *system, name))
+            {
+                continue;
+            }
+            for (folder, tie) in ties {
+                if !found.iter().any(|(kept, unit, manager, _)| {
+                    *kept == folder && *unit == file.unit && manager == system
+                }) {
+                    found.push((folder, file.unit.clone(), *system, tie));
+                }
+            }
+        }
+    }
+    Units {
+        found: with_states(found),
+        silent,
+    }
+}
+
+/// Every file of `loaded` read under one deadline, each on a thread of its
+/// own ([`crate::util::paths::answer_within`]): a unit file may be a link
+/// onto a mount that stopped answering, and opening it would block for the
+/// kernel's own timeout — inside a move's data lock. `None` for a file that
+/// did not answer; one given up on answers `None` at once until it is back.
+fn read_all(folders: &[Vec<PathBuf>], loaded: &[(UnitFile, bool)]) -> Vec<Option<Ties>> {
+    let home = crate::util::paths::home_dir();
+    let needles: [Vec<Vec<String>>; 2] = [false, true].map(|system| {
+        folders
+            .iter()
+            .map(|spellings| needles(spellings, (!system).then_some(home.as_deref()).flatten()))
+            .collect()
+    });
+    let parts: HashMap<PathBuf, (bool, Part)> = loaded
+        .iter()
+        .map(|(file, system)| (file.path.clone(), (*system, file.part.clone())))
+        .collect();
+    let paths: Vec<PathBuf> = loaded.iter().map(|(file, _)| file.path.clone()).collect();
+    let folders = folders.to_vec();
+    let read = move |path: &Path| -> Ties {
+        crate::util::paths::stall_if_marked(path);
+        let Some((system, part)) = parts.get(path) else {
+            return Vec::new();
+        };
+        let needles = &needles[usize::from(*system)];
+        match part {
+            Part::Own => vec![(None, tie_of(path, &folders, needles))],
+            Part::DropIn(name) => vec![(Some(name.clone()), tie_of(path, &folders, needles))],
+            Part::LinkedDropIns => drop_ins_in(path)
+                .into_iter()
+                .map(|(name, file)| (Some(name), tie_of(&file, &folders, needles)))
+                .collect(),
+        }
+    };
+    crate::util::paths::answer_within(&paths, crate::util::paths::PROBE_TIMEOUT, read)
+}
+
+/// `found` with what systemd says of each unit.
+fn with_states(found: Vec<(usize, String, bool, Tie)>) -> Vec<UnitFound> {
     if found.is_empty() {
         return Vec::new();
     }
@@ -149,10 +249,11 @@ pub(super) fn find(folders: &[Vec<PathBuf>]) -> Vec<UnitFound> {
         .collect()
 }
 
-/// The unit files in `dir`, each with the unit it is for: a unit's own file,
-/// and the drop-ins in `<unit>.d/`. The `.wants` and `.requires` folders
-/// only hold links to units listed already.
-pub(super) fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
+/// The unit files in `dir`: a unit's own file, and the drop-ins in
+/// `<unit>.d/` — that folder itself when it is a link, which is listed only
+/// under the deadline. The `.wants` and `.requires` folders only hold links
+/// to units listed already.
+pub(super) fn unit_files(dir: &Path) -> Vec<UnitFile> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -164,20 +265,45 @@ pub(super) fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
             if !is_unit(unit) {
                 continue;
             }
-            let Ok(drop_ins) = std::fs::read_dir(&path) else {
+            if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
+                files.push(UnitFile {
+                    unit: unit.to_string(),
+                    part: Part::LinkedDropIns,
+                    path,
+                });
                 continue;
-            };
-            for drop_in in drop_ins.flatten() {
-                if drop_in.file_name().to_string_lossy().ends_with(".conf") {
-                    files.push((unit.to_string(), drop_in.path()));
-                }
+            }
+            for (drop_name, drop_in) in drop_ins_in(&path) {
+                files.push(UnitFile {
+                    unit: unit.to_string(),
+                    part: Part::DropIn(drop_name),
+                    path: drop_in,
+                });
             }
         } else if is_unit(&name) {
-            files.push((name, path));
+            files.push(UnitFile {
+                unit: name,
+                part: Part::Own,
+                path,
+            });
         }
     }
     files.sort();
     files
+}
+
+/// The drop-ins in a `<unit>.d` folder, by name.
+fn drop_ins_in(folder: &Path) -> Vec<(OsString, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    let mut drop_ins: Vec<(OsString, PathBuf)> = entries
+        .flatten()
+        .map(|entry| (entry.file_name(), entry.path()))
+        .filter(|(name, _)| name.to_string_lossy().ends_with(".conf"))
+        .collect();
+    drop_ins.sort();
+    drop_ins
 }
 
 /// How a unit file ties itself to a folder: a link into it, else the first

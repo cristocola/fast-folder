@@ -4,17 +4,19 @@
 //! **Nothing here waits on a process.** Reading another process's `cmdline`
 //! or `maps` takes its memory lock, which a process stuck in a page fault on
 //! a dead mount holds; the read then hangs with it. So every process is read
-//! on a worker, the pass takes what answered by [`DEADLINE`], and a process
-//! still being read is named as not answering — and not asked again by a
-//! later pass until its read comes back ([`GIVEN_UP`]), so a stuck process
-//! costs one parked worker, not one per pass. fastf itself is recognised by
-//! the text of its executable's link, never by asking the file it names.
+//! on a worker, a worker stuck on one has another started beside it, the
+//! pass takes what answered by [`DEADLINE`], and a process still being read
+//! is named as not answering — and not asked again by a later pass until its
+//! read comes back ([`GIVEN_UP`]), so a stuck process costs one parked
+//! worker, not one per pass. A process no worker reached by the deadline is
+//! named as never asked, apart from those that did not answer. fastf itself
+//! is recognised by the text of its executable's link, never by asking the
+//! file it names.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -28,6 +30,19 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// Processes read at once.
 const WIDTH: usize = 8;
+
+/// How long a worker is on one process before another is started beside it.
+/// A process's files are read in a millisecond or two; one this slow is
+/// stuck behind a mount.
+const STUCK_AFTER: Duration = Duration::from_millis(250);
+
+/// How often the pass looks for workers that are stuck.
+const TICK: Duration = Duration::from_millis(100);
+
+/// Workers started beside stuck ones in one pass, at most: a mount that
+/// stopped answering under more processes than this leaves the rest unread,
+/// and named as such.
+const MORE: usize = 64;
 
 /// Shells, where `/etc/shells` cannot say.
 const SHELLS: [&str; 9] = [
@@ -64,6 +79,10 @@ struct Context {
     /// The foreign mount tables found so far, each once: its text's hash,
     /// its text, the table.
     tables: Mutex<Vec<(u64, Vec<u8>, Table)>>,
+    /// The names a shell goes by ([`shells`]).
+    shells: HashSet<String>,
+    /// The parent of every shell read so far.
+    shell_parents: Mutex<HashSet<u32>>,
 }
 
 impl Context {
@@ -86,8 +105,14 @@ impl Context {
 }
 
 /// One pass over every process for `folders` (each its spellings), leaving
-/// out `asking`, fastf's own processes and this one.
-pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> Pass {
+/// out `asking`, fastf's own processes and this one. `shells` are the
+/// programs whose parents the pass names ([`Pass::shell_parents`]).
+pub(super) fn read(
+    folders: &[Vec<PathBuf>],
+    asking: &[Asking],
+    want: Want,
+    shells: &HashSet<String>,
+) -> Pass {
     let host_text = std::fs::read("/proc/self/mountinfo").unwrap_or_default();
     let host = mount_lines(&String::from_utf8_lossy(&host_text));
     let me = std::process::id();
@@ -113,94 +138,219 @@ pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> P
         host_text,
         host: host.clone(),
         tables: Mutex::new(Vec::new()),
+        shells: shells.clone(),
+        shell_parents: Mutex::new(HashSet::new()),
     });
     let reader = Arc::clone(&context);
-    let (seen, silent) = within(pids, DEADLINE, move |pid| read_one(&reader, pid));
+    let looked = within(pids, DEADLINE, move |pid| read_one(&reader, pid));
     let foreign = lock(&context.tables)
         .iter()
         .map(|(_, _, table)| Arc::clone(table))
         .collect();
+    let shell_parents = lock(&context.shell_parents).clone();
+    // The desk asks for names only; a process that did not say is none.
+    let names_only = want == Want::WorkingFolders;
     Pass {
-        seen,
-        // The desk asks for names only; a process that did not say is none.
-        silent: if want == Want::Everything {
-            silent
-        } else {
+        seen: looked.answers,
+        silent: if names_only {
             Vec::new()
+        } else {
+            looked.silent
         },
+        unasked: if names_only {
+            Vec::new()
+        } else {
+            looked.unasked
+        },
+        shell_parents,
         host,
         foreign,
     }
 }
 
+/// What [`within`] found.
+#[derive(Debug)]
+pub(super) struct Looked<R> {
+    pub answers: Vec<R>,
+    /// Asked, with no answer by the deadline — or given up on by an earlier
+    /// pass and not back yet.
+    pub silent: Vec<u32>,
+    /// Never asked: every worker was on a process that did not answer.
+    pub unasked: Vec<u32>,
+}
+
+/// The pids waiting to be read, and what the workers are doing.
+struct Queue {
+    waiting: VecDeque<u32>,
+    /// Each pid a worker is reading now, and since when.
+    reading: HashMap<u32, Instant>,
+    /// Every pid a worker took.
+    taken: HashSet<u32>,
+    /// Workers started and not finished.
+    alive: usize,
+    /// The deadline passed: nothing more is taken.
+    stop: bool,
+}
+
 /// Run `work` over `pids`, [`WIDTH`] at a time on threads of their own, and
-/// take what answered by `deadline`: the answers, and the pids that did not
+/// take what answered by `deadline`: the answers, the pids that did not
 /// answer — those a pass gave up on earlier included, without asking them
-/// again. The work left over goes on behind and is dropped as it lands.
+/// again — and the pids never asked. A worker on one pid for
+/// [`STUCK_AFTER`] has another started beside it, [`MORE`] at most, so a few
+/// reads that do not come back leave the rest to be read. The work left
+/// over goes on behind and is dropped as it lands.
 pub(super) fn within<R: Send + 'static>(
     pids: Vec<u32>,
     deadline: Duration,
     work: impl Fn(u32) -> Option<R> + Send + Sync + 'static,
-) -> (Vec<R>, Vec<u32>) {
+) -> Looked<R> {
     let given_up = lock(&GIVEN_UP).clone();
     let (mut silent, asked): (Vec<u32>, Vec<u32>) =
         pids.into_iter().partition(|pid| given_up.contains(pid));
+    let queue = Arc::new(Mutex::new(Queue {
+        waiting: asked.iter().copied().collect(),
+        reading: HashMap::new(),
+        taken: HashSet::new(),
+        alive: 0,
+        stop: false,
+    }));
+    let work = Arc::new(work);
     let (tx, rx) = mpsc::channel::<(u32, Option<R>)>();
-    let stop = Arc::new(AtomicBool::new(false));
-    let in_flight: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
-    let (worker_stop, worker_flight, queue) =
-        (Arc::clone(&stop), Arc::clone(&in_flight), asked.clone());
-    let spawned = std::thread::Builder::new()
-        .name("fastf-holders".to_string())
-        .spawn(move || {
-            let _ = crate::util::pool::run(WIDTH, queue, |pid| {
-                if worker_stop.load(Ordering::Relaxed) {
-                    return Ok::<(), ()>(());
-                }
-                lock(&worker_flight).insert(pid);
-                let answer = work(pid);
-                lock(&worker_flight).remove(&pid);
-                lock(&GIVEN_UP).remove(&pid);
-                let _ = tx.send((pid, answer));
-                Ok(())
-            });
-        });
-    if spawned.is_err() {
-        // No thread to wait on: nothing is read rather than read without a
-        // deadline.
-        silent.extend(asked);
-        silent.sort_unstable();
-        return (Vec::new(), silent);
+    // A system out of threads reads with the ones it gave; with none, the
+    // pids are never asked, rather than read without a deadline.
+    for _ in 0..WIDTH.min(asked.len()) {
+        if !start(&queue, &work, &tx) {
+            break;
+        }
     }
     let end = Instant::now() + deadline;
     let mut waiting: HashSet<u32> = asked.into_iter().collect();
     let mut answers = Vec::new();
+    let mut more = 0;
+    let mut next_look = Instant::now() + TICK;
     while !waiting.is_empty() {
-        match rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
-            Ok((pid, answer)) => {
-                waiting.remove(&pid);
-                answers.extend(answer);
-            }
-            Err(_) => break,
+        let now = Instant::now();
+        if now >= end {
+            break;
+        }
+        if let Ok((pid, answer)) =
+            rx.recv_timeout(end.min(next_look).saturating_duration_since(now))
+            && waiting.remove(&pid)
+        {
+            answers.extend(answer);
+        }
+        if Instant::now() >= next_look {
+            next_look = Instant::now() + TICK;
+            more += beside_the_stuck(&queue, &work, &tx, MORE - more);
         }
     }
-    stop.store(true, Ordering::Relaxed);
-    {
-        // Under the in-flight lock, so a read that finishes now either is
+    let taken = {
+        // Under the queue's lock, so a read that finishes now either is
         // still listed here and clears itself from `GIVEN_UP` after, or is
         // not listed and never put there.
-        let flight = lock(&in_flight);
+        let mut queue = lock(&queue);
+        queue.stop = true;
         let mut given_up = lock(&GIVEN_UP);
-        given_up.extend(flight.iter().filter(|pid| waiting.contains(pid)));
-    }
+        given_up.extend(queue.reading.keys().filter(|pid| waiting.contains(pid)));
+        std::mem::take(&mut queue.taken)
+    };
     while let Ok((pid, answer)) = rx.try_recv() {
         if waiting.remove(&pid) {
             answers.extend(answer);
         }
     }
-    silent.extend(waiting);
+    let (late, mut unasked): (Vec<u32>, Vec<u32>) =
+        waiting.into_iter().partition(|pid| taken.contains(pid));
+    silent.extend(late);
     silent.sort_unstable();
-    (answers, silent)
+    unasked.sort_unstable();
+    Looked {
+        answers,
+        silent,
+        unasked,
+    }
+}
+
+/// Start one worker on `queue`; whether the system gave it a thread.
+fn start<R, W>(
+    queue: &Arc<Mutex<Queue>>,
+    work: &Arc<W>,
+    tx: &mpsc::Sender<(u32, Option<R>)>,
+) -> bool
+where
+    R: Send + 'static,
+    W: Fn(u32) -> Option<R> + Send + Sync + 'static,
+{
+    lock(queue).alive += 1;
+    let (shared, work, tx) = (Arc::clone(queue), Arc::clone(work), tx.clone());
+    let spawned = std::thread::Builder::new()
+        .name("fastf-holders".to_string())
+        .spawn(move || worker(&shared, &*work, &tx));
+    if spawned.is_err() {
+        lock(queue).alive -= 1;
+    }
+    spawned.is_ok()
+}
+
+/// One worker: a pid at a time off the queue, until it is empty or the
+/// deadline has passed.
+fn worker<R>(
+    queue: &Mutex<Queue>,
+    work: &impl Fn(u32) -> Option<R>,
+    tx: &mpsc::Sender<(u32, Option<R>)>,
+) {
+    loop {
+        let pid = {
+            let mut queue = lock(queue);
+            let next = if queue.stop {
+                None
+            } else {
+                queue.waiting.pop_front()
+            };
+            let Some(pid) = next else {
+                queue.alive -= 1;
+                return;
+            };
+            queue.taken.insert(pid);
+            queue.reading.insert(pid, Instant::now());
+            pid
+        };
+        let answer = work(pid);
+        lock(queue).reading.remove(&pid);
+        lock(&GIVEN_UP).remove(&pid);
+        let _ = tx.send((pid, answer));
+    }
+}
+
+/// While pids wait, start a worker beside each one that has been on a pid
+/// for [`STUCK_AFTER`], `room` at most; how many it started.
+fn beside_the_stuck<R, W>(
+    queue: &Arc<Mutex<Queue>>,
+    work: &Arc<W>,
+    tx: &mpsc::Sender<(u32, Option<R>)>,
+    room: usize,
+) -> usize
+where
+    R: Send + 'static,
+    W: Fn(u32) -> Option<R> + Send + Sync + 'static,
+{
+    let wanted = {
+        let queue = lock(queue);
+        let stuck = queue
+            .reading
+            .values()
+            .filter(|since| since.elapsed() >= STUCK_AFTER)
+            .count();
+        WIDTH
+            .saturating_sub(queue.alive.saturating_sub(stuck))
+            .min(queue.waiting.len())
+            .min(room)
+    };
+    let mut started = 0;
+    while started < wanted && start(queue, work, tx) {
+        started += 1;
+    }
+    started
 }
 
 fn trim_deleted(path: &Path) -> PathBuf {
@@ -250,6 +400,7 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
             started: stat.started,
             program: name_of(&base, &argv, exe.as_deref()),
             ns: None,
+            opaque: false,
             facts: hits
                 .into_iter()
                 .map(|(folder, path)| Fact {
@@ -289,6 +440,11 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
         return None;
     }
     let argv = judge::argv(&cmdline);
+    let name = name_of(&base, &argv, exe.as_deref());
+    // Wherever the shell works, its parent hosts one.
+    if context.shells.contains(&name) {
+        lock(&context.shell_parents).insert(stat.ppid);
+    }
     let mut facts = Vec::new();
     let mut add = |hits: Vec<(usize, PathBuf)>, kind: Kind| {
         for (folder, path) in hits {
@@ -347,8 +503,9 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
     Some(Seen {
         pid,
         started: stat.started,
-        program: name_of(&base, &argv, exe.as_deref()),
+        program: name,
         ns: foreign.map(|(index, _)| index),
+        opaque: cwd.is_none(),
         facts,
     })
 }

@@ -29,6 +29,7 @@ fn seen(pid: u32, program: &str, facts: &[(Kind, &str)]) -> Seen {
         started: 100 + u64::from(pid),
         program: program.to_string(),
         ns: None,
+        opaque: false,
         facts: facts
             .iter()
             .map(|(kind, path)| Fact {
@@ -49,8 +50,12 @@ fn holders_of(uses: Vec<Use>) -> Holders {
 }
 
 fn judged(pass: &Pass, units: &[UnitFound]) -> Holders {
+    let units = judge::Units {
+        found: units.to_vec(),
+        ..judge::Units::default()
+    };
     holders_of(
-        judge::judge(&folders(), pass, &shells(), units)
+        judge::judge(&folders(), pass, &shells(), &units)
             .pop()
             .unwrap(),
     )
@@ -142,6 +147,134 @@ fn the_most_telling_use_names_each_process() {
         found.uses[2].weight(Verb::Move),
         Weight::Advisory,
         "a shell running a script there is more than its prompt"
+    );
+}
+
+/// Another user's process is seen by its arguments alone: named with the
+/// folder itself, it still advises, since what it holds there could not be
+/// read.
+#[test]
+fn a_process_whose_folders_cannot_be_read_is_not_taken_for_a_viewer() {
+    let mut root = seen(50, "nginx", &[(Kind::Arg, "")]);
+    root.opaque = true;
+    let found = judged(
+        &Pass {
+            seen: vec![root],
+            ..Pass::default()
+        },
+        &[],
+    );
+    assert_eq!(found.uses[0].how, How::Named(PathBuf::new()));
+    assert_eq!(found.uses[0].weight(Verb::Move), Weight::Advisory);
+}
+
+/// A program tied to the folder only by the folder itself among its
+/// arguments — a file manager or a viewer opened on it, Reveal's `xdg-open`
+/// — is a note, whatever the verb; an argument naming a path inside the
+/// folder still advises, and so does the folder named beside any other tie.
+#[test]
+fn a_program_opened_on_the_folder_is_a_note() {
+    let pass = Pass {
+        seen: vec![
+            seen(30, "dolphin", &[(Kind::Arg, "")]),
+            seen(31, "app", &[(Kind::Arg, ""), (Kind::Arg, "c.toml")]),
+            seen(
+                32,
+                "code",
+                &[(Kind::Arg, ""), (Kind::Open { writing: false }, "notes.md")],
+            ),
+            seen(33, "kitty", &[(Kind::Arg, ""), (Kind::Cwd, "")]),
+            seen(34, "podman", &[(Kind::Arg, "data")]),
+        ],
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    let weights: Vec<Weight> = found.uses.iter().map(|u| u.weight(Verb::Move)).collect();
+    assert_eq!(
+        weights,
+        [
+            Weight::Note,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory
+        ]
+    );
+    let lines: Vec<String> = found.uses.iter().map(Use::line).collect();
+    assert_eq!(
+        lines,
+        [
+            "dolphin (pid 30) was opened on the project folder",
+            "app (pid 31) was started with c.toml",
+            "code (pid 32) has notes.md open",
+            "kitty (pid 33) was started with the project folder",
+            "podman (pid 34) was started with data",
+        ]
+    );
+    let opened = holders_of(vec![found.uses[0].clone()]);
+    assert!(opened.refusal(Verb::Delete, false).is_none());
+    assert_eq!(
+        [Verb::Move, Verb::Rename, Verb::Delete].map(|verb| opened.notes(verb)),
+        [
+            ["dolphin (pid 30) was opened on the folder; it shows the old one"],
+            ["dolphin (pid 30) was opened on the folder; it shows the old name"],
+            ["dolphin (pid 30) was opened on the folder; it shows a folder that is gone"],
+        ]
+    );
+}
+
+/// A program that is no shell and hosts one — a terminal opened in the
+/// folder, a multiplexer started there, `npm run` — is a note when its only
+/// ties are its working folder and the folder itself among its arguments;
+/// it advises once it holds anything more, and so does a program working
+/// there that hosts no shell.
+#[test]
+fn a_terminal_hosting_a_shell_is_a_note() {
+    let pass = Pass {
+        seen: vec![
+            seen(40, "konsole", &[(Kind::Arg, ""), (Kind::Cwd, "")]),
+            seen(41, "zsh", &[(Kind::Cwd, "")]),
+            seen(42, "tmux", &[(Kind::Cwd, "src")]),
+            seen(
+                43,
+                "editor",
+                &[(Kind::Cwd, ""), (Kind::Open { writing: true }, "notes.md")],
+            ),
+            seen(
+                44,
+                "kitty",
+                &[(Kind::Cwd, ""), (Kind::Arg, "conf/kitty.conf")],
+            ),
+            seen(45, "node", &[(Kind::Cwd, "")]),
+        ],
+        shell_parents: [40, 42, 43, 44].into(),
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    let hows: Vec<&How> = found.uses.iter().map(|u| &u.how).collect();
+    assert_eq!(hows[0], &How::Terminal(PathBuf::new()));
+    assert_eq!(hows[2], &How::Terminal(PathBuf::from("src")));
+    let weights: Vec<Weight> = found.uses.iter().map(|u| u.weight(Verb::Move)).collect();
+    assert_eq!(
+        weights,
+        [
+            Weight::Note,
+            Weight::Note,
+            Weight::Note,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory
+        ]
+    );
+    assert_eq!(found.uses[2].line(), "tmux (pid 42) has a terminal in src");
+    let hosting = holders_of(vec![found.uses[0].clone()]);
+    assert_eq!(
+        hosting.notes(Verb::Move),
+        ["konsole (pid 40) has a terminal in the old folder"]
+    );
+    assert_eq!(
+        hosting.notes(Verb::Delete),
+        ["konsole (pid 40) has a terminal in the deleted folder"]
     );
 }
 
@@ -512,7 +645,7 @@ fn a_read_that_does_not_come_back_is_given_up_on_and_not_asked_again() {
     const STUCK: u32 = 4_000_000_001;
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
-    let (answers, silent) = linux::within(
+    let looked = linux::within(
         vec![STUCK - 1, STUCK, STUCK + 1],
         Duration::from_millis(300),
         move |pid| {
@@ -523,14 +656,116 @@ fn a_read_that_does_not_come_back_is_given_up_on_and_not_asked_again() {
             Some(pid)
         },
     );
-    let mut answers = answers;
+    let mut answers = looked.answers;
     answers.sort_unstable();
     assert_eq!(answers, [STUCK - 1, STUCK + 1]);
-    assert_eq!(silent, [STUCK]);
-    let (answers, silent) = linux::within(vec![STUCK], Duration::from_secs(1), Some);
-    assert!(answers.is_empty());
-    assert_eq!(silent, [STUCK], "named at once");
+    assert_eq!(looked.silent, [STUCK]);
+    let looked = linux::within(vec![STUCK], Duration::from_secs(1), Some);
+    assert!(looked.answers.is_empty());
+    assert_eq!(looked.silent, [STUCK], "named at once");
     assert_eq!(asked.load(Ordering::Relaxed), 1, "and not read again");
+}
+
+/// Reads that do not come back do not keep the rest from being read: a
+/// worker on one pid for long has another started beside it, so every quick
+/// pid answers.
+#[test]
+fn reads_that_do_not_come_back_leave_the_rest_to_be_read() {
+    const BASE: u32 = 4_000_000_100;
+    let quick: Vec<u32> = (BASE + 8..BASE + 20).collect();
+    let looked = linux::within(
+        (BASE..BASE + 20).collect(),
+        Duration::from_millis(1500),
+        move |pid| {
+            if pid < BASE + 8 {
+                std::thread::sleep(Duration::from_secs(4));
+            }
+            Some(pid)
+        },
+    );
+    let mut answers = looked.answers;
+    answers.sort_unstable();
+    assert_eq!(answers, quick, "the stuck ones: {:?}", looked.silent);
+    assert_eq!(looked.silent, (BASE..BASE + 8).collect::<Vec<_>>());
+    assert!(looked.unasked.is_empty());
+}
+
+/// More reads stuck than workers can be started beside them: the pids no
+/// worker reached are told apart from those asked, and refuse a verb, since
+/// nothing was learned of them.
+#[test]
+fn a_pid_never_asked_is_not_one_that_did_not_answer() {
+    const BASE: u32 = 4_000_000_200;
+    let every: Vec<u32> = (BASE..BASE + 200).collect();
+    let looked = linux::within(every.clone(), Duration::from_millis(600), move |pid| {
+        std::thread::sleep(Duration::from_secs(4));
+        Some(pid)
+    });
+    assert!(looked.answers.is_empty());
+    assert!(looked.silent.len() >= 8, "{:?}", looked.silent);
+    assert!(!looked.unasked.is_empty());
+    let mut both: Vec<u32> = looked
+        .silent
+        .iter()
+        .chain(&looked.unasked)
+        .copied()
+        .collect();
+    both.sort_unstable();
+    assert_eq!(both, every);
+
+    let pass = Pass {
+        silent: vec![5],
+        unasked: vec![6, 7, 8],
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    assert_eq!(
+        found.refusal(Verb::Move, false).unwrap(),
+        "3 processes were not looked at: the ones before them did not answer, so ID0047 \
+         was not moved; move it again in a moment"
+    );
+    assert!(found.refusal(Verb::Move, true).is_none(), "forced");
+    assert_eq!(
+        found.notes(Verb::Delete),
+        [
+            "pid 5 did not answer, so fastf could not tell whether it used the deleted folder",
+            "3 processes were not looked at, so fastf could not tell whether they used the \
+             deleted folder",
+        ]
+    );
+}
+
+/// A folder on a base that stopped answering is resolved under the deadline
+/// a base is given, keeping the path as given, so the app's question about
+/// what uses it always comes back.
+#[cfg(debug_assertions)]
+#[test]
+fn a_folder_on_a_base_that_does_not_answer_is_resolved_in_time() {
+    use crate::util::paths;
+    let dir = tempfile::tempdir().unwrap();
+    let stalled = dir.path().join("stalled");
+    let project = stalled.join("X");
+    std::fs::create_dir_all(&project).unwrap();
+    let marker = stalled.join(paths::STALL_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let config = crate::core::config::Config {
+        base_dir: stalled.display().to_string(),
+        ..crate::core::config::Config::default()
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = project.clone();
+    std::thread::spawn(move || {
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let configured = Folder::configured(&config, &asked, "ID0001");
+            let at = Folder::at(&asked, "ID0001");
+            let _ = tx.send((configured, at));
+        });
+    });
+    let answered = rx.recv_timeout(paths::PROBE_TIMEOUT * 2 + Duration::from_secs(2));
+    std::fs::remove_file(&marker).unwrap();
+    let (configured, at) = answered.expect("the folder is still being resolved");
+    assert_eq!(configured.path, project);
+    assert_eq!(at.path, project);
 }
 
 #[test]
@@ -593,14 +828,20 @@ fn a_unit_folder_is_read_as_its_manager_reads_it() {
     std::fs::write(dir.join("notes.txt"), &line).unwrap();
 
     let files = units::unit_files(&dir);
-    let names: Vec<&str> = files.iter().map(|(unit, _)| unit.as_str()).collect();
+    let names: Vec<(&str, &units::Part)> = files
+        .iter()
+        .map(|file| (file.unit.as_str(), &file.part))
+        .collect();
     assert_eq!(
         names,
         [
-            "linked.service",
-            "named.service",
-            "named.service",
-            "plain.service"
+            ("linked.service", &units::Part::Own),
+            ("named.service", &units::Part::Own),
+            (
+                "named.service",
+                &units::Part::DropIn("override.conf".into())
+            ),
+            ("plain.service", &units::Part::Own)
         ],
         "{files:?}"
     );
@@ -608,7 +849,12 @@ fn a_unit_folder_is_read_as_its_manager_reads_it() {
     let needles = vec![units::needles(&folders[0], None)];
     let ties: Vec<(String, Vec<(usize, Tie)>)> = files
         .iter()
-        .map(|(unit, file)| (unit.clone(), units::tie_of(file, &folders, &needles)))
+        .map(|file| {
+            (
+                file.unit.clone(),
+                units::tie_of(&file.path, &folders, &needles),
+            )
+        })
         .collect();
     assert_eq!(
         ties,
@@ -729,6 +975,41 @@ fn spawn(command: &mut std::process::Command) -> Child {
     Child(command.stdin(std::process::Stdio::null()).spawn().unwrap())
 }
 
+/// A child in a process group of its own, which the test kills whole —
+/// what it started included — however it ends.
+struct Group(std::process::Child);
+
+impl Group {
+    fn spawn(command: &mut std::process::Command) -> Self {
+        use std::os::unix::process::CommandExt;
+        Self(
+            command
+                .stdin(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        )
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        // SAFETY: `kill` takes plain integers; the group is this child's
+        // own, made by `process_group(0)`.
+        unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+        let _ = self.0.wait();
+    }
+}
+
+/// The uses of every process named `program`.
+fn uses_by<'a>(found: &'a Holders, program: &str) -> Vec<&'a Use> {
+    found
+        .uses
+        .iter()
+        .filter(|found| matches!(&found.by, By::Process { program: by, .. } if by == program))
+        .collect()
+}
+
 /// What uses `root`, asked until `found` holds — a child takes a moment to
 /// open what it was started to open.
 fn wait_for(root: &Path, found: impl Fn(&Holders) -> bool) -> Holders {
@@ -842,6 +1123,26 @@ fn a_program_run_from_the_folder_and_one_named_in_its_arguments() {
     );
 }
 
+/// A program started from the base with the project folder as its
+/// argument, holding nothing of it — how a file manager opened on the
+/// project looks — is a note.
+#[test]
+fn a_program_opened_on_the_folder_from_its_base_is_a_note() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let opened = spawn(
+        std::process::Command::new("sh")
+            .args(["-c", "sleep 30; :"])
+            .arg(&root)
+            .current_dir(temp.path()),
+    );
+    let pid = opened.0.id();
+    let found = wait_for(&root, |found| use_of(found, pid).is_some());
+    assert_eq!(use_of(&found, pid), Some(&How::OpenedOn));
+    assert!(!found.in_use(Verb::Move), "{found:?}");
+}
+
 /// A library loaded from the project: a copy of one this process has
 /// mapped, preloaded into a `sleep`.
 #[test]
@@ -903,6 +1204,37 @@ fn an_idle_shell_is_a_note_and_whoever_asked_is_left_out() {
     assert!(use_of(&asked, pid).is_none(), "{asked:?}");
 }
 
+/// A program that is not a shell, working in the project and hosting a
+/// shell — a terminal, a multiplexer, `npm run dev` with its `sh -c vite` —
+/// is a note, like the shell it hosts; what the shell runs is judged itself,
+/// and refuses. Here `timeout` hosts `sh`, which runs `sleep`.
+#[test]
+fn a_program_hosting_a_shell_is_a_note_and_what_the_shell_runs_is_not() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let _host = Group::spawn(
+        std::process::Command::new("timeout")
+            .args(["30", "sh", "-c", "sleep 30; :"])
+            .current_dir(&root),
+    );
+    let found = wait_for(&root, |found| {
+        ["timeout", "sh", "sleep"]
+            .iter()
+            .all(|program| uses_by(found, program).len() == 1)
+    });
+    let weight = |program: &str| uses_by(&found, program)[0].weight(Verb::Move);
+    assert_eq!(
+        uses_by(&found, "timeout")[0].how,
+        How::Terminal(PathBuf::new())
+    );
+    assert_eq!(weight("timeout"), Weight::Note, "{found:?}");
+    assert_eq!(weight("sh"), Weight::Note, "{found:?}");
+    assert_eq!(weight("sleep"), Weight::Advisory, "{found:?}");
+    let refusing = found.refusing(Verb::Move, false);
+    assert_eq!(refusing, uses_by(&found, "sleep"), "{found:?}");
+}
+
 /// A user unit naming the folder, in a unit folder of its own: counted,
 /// with whatever systemd says of a unit it has never loaded.
 #[test]
@@ -938,6 +1270,243 @@ fn a_unit_file_naming_the_folder_counts() {
         unit.line()
     );
     drop(env);
+}
+
+/// A unit is read as its manager loads it: every folder of a batch is
+/// checked against every file of the unit — its own file names one, a
+/// drop-in another — while a unit's file that a file of the same name in an
+/// earlier folder hides names nothing, nor does a drop-in hidden by one of
+/// the same name.
+#[test]
+fn a_unit_is_read_as_its_manager_loads_it() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let data = sandbox.path().join("data");
+    let upper = config.join("systemd").join("user");
+    let lower = data.join("systemd").join("user");
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    env.also_set("XDG_DATA_HOME", &data.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let real = crate::util::paths::canonical(temp.path()).unwrap();
+    let [a, b, p, q] = ["A", "B", "P", "Q"].map(|name| real.join(name));
+    for folder in [&a, &b, &p, &q] {
+        std::fs::create_dir(folder).unwrap();
+    }
+    let me = std::process::id();
+    let unit = |what: &str| format!("fastf-test-{what}-{me}.service");
+    let write = |file: PathBuf, text: String| {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, format!("[Service]\n{text}\n")).unwrap();
+    };
+    let batch = unit("batch");
+    write(
+        upper.join(&batch),
+        format!("WorkingDirectory={}", a.display()),
+    );
+    write(
+        upper.join(format!("{batch}.d/data.conf")),
+        format!("Environment=DATA={}", b.display()),
+    );
+    let shadow = unit("shadow");
+    write(upper.join(&shadow), "ExecStart=/bin/true".to_string());
+    write(
+        lower.join(&shadow),
+        format!("WorkingDirectory={}", p.display()),
+    );
+    let dropped = unit("dropped");
+    write(upper.join(format!("{dropped}.d/x.conf")), String::new());
+    write(
+        lower.join(format!("{dropped}.d/x.conf")),
+        format!("WorkingDirectory={}", p.display()),
+    );
+    write(
+        lower.join(format!("{dropped}.d/y.conf")),
+        format!("WorkingDirectory={}", q.display()),
+    );
+
+    let ours = |found: Vec<UnitFound>| -> Vec<(usize, String)> {
+        let mut ours: Vec<(usize, String)> = found
+            .into_iter()
+            .filter(|found| found.name.starts_with("fastf-test-"))
+            .map(|found| (found.folder, found.name))
+            .collect();
+        ours.sort();
+        ours
+    };
+    let batched = ours(units::find(&[vec![a.clone()], vec![b.clone()]]).found);
+    let hidden = ours(units::find(&[vec![p.clone()], vec![q.clone()]]).found);
+    drop(env);
+    assert_eq!(batched, [(0, batch.clone()), (1, batch.clone())]);
+    assert_eq!(hidden, [(1, dropped.clone())]);
+}
+
+/// A unit file whose read does not come back — a link onto a mount that
+/// stopped answering, here a pipe nobody writes — holds nothing up: the
+/// unit folders are read under one deadline, and that file is named as
+/// not answering.
+#[test]
+fn a_unit_file_that_does_not_answer_holds_nothing_up() {
+    use std::os::unix::fs::OpenOptionsExt;
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let units_dir = config.join("systemd").join("user");
+    std::fs::create_dir_all(&units_dir).unwrap();
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("X");
+    std::fs::create_dir(&project).unwrap();
+    let pipe = temp.path().join("foo.service");
+    let spelled = std::ffi::CString::new(pipe.to_string_lossy().as_bytes()).unwrap();
+    // SAFETY: `mkfifo` reads a NUL-terminated path that outlives the call.
+    assert_eq!(unsafe { libc::mkfifo(spelled.as_ptr(), 0o600) }, 0);
+    let name = format!("fastf-test-pipe-{}.service", std::process::id());
+    let file = units_dir.join(&name);
+    std::os::unix::fs::symlink(&pipe, &file).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = vec![vec![project.clone()]];
+    std::thread::spawn(move || {
+        let _ = tx.send(units::find(&asked));
+    });
+    let answered = rx.recv_timeout(crate::util::paths::PROBE_TIMEOUT + Duration::from_secs(3));
+    drop(env);
+    // Let the read that was given up on come back.
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&pipe);
+    let found = answered.expect("the unit folders are still being read");
+    assert!(
+        found.silent.contains(&(name.clone(), false, file.clone())),
+        "{found:?}"
+    );
+    assert!(found.found.iter().all(|unit| unit.name != name));
+}
+
+/// A unit's drop-in folder that is a link is listed under the deadline too.
+#[cfg(debug_assertions)]
+#[test]
+fn a_linked_drop_in_folder_that_does_not_answer_holds_nothing_up() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let units_dir = config.join("systemd").join("user");
+    std::fs::create_dir_all(&units_dir).unwrap();
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let project = crate::util::paths::canonical(temp.path())
+        .unwrap()
+        .join("X");
+    std::fs::create_dir(&project).unwrap();
+    let drop_ins = temp.path().join("drop-ins");
+    std::fs::create_dir(&drop_ins).unwrap();
+    std::fs::write(
+        drop_ins.join("x.conf"),
+        format!("[Service]\nWorkingDirectory={}\n", project.display()),
+    )
+    .unwrap();
+    let name = format!("fastf-test-linked-{}.service", std::process::id());
+    let folder = units_dir.join(format!("{name}.d"));
+    std::os::unix::fs::symlink(&drop_ins, &folder).unwrap();
+    let marker = drop_ins.join(crate::util::paths::STALL_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = vec![vec![project.clone()]];
+    std::thread::spawn(move || {
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let _ = tx.send(units::find(&asked));
+        });
+    });
+    let answered = rx.recv_timeout(crate::util::paths::PROBE_TIMEOUT + Duration::from_secs(3));
+    drop(env);
+    std::fs::remove_file(&marker).unwrap();
+    let found = answered.expect("the unit folders are still being read");
+    assert!(
+        found
+            .silent
+            .contains(&(name.clone(), false, folder.clone())),
+        "{found:?}"
+    );
+}
+
+/// A unit file that did not answer is a note, for every folder asked
+/// about.
+#[test]
+fn a_unit_file_that_did_not_answer_is_a_note() {
+    let units = judge::Units {
+        silent: vec![(
+            "coda.service".to_string(),
+            false,
+            PathBuf::from("/home/u/.config/systemd/user/coda.service"),
+        )],
+        ..judge::Units::default()
+    };
+    let found = holders_of(
+        judge::judge(&folders(), &Pass::default(), &shells(), &units)
+            .pop()
+            .unwrap(),
+    );
+    assert!(found.refusal(Verb::Move, false).is_none());
+    assert_eq!(
+        found.uses[0].line(),
+        "coda.service's file did not answer: /home/u/.config/systemd/user/coda.service"
+    );
+    assert_eq!(
+        found.notes(Verb::Move),
+        [
+            "coda.service's file did not answer (/home/u/.config/systemd/user/coda.service), so \
+             fastf could not tell whether it names the old folder"
+        ]
+    );
+}
+
+/// The unit folders in the order systemd reads them: a unit's file in an
+/// earlier folder hides one of the same name in a later folder.
+#[test]
+fn unit_folders_are_read_in_the_manager_s_order() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let data = sandbox.path().join("data");
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    env.also_set("XDG_DATA_HOME", &data.to_string_lossy());
+    let dirs = units::unit_dirs();
+    drop(env);
+    let user: Vec<String> = dirs
+        .iter()
+        .filter(|(_, system)| !system)
+        .map(|(dir, _)| {
+            dir.to_string_lossy()
+                .replace(&*sandbox.path().to_string_lossy(), "~")
+        })
+        .map(|dir| match dir.split_once("/systemd/") {
+            Some((run, kind)) if run.starts_with("/run/user/") => format!("run/{kind}"),
+            _ => dir,
+        })
+        .collect();
+    assert_eq!(
+        user,
+        [
+            "run/generator.early",
+            "~/config/systemd/user",
+            "/etc/systemd/user",
+            "run/generator",
+            "~/data/systemd/user",
+            "run/generator.late",
+        ]
+    );
+    let system: Vec<PathBuf> = dirs
+        .into_iter()
+        .filter(|(_, system)| *system)
+        .map(|(dir, _)| dir)
+        .collect();
+    assert_eq!(
+        system,
+        [
+            "/run/systemd/generator.early",
+            "/etc/systemd/system",
+            "/run/systemd/generator",
+            "/run/systemd/generator.late",
+        ]
+        .map(PathBuf::from)
+    );
 }
 
 /// A rootless namespace that binds a folder of the project somewhere else

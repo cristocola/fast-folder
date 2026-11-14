@@ -551,10 +551,16 @@ process's `cwd`, `exe`, `fd` with `fdinfo` flags, `maps` and arguments (this
 user's), every process's `mountinfo` (anyone's — a root container's binds
 too), host binds, mounts inside, and systemd unit files that name the folder
 or link into it (`units.rs`: the user's and system's unit folders and the
-generators', `systemctl show` once per manager, killed at two seconds, no
-answer counting). **`Use::weight` is the one table** — physical, advisory,
-note — and `Holders::refusal`/`notes` the one wording. Asked as
-`holders::check(&Folder, Verb, &Guard)`:
+generators', read as the manager loads them — the folders in its own order,
+a unit's own file from the first folder holding one and each drop-in name
+from the first folder holding it, every file checked against every folder
+asked about; every file, and a `<unit>.d` that is a link, read under one
+deadline on a thread of its own (`paths::answer_within`), since a unit
+file may be a link onto a mount that stopped answering, and one that does
+not answer is a note (`How::UnitSilent`) — then `systemctl show` once per
+manager, killed at two seconds, no answer counting). **`Use::weight` is the
+one table** — physical, advisory, note — and `Holders::refusal`/`notes` the
+one wording. Asked as `holders::check(&Folder, Verb, &Guard)`:
 
 - **under the data lock**: the move in `move_project_unlocked_in_parts`
   before `paused_move` and the same-filesystem rename, as the named step
@@ -566,20 +572,44 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
 - **the folder in both spellings**: `Folder::of` rebuilds the configured one
   from the configured base whose canonical form is the folder's parent, since
   under the lock the project is canonical and a unit or an argument may spell
-  it through a link;
+  it through a link. Every `Folder` is resolved under a base's deadline
+  (`paths::canonical_in_time`, the path as given when it does not answer),
+  so the app's question about a folder on a base that stopped answering
+  still comes back;
 - **never counted**: fastf (by its exe link's text, never a stat through it),
   and `Guard::asking` — whoever asked, every process above them, and the
   processes the asker's own stdio pipes join it to (`judge::pipeline`; a pipe
   an ancestor also holds is the session's output and joins nothing), by pid
   and start time; a job carries its starter's chain in `JobRequest::asking`;
+- **only a note** (a decision): a shell whose only tie is its working folder
+  — its prompt; what it started is judged itself; the terminal hosting a
+  shell (`How::Terminal`: no shell itself, a shell among its children
+  wherever that works — `Pass::shell_parents`, the parent of every shell the
+  pass read — and tied only by its working folder and the folder itself
+  among its arguments: an emulator `t` opened, a tmux server, `npm run`'s
+  npm, while the dev server under its `sh -c` still advises); a process
+  whose only tie is the folder itself among its arguments (`How::OpenedOn`:
+  a file manager or a viewer opened on it, Reveal's own `xdg-open` among
+  them, which would otherwise refuse the folder's move for as long as its
+  window lives) — but not another user's, whose working folder and files
+  cannot be read (`Seen::opaque`); a unit disabled, stopped and started by
+  nothing; and whatever did not answer. An argument naming a path *inside*
+  the folder advises, and so does the folder named beside any other tie
+  (`judge::process_uses`). No program is recognised by name but a shell,
+  from `/etc/shells`;
 - **a namespace's mount counts only when this machine's table lacks its
   (dev, root)**: a namespace starts as a copy, and an inherited mount is no
   choice of its own; a foreign process's paths are translated through its own
   table (`fs_kind::covering`, `host_paths`);
-- **nothing waits on a process**: the pass reads on `util::pool` under one
-  deadline (`linux::within`, five seconds), since reading `cmdline` or `maps`
-  takes the process's memory lock; one that does not answer is a note, and is
-  not asked again by a later pass until its read comes back (`GIVEN_UP`).
+- **nothing waits on a process**: the pass reads on eight workers of its own
+  under one deadline (`linux::within`, five seconds), since reading `cmdline`
+  or `maps` takes the process's memory lock, and starts another beside each
+  worker on one process for a quarter of a second (64 more at most), so a few
+  stuck reads never leave the rest unread; one that does not answer is a
+  note, and is not asked again by a later pass until its read comes back
+  (`GIVEN_UP`); one no worker reached by the deadline advises
+  (`How::Unasked`) — nothing was learned of it, and the verb does not go
+  ahead without having looked.
 
 A refusal that forcing goes past is `holders::InUse`; a physical one is a
 plain error. `Guard::force` turns advisory uses into notes plus one

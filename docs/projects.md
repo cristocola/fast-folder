@@ -439,7 +439,8 @@ names the path does.
 
 - a program working in the folder, holding a file in it open (for writing or
   not), running from it, with a library or another file of it loaded, or
-  started with a path in it among its arguments;
+  started with a path inside it among its arguments (`--config=…/c.toml`,
+  `-v …/data:/app/data`, a script in it);
 - a container, a sandbox or a service that mounts a folder from inside the
   project — read from its own mount table, whoever runs it — and a bind of
   one somewhere else on this machine;
@@ -447,7 +448,13 @@ names the path does.
 - a systemd unit file — yours or the system's, and the ones generators write,
   such as Podman's Quadlet containers — that names the folder (by its path or
   as `%h/…`), or is a link into it, whether the unit runs now or something
-  starts it later.
+  starts it later. Only the files systemd loads count: a unit file or a
+  drop-in that one of the same name in a folder systemd reads first hides
+  does not;
+- processes fastf could not look at at all, because every reader it had was
+  held up by processes that did not answer — `68 processes were not looked
+  at: the ones before them did not answer`. Rare, and fastf does not go
+  ahead without having looked; try again in a moment.
 
 **What never counts**: fastf itself, and whoever asked — the shell that typed
 the command, the agent that ran it, the app and the terminal it runs in — and
@@ -459,7 +466,25 @@ look leaves it out too.
 
 - a shell whose prompt is in the folder — `bash (pid 1234) has its prompt in
   the old folder; cd to the new one`; what it started is judged on its own;
+- a terminal: a program that is not a shell, has a shell among its children
+  (wherever that shell is), and is tied to the folder only by working in it
+  or by having been started with the folder itself — a terminal window
+  opened there (fastf's own `t` opens one), a tmux or screen server started
+  there, a file manager's terminal panel, `npm run dev` with its `sh -c
+  vite`: `konsole (pid 4410) has a terminal in the old folder`. What runs in
+  the shell is judged on its own, so the dev server `npm run dev` started
+  still keeps the project from moving;
+- a program opened on the folder and holding nothing of it — a file manager
+  or a viewer whose only tie is the folder itself among its arguments, such
+  as the window fastf's own *Reveal* opens: `dolphin (pid 5981) was opened on
+  the folder; it shows the old one`. Started with the folder and also working
+  in it, holding a file of it or running from it, it counts, and so does
+  another user's program started with the folder, whose files fastf cannot
+  see;
 - a unit that is disabled, stopped and started by nothing;
+- a unit file that could not be read within a second and a half — a link
+  onto a mount that stopped answering, say: `coda.service's file did not
+  answer: …`;
 - a process that did not answer within five seconds — one stuck behind a
   mount that stopped answering, say: fastf names it rather than wait for it.
 

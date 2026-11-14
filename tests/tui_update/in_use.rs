@@ -147,7 +147,16 @@ fn a_renames_answer_leaves_a_copys_cancel_to_the_copy() {
     let rename = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(in_use_asked(&rename).is_some());
     press(&mut app, Key::ch('C'));
-    type_text(&mut app, "/mnt/backup");
+    // An absolute path where the test runs: the prompt refuses `/mnt/backup`
+    // on Windows.
+    type_text(
+        &mut app,
+        if cfg!(windows) {
+            r"C:\backup"
+        } else {
+            "/mnt/backup"
+        },
+    );
     let copy = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(matches!(job_started(&copy), Some((JobKind::Copy, [_]))));
     press(&mut app, Key::ctrl('c'));

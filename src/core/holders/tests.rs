@@ -292,29 +292,39 @@ fn arguments_name_paths_in_every_form() {
 }
 
 /// The pipeline is followed from the asker's own pipes through every
-/// process on them, but never through a pipe a process above the asker holds
-/// too: that is the session's output, shared by whatever ran in the
-/// background.
+/// process on them that a process above the asker (or one already joined)
+/// started — never through a pipe a process above the asker holds too, the
+/// session's output, and never to the asker's own children, which inherit
+/// its pipes without being its pipeline.
 #[test]
 fn the_asker_s_pipeline_is_followed_but_not_its_session_s_output() {
     let pipes = |names: &[&str]| -> HashSet<String> {
         names.iter().map(|name| format!("pipe:[{name}]")).collect()
     };
+    let shell = 1;
+    let asker = 2;
     let others = vec![
-        (10, pipes(&["out", "a"])),     // `| cat`, writing on to the session
-        (11, pipes(&["a"])),            // `| tail`, after cat
-        (12, pipes(&["in"])),           // `sleep |`, feeding the asker
-        (13, pipes(&["session"])),      // a job in the background
-        (14, pipes(&["b", "session"])), // another pipeline of the session
+        (10, shell, pipes(&["out", "a"])), // `| cat`, writing on to the session
+        (11, shell, pipes(&["a"])),        // `| tail`, after cat
+        (12, shell, pipes(&["in"])),       // `sleep |`, feeding the asker
+        (13, shell, pipes(&["session"])),  // a job in the background
+        (14, shell, pipes(&["b", "session"])), // another pipeline of the session
+        (15, asker, pipes(&["out"])),      // the asker's own child, inheriting
+        (16, 15, pipes(&["out"])),         // and its child
+        (17, 10, pipes(&["a"])),           // what `cat` started, on its pipe
     ];
+    let above: HashSet<u32> = [shell].into();
     let mut joined = judge::pipeline(
         &pipes(&["out", "in", "session"]),
         &pipes(&["session"]),
+        &above,
         &others,
     );
     joined.sort_unstable();
-    assert_eq!(joined, [10, 11, 12]);
-    assert!(judge::pipeline(&pipes(&["session"]), &pipes(&["session"]), &others).is_empty());
+    assert_eq!(joined, [10, 11, 12, 17]);
+    assert!(
+        judge::pipeline(&pipes(&["session"]), &pipes(&["session"]), &above, &others).is_empty()
+    );
 }
 
 /// A program started by a path inside the project runs from it, though its
@@ -788,23 +798,27 @@ fn a_program_run_from_the_folder_and_one_named_in_its_arguments() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
     std::fs::create_dir_all(root.join("bin")).unwrap();
-    let sleep = crate::util::paths::find_on_path("sleep").unwrap();
+    // A shell, which runs under any name: where coreutils is one binary
+    // that answers to its name (uutils), a copy of `sleep` named otherwise
+    // exits at once.
+    let shell = crate::util::paths::find_on_path("sh").unwrap();
     let copied = root.join("bin").join("sleeper");
     // Copied by a process of its own: a file this process held open for
     // writing is inherited by a child another test thread forks at that
     // moment, and running it fails with `ETXTBSY` until that child execs.
     assert!(
         std::process::Command::new("cp")
-            .arg(&sleep)
+            .arg(&shell)
             .arg(&copied)
             .status()
             .unwrap()
             .success()
     );
     std::fs::write(root.join("marker"), "").unwrap();
+    // The `:` keeps the shell from handing itself over to `sleep`.
     let runner = spawn(
         std::process::Command::new(&copied)
-            .arg("30")
+            .args(["-c", "sleep 30; :"])
             .current_dir("/"),
     );
     let named = spawn(

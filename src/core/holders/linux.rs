@@ -373,28 +373,42 @@ pub(super) fn pipeline_partners(chain: &[Asking]) -> Vec<Asking> {
     if mine.is_empty() {
         return Vec::new();
     }
-    let inherited: HashSet<String> = chain
+    let above: HashSet<u32> = chain
         .iter()
-        .filter(|asking| asking.pid != me)
-        .flat_map(|asking| stdio_pipes(asking.pid))
+        .map(|asking| asking.pid)
+        .filter(|pid| *pid != me)
         .collect();
+    let inherited: HashSet<String> = above.iter().flat_map(|pid| stdio_pipes(*pid)).collect();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
-    let others: Vec<(u32, HashSet<String>)> = entries
+    let others: Vec<(u32, u32, HashSet<String>, u64)> = entries
         .flatten()
         .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|pid| !chain.iter().any(|asking| asking.pid == *pid))
-        .map(|pid| (pid, stdio_pipes(pid)))
-        .filter(|(_, pipes)| !pipes.is_empty())
+        .filter(|pid| *pid != me && !above.contains(pid))
+        .filter_map(|pid| {
+            let pipes = stdio_pipes(pid);
+            if pipes.is_empty() {
+                return None;
+            }
+            let stat = crate::util::process::stat(pid)?;
+            Some((pid, stat.ppid, pipes, stat.started))
+        })
         .collect();
-    judge::pipeline(&mine, &inherited, &others)
+    let candidates: Vec<(u32, u32, HashSet<String>)> = others
+        .iter()
+        .map(|(pid, parent, pipes, _)| (*pid, *parent, pipes.clone()))
+        .collect();
+    judge::pipeline(&mine, &inherited, &above, &candidates)
         .into_iter()
         .filter_map(|pid| {
-            crate::util::process::stat(pid).map(|stat| Asking {
-                pid,
-                started: stat.started,
-            })
+            others
+                .iter()
+                .find(|(other, ..)| *other == pid)
+                .map(|(_, _, _, started)| Asking {
+                    pid,
+                    started: *started,
+                })
         })
         .collect()
 }

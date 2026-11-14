@@ -212,20 +212,27 @@ pub(super) fn started_from(argv: &[String], cwd: Option<&Path>) -> Option<PathBu
 /// their standard input, output or error, a pipe the asker holds as one of
 /// its own, and so on along the pipeline (`fastf move … | grep x | tail`).
 /// The shell started them with the command, so they work in its folder only
-/// because it does. A pipe a process above the asker also holds (`inherited`)
-/// joins nothing: it is a whole session's output, which a job started in the
-/// background shares too.
+/// because it does. Each is a child of a process above the asker (`above`)
+/// or of one already joined — never of the asker, whose own children inherit
+/// its pipes without being its pipeline. A pipe a process above the asker
+/// also holds (`inherited`) joins nothing: it is a whole session's output,
+/// which a job started in the background shares too. `others` is each other
+/// process with its parent and its pipes.
 pub(super) fn pipeline(
     mine: &HashSet<String>,
     inherited: &HashSet<String>,
-    others: &[(u32, HashSet<String>)],
+    above: &HashSet<u32>,
+    others: &[(u32, u32, HashSet<String>)],
 ) -> Vec<u32> {
     let mut pipes: HashSet<&String> = mine.difference(inherited).collect();
     let mut joined: Vec<u32> = Vec::new();
     loop {
         let before = joined.len();
-        for (pid, theirs) in others {
-            if joined.contains(pid) || !theirs.iter().any(|pipe| pipes.contains(pipe)) {
+        for (pid, parent, theirs) in others {
+            if joined.contains(pid)
+                || !(above.contains(parent) || joined.contains(parent))
+                || !theirs.iter().any(|pipe| pipes.contains(pipe))
+            {
                 continue;
             }
             joined.push(*pid);

@@ -518,7 +518,9 @@ and the verb goes on as asked. Otherwise a picker says so — `ID0047 is in use`
 or `2 of 5 projects are in use` over marks — with what uses each one in a
 sentence below, and offers *Move anyway*, *Move the 3 others* (over marks, when
 some are free) and *Cancel*; *Delete* and *Rename* likewise, a rename without
-the others. Esc is Cancel, and says nothing was moved. A filesystem mounted
+the others. The cursor starts on *Cancel*, so Enter alone moves nothing: going
+ahead takes a move of the cursor, as the command line's question is no unless
+you say yes. Esc is Cancel, and says nothing was moved. A filesystem mounted
 inside a folder being deleted is offered no *anyway*. The shell the app was
 started from, and its terminal, never count.
 

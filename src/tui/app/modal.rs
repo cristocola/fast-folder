@@ -96,6 +96,12 @@ pub struct PickState {
     /// row's detail wrapped below the list: for rows whose detail is a
     /// sentence a person has to read (`!`), not a hint.
     pub wide: bool,
+    /// The item the cursor starts on, and goes back to on every change of
+    /// the query while it is among the matches: the answer that does
+    /// nothing, on a question whose other rows act (`in_use`'s Cancel), so
+    /// neither one Enter nor keys typed into the filter by mistake pick a
+    /// verb.
+    pub rest: Option<usize>,
 }
 
 impl PickState {
@@ -110,6 +116,7 @@ impl PickState {
             offset: 0,
             then,
             wide: false,
+            rest: None,
         }
     }
 
@@ -117,6 +124,20 @@ impl PickState {
     pub fn wide(mut self) -> Self {
         self.wide = true;
         self
+    }
+
+    /// The same picker with its cursor resting on item `index`
+    /// ([`Self::rest`]).
+    pub fn resting_on(mut self, index: usize) -> Self {
+        self.rest = Some(index);
+        self.selected = self.resting_row().or(self.selected);
+        self
+    }
+
+    /// Where the item the cursor rests on is ranked now, while it matches.
+    fn resting_row(&self) -> Option<usize> {
+        let rest = self.rest?;
+        self.ranked.iter().position(|(index, _)| *index == rest)
     }
 
     /// The detail of the row under the cursor.
@@ -147,7 +168,9 @@ impl PickState {
             .into_iter()
             .map(|(i, hit)| (i, hit.indices))
             .collect();
-        self.selected = (!self.ranked.is_empty()).then_some(0);
+        self.selected = self
+            .resting_row()
+            .or((!self.ranked.is_empty()).then_some(0));
         self.offset = 0;
     }
 
@@ -515,6 +538,11 @@ impl App {
             return Vec::new();
         };
         let Some(item) = pick.chosen().cloned() else {
+            // A filter that matches nothing still closes the question, and
+            // nothing went: it says so, as Cancel would.
+            if let Then::InUse(choice) = pick.then {
+                return self.nothing_went(&choice.after);
+            }
             return Vec::new();
         };
         match pick.then {

@@ -26,10 +26,112 @@ fn choose(app: &mut App, label: &str) -> Vec<Effect> {
         .iter()
         .position(|choice| choice == label)
         .unwrap_or_else(|| panic!("no {label} in {:?}", choices(app)));
-    for _ in 0..at {
-        press(app, Key::plain(KeyCode::Down));
+    let from = picker(app).selected.expect("the picker has a cursor");
+    let key = if at < from {
+        KeyCode::Up
+    } else {
+        KeyCode::Down
+    };
+    for _ in 0..at.abs_diff(from) {
+        press(app, Key::plain(key));
     }
     press(app, Key::plain(KeyCode::Enter))
+}
+
+/// The label of the row under the picker's cursor.
+fn under_cursor(app: &App) -> String {
+    picker(app)
+        .chosen()
+        .map(|item| item.label.clone())
+        .unwrap_or_default()
+}
+
+/// Ask `verb` about the selected project and answer that a program works
+/// in it: the picker is up.
+fn busy_question(app: &mut App, verb: &str) {
+    let selected = app.library.selected().unwrap().clone();
+    let effects = match verb {
+        "move" => ask_to_move(app),
+        "delete" => {
+            press(app, Key::ch('D'));
+            type_text(app, "delete");
+            press(app, Key::plain(KeyCode::Enter))
+        }
+        _ => {
+            press(app, Key::ch('r'));
+            press(app, Key::ctrl('u'));
+            type_text(app, "New_Name");
+            press(app, Key::plain(KeyCode::Enter))
+        }
+    };
+    answer_in_use(app, &effects, &[(&selected.path, vec![sitter(9)])]);
+}
+
+/// Whether the effects start the verb: a job, or the rename's write.
+fn starts_something(effects: &[Effect]) -> bool {
+    job_started(effects).is_some()
+        || effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::Run(..)))
+}
+
+/// **One Enter on the question goes nowhere.** The cursor starts on
+/// Cancel, as the command line's same question defaults to no, so going
+/// past a use is a deliberate move of the cursor; the rows keep their
+/// order.
+#[test]
+fn one_enter_on_the_question_moves_deletes_and_renames_nothing() {
+    for (verb, past) in [
+        ("move", "moved"),
+        ("delete", "deleted"),
+        ("rename", "renamed"),
+    ] {
+        let mut app = fixture(12, 100, 30);
+        busy_question(&mut app, verb);
+        assert_eq!(choices(&app).last().map(String::as_str), Some("Cancel"));
+        assert_eq!(under_cursor(&app), "Cancel", "{verb}");
+        let effects = press(&mut app, Key::plain(KeyCode::Enter));
+        assert!(!starts_something(&effects), "{verb}: {effects:?}");
+        assert!(app.modals.is_empty(), "{verb}");
+        assert!(
+            app.status.text.contains(&format!("nothing was {past}")),
+            "{verb}: {}",
+            app.status.text
+        );
+    }
+}
+
+/// **Typing into the picker keeps the cursor off the verb.** Keys meant for
+/// something else land in its filter when the question comes up under
+/// them; while Cancel is among the matches the cursor stays on it, and with
+/// nothing matching, Enter still says nothing was moved.
+#[test]
+fn typing_into_the_question_leaves_the_cursor_on_cancel() {
+    let mut app = fixture(12, 100, 30);
+    busy_question(&mut app, "move");
+    type_text(&mut app, "node");
+    assert_eq!(choices(&app), ["Move anyway", "Cancel"], "both still match");
+    assert_eq!(under_cursor(&app), "Cancel");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(!starts_something(&effects), "{effects:?}");
+    assert!(
+        app.status.text.contains("nothing was moved"),
+        "{}",
+        app.status.text
+    );
+
+    let mut app = fixture(12, 100, 30);
+    busy_question(&mut app, "move");
+    type_text(&mut app, "zqzq");
+    assert!(picker(&app).ranked.is_empty(), "nothing matches");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(!starts_something(&effects), "{effects:?}");
+    assert!(app.modals.is_empty());
+    assert!(
+        app.status.text.contains("nothing was moved"),
+        "{}",
+        app.status.text
+    );
 }
 
 /// `m` and the first base, answered up to the question.

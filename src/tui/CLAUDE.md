@@ -649,7 +649,11 @@ no later job. One question at a time: a second is refused while one is out.
 Nothing in use starts the job (`StartJob { force: false }`) or the rename;
 otherwise a wide `Pick` (`Then::InUse`) offers anyway, the others (a batch
 with free projects; never a rename) and cancel, and hides anyway when a use
-is physical. Esc goes through `close_top`, which says nothing was moved. The
+is physical. **Its cursor rests on Cancel** (`PickState::resting_on`), the
+command line's default no, and a change of its query puts it back there
+while Cancel matches, so neither one Enter nor keys typed into its filter by
+mistake go past a use; a filter that matches nothing closes it as Cancel
+does. Esc goes through `close_top`, which says nothing was moved. The
 runtime asks every platform the same, so `update` behaves the same
 everywhere; off Linux the answer is always empty.
 

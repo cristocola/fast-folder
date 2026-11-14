@@ -204,6 +204,10 @@ impl App {
                 OTHERS,
             ));
         }
+        // The cursor rests on Cancel, the command line's default no: going
+        // past a use takes a move of the cursor, never one Enter or keys
+        // meant for something else that land in the filter.
+        let cancel = items.len();
         items.push(item("Cancel".to_string(), CANCEL));
         let choice = InUseChoice {
             busy: busy.iter().map(|project| project.path.clone()).collect(),
@@ -212,7 +216,9 @@ impl App {
             after: checking.after,
         };
         self.modals.push(Modal::Pick(
-            PickState::new(title, items, Then::InUse(Box::new(choice))).wide(),
+            PickState::new(title, items, Then::InUse(Box::new(choice)))
+                .wide()
+                .resting_on(cancel),
         ));
         Vec::new()
     }

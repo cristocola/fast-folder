@@ -805,14 +805,22 @@ fn a_unit_folder_is_read_as_its_manager_reads_it() {
     std::fs::write(dir.join("notes.txt"), &line).unwrap();
 
     let files = units::unit_files(&dir);
-    let names: Vec<&str> = files.iter().map(|(unit, _)| unit.as_str()).collect();
+    let names: Vec<(&str, Option<&str>)> = files
+        .iter()
+        .map(|file| {
+            (
+                file.unit.as_str(),
+                file.drop_in.as_ref().and_then(|name| name.to_str()),
+            )
+        })
+        .collect();
     assert_eq!(
         names,
         [
-            "linked.service",
-            "named.service",
-            "named.service",
-            "plain.service"
+            ("linked.service", None),
+            ("named.service", None),
+            ("named.service", Some("override.conf")),
+            ("plain.service", None)
         ],
         "{files:?}"
     );
@@ -820,7 +828,12 @@ fn a_unit_folder_is_read_as_its_manager_reads_it() {
     let needles = vec![units::needles(&folders[0], None)];
     let ties: Vec<(String, Vec<(usize, Tie)>)> = files
         .iter()
-        .map(|(unit, file)| (unit.clone(), units::tie_of(file, &folders, &needles)))
+        .map(|file| {
+            (
+                file.unit.clone(),
+                units::tie_of(&file.path, &folders, &needles),
+            )
+        })
         .collect();
     assert_eq!(
         ties,
@@ -1236,6 +1249,125 @@ fn a_unit_file_naming_the_folder_counts() {
         unit.line()
     );
     drop(env);
+}
+
+/// A unit is read as its manager loads it: every folder of a batch is
+/// checked against every file of the unit — its own file names one, a
+/// drop-in another — while a unit's file that a file of the same name in an
+/// earlier folder hides names nothing, nor does a drop-in hidden by one of
+/// the same name.
+#[test]
+fn a_unit_is_read_as_its_manager_loads_it() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let data = sandbox.path().join("data");
+    let upper = config.join("systemd").join("user");
+    let lower = data.join("systemd").join("user");
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    env.also_set("XDG_DATA_HOME", &data.to_string_lossy());
+    let temp = tempfile::tempdir().unwrap();
+    let real = crate::util::paths::canonical(temp.path()).unwrap();
+    let [a, b, p, q] = ["A", "B", "P", "Q"].map(|name| real.join(name));
+    for folder in [&a, &b, &p, &q] {
+        std::fs::create_dir(folder).unwrap();
+    }
+    let me = std::process::id();
+    let unit = |what: &str| format!("fastf-test-{what}-{me}.service");
+    let write = |file: PathBuf, text: String| {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, format!("[Service]\n{text}\n")).unwrap();
+    };
+    let batch = unit("batch");
+    write(
+        upper.join(&batch),
+        format!("WorkingDirectory={}", a.display()),
+    );
+    write(
+        upper.join(format!("{batch}.d/data.conf")),
+        format!("Environment=DATA={}", b.display()),
+    );
+    let shadow = unit("shadow");
+    write(upper.join(&shadow), "ExecStart=/bin/true".to_string());
+    write(
+        lower.join(&shadow),
+        format!("WorkingDirectory={}", p.display()),
+    );
+    let dropped = unit("dropped");
+    write(upper.join(format!("{dropped}.d/x.conf")), String::new());
+    write(
+        lower.join(format!("{dropped}.d/x.conf")),
+        format!("WorkingDirectory={}", p.display()),
+    );
+    write(
+        lower.join(format!("{dropped}.d/y.conf")),
+        format!("WorkingDirectory={}", q.display()),
+    );
+
+    let ours = |found: Vec<UnitFound>| -> Vec<(usize, String)> {
+        let mut ours: Vec<(usize, String)> = found
+            .into_iter()
+            .filter(|found| found.name.starts_with("fastf-test-"))
+            .map(|found| (found.folder, found.name))
+            .collect();
+        ours.sort();
+        ours
+    };
+    let batched = ours(units::find(&[vec![a.clone()], vec![b.clone()]]));
+    let hidden = ours(units::find(&[vec![p.clone()], vec![q.clone()]]));
+    drop(env);
+    assert_eq!(batched, [(0, batch.clone()), (1, batch.clone())]);
+    assert_eq!(hidden, [(1, dropped.clone())]);
+}
+
+/// The unit folders in the order systemd reads them: a unit's file in an
+/// earlier folder hides one of the same name in a later folder.
+#[test]
+fn unit_folders_are_read_in_the_manager_s_order() {
+    let (mut env, sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let config = sandbox.path().join("config");
+    let data = sandbox.path().join("data");
+    env.also_set("XDG_CONFIG_HOME", &config.to_string_lossy());
+    env.also_set("XDG_DATA_HOME", &data.to_string_lossy());
+    let dirs = units::unit_dirs();
+    drop(env);
+    let user: Vec<String> = dirs
+        .iter()
+        .filter(|(_, system)| !system)
+        .map(|(dir, _)| {
+            dir.to_string_lossy()
+                .replace(&*sandbox.path().to_string_lossy(), "~")
+        })
+        .map(|dir| match dir.split_once("/systemd/") {
+            Some((run, kind)) if run.starts_with("/run/user/") => format!("run/{kind}"),
+            _ => dir,
+        })
+        .collect();
+    assert_eq!(
+        user,
+        [
+            "run/generator.early",
+            "~/config/systemd/user",
+            "/etc/systemd/user",
+            "run/generator",
+            "~/data/systemd/user",
+            "run/generator.late",
+        ]
+    );
+    let system: Vec<PathBuf> = dirs
+        .into_iter()
+        .filter(|(_, system)| *system)
+        .map(|(dir, _)| dir)
+        .collect();
+    assert_eq!(
+        system,
+        [
+            "/run/systemd/generator.early",
+            "/etc/systemd/system",
+            "/run/systemd/generator",
+            "/run/systemd/generator.late",
+        ]
+        .map(PathBuf::from)
+    );
 }
 
 /// A rootless namespace that binds a folder of the project somewhere else

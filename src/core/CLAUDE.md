@@ -551,8 +551,11 @@ process's `cwd`, `exe`, `fd` with `fdinfo` flags, `maps` and arguments (this
 user's), every process's `mountinfo` (anyone's — a root container's binds
 too), host binds, mounts inside, and systemd unit files that name the folder
 or link into it (`units.rs`: the user's and system's unit folders and the
-generators', `systemctl show` once per manager, killed at two seconds, no
-answer counting). **`Use::weight` is the one table** — physical, advisory,
+generators', read as the manager loads them — the folders in its own order,
+a unit's own file from the first folder holding one and each drop-in name
+from the first folder holding it, every file checked against every folder
+asked about — then `systemctl show` once per manager, killed at two seconds,
+no answer counting). **`Use::weight` is the one table** — physical, advisory,
 note — and `Holders::refusal`/`notes` the one wording. Asked as
 `holders::check(&Folder, Verb, &Guard)`:
 

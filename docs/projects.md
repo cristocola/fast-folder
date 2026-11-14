@@ -448,7 +448,9 @@ names the path does.
 - a systemd unit file — yours or the system's, and the ones generators write,
   such as Podman's Quadlet containers — that names the folder (by its path or
   as `%h/…`), or is a link into it, whether the unit runs now or something
-  starts it later;
+  starts it later. Only the files systemd loads count: a unit file or a
+  drop-in that one of the same name in a folder systemd reads first hides
+  does not;
 - processes fastf could not look at at all, because every reader it had was
   held up by processes that did not answer — `68 processes were not looked
   at: the ones before them did not answer`. Rare, and fastf does not go

@@ -7,7 +7,8 @@
 //! file that is a link into the folder (`systemctl --user link`) names it
 //! too.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -48,8 +49,13 @@ const BEFORE: &[char] = &['=', '"', '\'', '-', '@', '+', '!', ':', ';', ',', '('
 /// Characters that end a path: a folder inside it goes on with `/`.
 const AFTER: &[char] = &['/', '"', '\'', ':', ';', ',', ')'];
 
-/// The folders a manager loads unit files from: `(folder, system)`.
-fn unit_dirs() -> Vec<(PathBuf, bool)> {
+/// The folders a manager loads unit files from, `(folder, system)`, in the
+/// order it reads them (`systemd-analyze [--user] unit-paths`): a unit's
+/// own file in an earlier folder hides one in a later folder, and a drop-in
+/// one of the same name. Generators write into the `generator` folders:
+/// Podman's Quadlet turns a `.container` into a service, fstab lines become
+/// mounts.
+pub(super) fn unit_dirs() -> Vec<(PathBuf, bool)> {
     let home = crate::util::paths::home_dir();
     let env_or = |key: &str, fallback: &str| {
         std::env::var_os(key)
@@ -57,33 +63,30 @@ fn unit_dirs() -> Vec<(PathBuf, bool)> {
             .filter(|path| path.is_absolute())
             .or_else(|| home.as_ref().map(|home| home.join(fallback)))
     };
-    let mut dirs = Vec::new();
-    for dir in [
-        env_or("XDG_CONFIG_HOME", ".config"),
-        env_or("XDG_DATA_HOME", ".local/share"),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        dirs.push((dir.join("systemd/user"), false));
-    }
-    dirs.push((PathBuf::from("/etc/systemd/user"), false));
-    // Generators write here: Podman's Quadlet turns a `.container` into a
-    // service, fstab lines become mounts.
-    if let Ok(me) = std::fs::metadata("/proc/self") {
+    let run = std::fs::metadata("/proc/self").ok().map(|me| {
         use std::os::unix::fs::MetadataExt;
-        for generated in ["generator", "generator.early", "generator.late"] {
-            dirs.push((
-                PathBuf::from(format!("/run/user/{}/systemd/{generated}", me.uid())),
-                false,
-            ));
-        }
-    }
-    dirs.push((PathBuf::from("/etc/systemd/system"), true));
-    for generated in ["generator", "generator.early", "generator.late"] {
-        dirs.push((PathBuf::from(format!("/run/systemd/{generated}")), true));
-    }
-    dirs
+        PathBuf::from(format!("/run/user/{}/systemd", me.uid()))
+    });
+    let generated = |kind: &str| run.as_ref().map(|run| run.join(kind));
+    let user = [
+        generated("generator.early"),
+        env_or("XDG_CONFIG_HOME", ".config").map(|dir| dir.join("systemd/user")),
+        Some(PathBuf::from("/etc/systemd/user")),
+        generated("generator"),
+        env_or("XDG_DATA_HOME", ".local/share").map(|dir| dir.join("systemd/user")),
+        generated("generator.late"),
+    ];
+    let system = [
+        "/run/systemd/generator.early",
+        "/etc/systemd/system",
+        "/run/systemd/generator",
+        "/run/systemd/generator.late",
+    ];
+    user.into_iter()
+        .flatten()
+        .map(|dir| (dir, false))
+        .chain(system.into_iter().map(|dir| (PathBuf::from(dir), true)))
+        .collect()
 }
 
 /// Whether a file name is a unit's.
@@ -92,24 +95,49 @@ fn is_unit(name: &str) -> bool {
         .is_some_and(|(stem, kind)| !stem.is_empty() && UNIT_KINDS.contains(&kind))
 }
 
+/// One file of a unit folder.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct UnitFile {
+    /// The unit it is for.
+    pub unit: String,
+    /// A drop-in's name, in `<unit>.d/`; `None` for the unit's own file.
+    pub drop_in: Option<OsString>,
+    pub path: PathBuf,
+}
+
 /// Every unit file naming one of `folders`, with what systemd says of it.
+/// Only what a manager loads is read: a unit's own file from the first
+/// folder holding one, each drop-in name from the first folder holding it;
+/// and every file is checked against every folder.
 pub(super) fn find(folders: &[Vec<PathBuf>]) -> Vec<UnitFound> {
-    let home = crate::util::paths::home_dir();
-    let mut found: Vec<(usize, String, bool, Tie)> = Vec::new();
+    let mut mains: HashSet<(String, bool)> = HashSet::new();
+    let mut drop_ins: HashSet<(String, bool, OsString)> = HashSet::new();
+    let mut loaded: Vec<(UnitFile, bool)> = Vec::new();
     for (dir, system) in unit_dirs() {
-        let needles: Vec<Vec<String>> = folders
+        for file in unit_files(&dir) {
+            let first = match &file.drop_in {
+                None => mains.insert((file.unit.clone(), system)),
+                Some(name) => drop_ins.insert((file.unit.clone(), system, name.clone())),
+            };
+            if first {
+                loaded.push((file, system));
+            }
+        }
+    }
+    let home = crate::util::paths::home_dir();
+    let needles: [Vec<Vec<String>>; 2] = [false, true].map(|system| {
+        folders
             .iter()
             .map(|spellings| needles(spellings, (!system).then_some(home.as_deref()).flatten()))
-            .collect();
-        for (unit, file) in unit_files(&dir) {
-            if found
-                .iter()
-                .any(|(_, name, kept, _)| *name == unit && *kept == system)
-            {
-                continue;
-            }
-            for (folder, tie) in tie_of(&file, folders, &needles) {
-                found.push((folder, unit.clone(), system, tie));
+            .collect()
+    });
+    let mut found: Vec<(usize, String, bool, Tie)> = Vec::new();
+    for (file, system) in &loaded {
+        for (folder, tie) in tie_of(&file.path, folders, &needles[usize::from(*system)]) {
+            if !found.iter().any(|(kept, name, manager, _)| {
+                *kept == folder && *name == file.unit && manager == system
+            }) {
+                found.push((folder, file.unit.clone(), *system, tie));
             }
         }
     }
@@ -149,10 +177,10 @@ pub(super) fn find(folders: &[Vec<PathBuf>]) -> Vec<UnitFound> {
         .collect()
 }
 
-/// The unit files in `dir`, each with the unit it is for: a unit's own file,
-/// and the drop-ins in `<unit>.d/`. The `.wants` and `.requires` folders
-/// only hold links to units listed already.
-pub(super) fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
+/// The unit files in `dir`: a unit's own file, and the drop-ins in
+/// `<unit>.d/`. The `.wants` and `.requires` folders only hold links to
+/// units listed already.
+pub(super) fn unit_files(dir: &Path) -> Vec<UnitFile> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -168,12 +196,21 @@ pub(super) fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
                 continue;
             };
             for drop_in in drop_ins.flatten() {
-                if drop_in.file_name().to_string_lossy().ends_with(".conf") {
-                    files.push((unit.to_string(), drop_in.path()));
+                let drop_name = drop_in.file_name();
+                if drop_name.to_string_lossy().ends_with(".conf") {
+                    files.push(UnitFile {
+                        unit: unit.to_string(),
+                        drop_in: Some(drop_name),
+                        path: drop_in.path(),
+                    });
                 }
             }
         } else if is_unit(&name) {
-            files.push((name, path));
+            files.push(UnitFile {
+                unit: name,
+                drop_in: None,
+                path,
+            });
         }
     }
     files.sort();

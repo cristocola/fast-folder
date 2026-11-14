@@ -74,7 +74,7 @@ What each suite guards — the intent, not the case list:
   whose "rc" adds the only folder holding the program, so it is found only if
   fastf asked. The fake shell logs each ask and whether it could open a
   terminal. `WAYLAND_DISPLAY` is removed and `DISPLAY` is `:99`, and every
-  terminal is a recorder. **`SHELL` is never inherited** (`NOT_INHERITED`): a
+  terminal is a recorder. **`SHELL` is never inherited** (`not_inherited()`): a
   suite that wants one sets a fake, or fastf would start the developer's own
   interactive shell.
 - `term_cmd.rs` (unix) — `fastf term`: which emulator, argv and working directory
@@ -170,9 +170,19 @@ the fix missed.
   test cannot hand the next one a deleted `HOME`. `with_sandbox` passes the guard
   to the body, which is how `crash_recovery` arms a failpoint.
 - **A spawned fastf inherits nothing of whoever ran the suite**:
-  `Sandbox::command` and `pty::run` drop `common::NOT_INHERITED`, then apply the
-  test's own environment. A fastf-opened terminal exports `FASTF_RELAUNCHED` to
-  every shell in it, which would otherwise fail the relaunch positives.
+  `Sandbox::command` and `pty::run` drop `common::not_inherited()`, then apply
+  the test's own environment. A fastf-opened terminal exports
+  `FASTF_RELAUNCHED` to every shell in it, which would otherwise fail the
+  relaunch positives; and the list takes in the theme's own
+  (`theme::Env::VARIABLES`), because every terminal announces itself
+  differently — Alacritty by a window id, WezTerm by a pane — and a child that
+  inherited them would paint one palette in the developer's terminal and
+  another on a runner.
+- **A unit test that reads the terminal clears the theme's whole list**
+  (`for name in Env::VARIABLES { guard.also_remove(name) }`), then sets what
+  it is about. Clearing only the variables one's own terminal sets passes
+  there and fails in the next one, the AUR `check()` included: it runs in
+  whatever terminal the person installing has open.
 - **`HOME` is always redirected**: an unconfigured `base_dir` falls back to it, and
   a harness that skips it scans the developer's real projects and self-heals the
   counter from them.

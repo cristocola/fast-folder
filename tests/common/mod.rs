@@ -37,26 +37,37 @@ pub const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 /// everything typed into that shell — including the build that runs this suite.
 /// With it set `headless_gui_session` answers `false`, and the four positives in
 /// `relaunch.rs` fail on one machine and nowhere else, which is the worst shape
-/// a failure can have. `SSH_CONNECTION` does the same over ssh, `FASTF_FAULT`
-/// injects one failure into every case at once, and `FASTF_THEME`, `FASTF_ASCII`
-/// and `NO_COLOR` repaint what the pty suite reads back. `SHELL` is the shell
-/// fastf asks for its `PATH` (`util::login_path`): inherited, every suite would
-/// start the developer's own interactive shell, rc files and all.
+/// a failure can have. `SSH_CONNECTION` does the same over ssh, and
+/// `FASTF_FAULT` injects one failure into every case at once. `SHELL` is the
+/// shell fastf asks for its `PATH` (`util::login_path`): inherited, every suite
+/// would start the developer's own interactive shell, rc files and all.
+///
+/// [`not_inherited`] adds every variable the theme reads, which repaint what
+/// the pty suite reads back; iterate that, not this.
 pub const NOT_INHERITED: &[&str] = &[
     "EDITOR",
-    "FASTF_ASCII",
     "FASTF_ASKING_SHELL",
     "FASTF_FAULT",
     "FASTF_NO_RELAUNCH",
     "FASTF_PROJECT_PATH",
     "FASTF_RELAUNCHED",
-    "FASTF_THEME",
     "FASTF_TRACE_FILE",
-    "NO_COLOR",
     "SHELL",
     "SSH_CONNECTION",
     "TERMINAL",
 ];
+
+/// Everything a spawned fastf is started without: [`NOT_INHERITED`] and the
+/// theme's own list (`Env::VARIABLES`). The theme reads the terminal the suite
+/// runs in — `COLORTERM`, Alacritty's window id, WezTerm's pane — so a child
+/// that inherited them would draw one palette in the developer's terminal and
+/// another on a CI runner.
+pub fn not_inherited() -> impl Iterator<Item = &'static str> {
+    NOT_INHERITED
+        .iter()
+        .copied()
+        .chain(fastf::tui::theme::Env::VARIABLES)
+}
 
 pub struct Sandbox {
     pub tmp: tempfile::TempDir,
@@ -150,7 +161,7 @@ impl Sandbox {
             if cfg!(windows) { "USERPROFILE" } else { "HOME" },
             self.tmp.path(),
         );
-        for name in NOT_INHERITED {
+        for name in not_inherited() {
             cmd.env_remove(name);
         }
         cmd
@@ -825,11 +836,7 @@ pub mod pty {
             .collect();
         let mut envp: Vec<CString> = std::env::vars_os()
             .filter(|(k, _)| !env.iter().any(|(name, _)| k.as_bytes() == name.as_bytes()))
-            .filter(|(k, _)| {
-                !super::NOT_INHERITED
-                    .iter()
-                    .any(|name| k.as_bytes() == name.as_bytes())
-            })
+            .filter(|(k, _)| !super::not_inherited().any(|name| k.as_bytes() == name.as_bytes()))
             .map(|(k, v)| {
                 let mut buf = k.as_bytes().to_vec();
                 buf.push(b'=');

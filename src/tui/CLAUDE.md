@@ -50,7 +50,10 @@ robust as a rock.** The rules, in the order they matter:
 then `NO_COLOR`/`TERM=dumb`, then the config's `theme`, then what the terminal
 announces (`COLORTERM`, a truecolor `TERM`/`TERM_PROGRAM`, Windows Terminal),
 which picks Doom One, else ANSI. On Windows a host that announces no emulator
-gets the ASCII alphabet; `FASTF_ASCII=0` forces Unicode. A theme set on the settings screen lands through
+gets the ASCII alphabet; `FASTF_ASCII=0` forces Unicode. **`Env::VARIABLES` is
+every variable `Env::read` asks about**, held to it by
+`the_reader_asks_for_exactly_the_variables_it_names`: a test clears that list,
+and the suites' spawned fastf is started without it (`tests/CLAUDE.md`). A theme set on the settings screen lands through
 `Effect::Retheme` → `Msg::Themed`, so `update` reads no environment.
 
 **Glyphs come from `Glyphs`** wherever a theme is in reach, so the ASCII alphabet

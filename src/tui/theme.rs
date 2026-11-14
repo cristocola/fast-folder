@@ -115,19 +115,46 @@ pub struct Env {
 }
 
 impl Env {
+    /// Every variable [`Env::read`] asks about. A test that wants the palette
+    /// of no terminal in particular clears all of them: each terminal leaves
+    /// its own (Alacritty's window id, WezTerm's pane), and a test that
+    /// cleared only the ones its author's terminal sets fails in every other.
+    pub const VARIABLES: [&'static str; 13] = [
+        "NO_COLOR",
+        "TERM",
+        "COLORTERM",
+        "TERM_PROGRAM",
+        "WT_SESSION",
+        "FASTF_THEME",
+        "FASTF_ASCII",
+        "FASTF_MOTION",
+        "ALACRITTY_WINDOW_ID",
+        "ALACRITTY_SOCKET",
+        "WEZTERM_PANE",
+        "WEZTERM_EXECUTABLE",
+        "ConEmuANSI",
+    ];
+
     pub fn read() -> Self {
-        let var = |name: &str| std::env::var(name).unwrap_or_default();
-        let set = |name: &str| std::env::var_os(name).is_some();
+        Self::from_lookup(|name| std::env::var_os(name))
+    }
+
+    /// [`Env::read`] over any source of variables; it asks for no name
+    /// outside [`Env::VARIABLES`].
+    fn from_lookup(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> Self {
+        let text = |name: &str| get(name).and_then(|value| value.into_string().ok());
+        let var = |name: &str| text(name).unwrap_or_default();
+        let set = |name: &str| get(name).is_some();
         Self {
-            no_color: std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()),
+            no_color: get("NO_COLOR").is_some_and(|v| !v.is_empty()),
             term: var("TERM"),
             colorterm: var("COLORTERM"),
             term_program: var("TERM_PROGRAM"),
             wt_session: set("WT_SESSION"),
             pseudo_console: crate::util::tty::pseudo_console(),
-            fastf_theme: std::env::var("FASTF_THEME").ok(),
-            fastf_ascii: std::env::var("FASTF_ASCII").ok(),
-            fastf_motion: std::env::var("FASTF_MOTION").ok(),
+            fastf_theme: text("FASTF_THEME"),
+            fastf_ascii: text("FASTF_ASCII"),
+            fastf_motion: text("FASTF_MOTION"),
             alacritty: set("ALACRITTY_WINDOW_ID") || set("ALACRITTY_SOCKET"),
             wezterm: set("WEZTERM_PANE") || set("WEZTERM_EXECUTABLE"),
             conemu: set("ConEmuANSI"),
@@ -867,16 +894,34 @@ mod tests {
         assert_eq!(ascii_wanted(&Env::default()), cfg!(windows));
     }
 
+    /// The list a hermetic test clears is the list the reader reads, so a
+    /// variable added to one and not the other fails here, in every terminal,
+    /// rather than in the one terminal that sets it.
+    #[test]
+    fn the_reader_asks_for_exactly_the_variables_it_names() {
+        let asked = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        Env::from_lookup(|name| {
+            asked.borrow_mut().insert(name.to_string());
+            None
+        });
+        let named: std::collections::BTreeSet<String> =
+            Env::VARIABLES.iter().map(|name| name.to_string()).collect();
+        assert_eq!(asked.into_inner(), named);
+    }
+
+    /// Whichever terminal runs the suite: a build in Alacritty, whose shell
+    /// carries `ALACRITTY_WINDOW_ID`, must read the same as one in any other.
     #[test]
     fn detect_reads_the_process_environment() {
         let (mut guard, _dir) = crate::util::test_env::EnvGuard::sandbox();
-        guard.also_remove("NO_COLOR");
+        for name in Env::VARIABLES {
+            guard.also_remove(name);
+        }
         guard.also_set("TERM", "xterm-256color");
-        guard.also_remove("COLORTERM");
-        guard.also_remove("TERM_PROGRAM");
-        guard.also_remove("FASTF_THEME");
-        guard.also_remove("FASTF_ASCII");
         assert_eq!(Theme::detect().kind, ThemeKind::Ansi);
+        guard.also_set("ALACRITTY_WINDOW_ID", "1");
+        assert_eq!(Theme::detect().kind, ThemeKind::DoomOne);
+        guard.also_remove("ALACRITTY_WINDOW_ID");
         assert_eq!(Theme::detect_with(Some("rich")).kind, ThemeKind::Rich);
         guard.also_set("FASTF_THEME", "mono");
         assert_eq!(Theme::detect_with(Some("rich")).kind, ThemeKind::Mono);

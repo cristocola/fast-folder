@@ -61,6 +61,17 @@ green rather than a checklist to work through. Each one runs locally:
   from Linux. CI lints on a real Windows runner as well, where some lint
   thresholds differ.
 - `cargo test` and `cargo test --release`.
+- `cargo test --release` once more **in a terminal that announces
+  everything**, since the AUR `check()` runs in whatever terminal the person
+  installing has open, and no CI runner announces one:
+  ```
+  ALACRITTY_WINDOW_ID=1 ALACRITTY_SOCKET=/run/x.sock WEZTERM_PANE=1 \
+  WEZTERM_EXECUTABLE=/usr/bin/wezterm WT_SESSION=1 ConEmuANSI=ON \
+  COLORTERM=truecolor TERM_PROGRAM=WezTerm TERM=dumb NO_COLOR=1 \
+  FASTF_THEME=mono FASTF_ASCII=1 FASTF_MOTION=off cargo test --release
+  ```
+  A test that reads the terminal clears `theme::Env::VARIABLES` whole, and a
+  spawned fastf is started without them (`tests/CLAUDE.md`).
 - `cargo build --release --locked --target x86_64-unknown-linux-musl`: no PR
   job builds the static musl archive, and it is the one target that compiles
   C (mimalloc). Only the Release workflow would find a break, after the tag.
@@ -77,7 +88,7 @@ Because `gates` is the whole of CI, **any CI failure is a failed release**.
 Every release failure this project has had was a *test* failure — never a
 build, the MSI or the AUR packages — and each one was an environment delta that
 does not reproduce on the maintainer's Arch desktop, which is why `cargo test`
-was green when the tag went up. Seven patterns:
+was green when the tag went up. Eight patterns:
 
 | pattern | platform | nature | how it reads |
 |---|---|---|---|
@@ -88,6 +99,7 @@ was green when the tag went up. Seven patterns:
 | Windows path and `cmd` semantics | Windows | deterministic | `hostile_fs` / `windows_semantics` disagreeing about a name |
 | a rustdoc lint | both | deterministic | `docs build clean` failing on `redundant_explicit_links`, or a `pub` item's docs linking to a `pub(crate)` one |
 | a forked child holding a file the test just let go of | Linux, mostly the AUR `check()` | racy | a script just written fails to run (`ETXTBSY`, a shell read as silent), or a lock just dropped is found held |
+| the terminal the suite runs in announcing itself | Linux, the AUR `check()` | deterministic in that terminal | a palette or alphabet assertion (`Ansi` read as `DoomOne`) failing in one emulator and passing in the next |
 
 Recognising them: a Windows-only failure in a path comparison is almost always
 the first; `traced()` prints the whole trace file beside its count for the
@@ -102,10 +114,15 @@ nothing, which looks exactly like a pass. The seventh lives in the lib's own
 test binary, where hundreds of tests share one process: a child another test
 thread forks holds every descriptor open in it until that child execs. CI
 passes it by luck as often as not; run the binary forty times
-(`target/release/deps/fastf-<hash> --test-threads=16` in a loop) before a tag
-that touches a test which runs a script it wrote or takes a lock twice. The
-fixed instance is `34455bc`: write the script from another process, and test
-what runs under a lock without the lock.
+(`<binary> --test-threads=16` in a loop; `cargo test --release --lib
+--no-run` names the binary, which cargo 1.100 puts under
+`target/release/build/fastf/<hash>/out/`) before a tag that touches a test
+which runs a script it wrote or takes a lock twice. The fixed instance is
+`34455bc`: write the script from another process, and test what runs under a
+lock without the lock. The eighth is what the gate above that runs the suite
+in a terminal that announces everything is for: a test that clears the
+variables its author's terminal sets passes there and on every runner (which
+announces nothing), and fails in every other emulator.
 
 **The step that avoids all of it** is step 2: push the work as a branch, open
 the PR, and let the full matrix run there. `fail-fast: false` on both matrices

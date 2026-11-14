@@ -68,6 +68,10 @@ pub(super) struct Seen {
     pub program: String,
     /// The foreign namespace it lives in, by its index in [`Pass::foreign`].
     pub ns: Option<usize>,
+    /// Its working folder could not be read — another user's process — and
+    /// so neither could what it holds open: only its arguments and its
+    /// mounts are known.
+    pub opaque: bool,
     pub facts: Vec<Fact>,
 }
 
@@ -294,7 +298,8 @@ impl Fact {
 /// A shell whose fact there is its working folder is named as one: its
 /// prompt is the only tie, and whatever it started is judged itself. A
 /// process whose only tie is the folder itself among its arguments was
-/// opened on it — a file manager, a viewer — and holds nothing of it. A
+/// opened on it — a file manager, a viewer — and holds nothing of it, once
+/// what it holds could be read (not [`Seen::opaque`]). A
 /// process that is no shell, `hosts_shell` (a shell among its children),
 /// tied only by its working folder and the folder itself among its
 /// arguments, is that shell's terminal: its children are judged themselves.
@@ -319,7 +324,7 @@ pub(super) fn process_uses(
                 .filter(|fact| fact.folder == folder)
                 .collect();
             let working = facts.iter().find(|fact| fact.kind == Kind::Cwd);
-            let how = if facts.iter().all(|fact| fact.names_the_folder()) {
+            let how = if !seen.opaque && facts.iter().all(|fact| fact.names_the_folder()) {
                 How::OpenedOn
             } else if let Some(working) = working
                 && hosts_shell

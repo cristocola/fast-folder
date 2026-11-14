@@ -13,9 +13,10 @@
 //!   person can stop; every process's mount table, whoever owns it, so a
 //!   container or sandbox that mounts part of the folder is seen; another
 //!   filesystem mounted inside it; a systemd unit file that names it or is a
-//!   link into it. Every process is read at once under one deadline, and one
-//!   that does not answer — stuck behind a dead mount — is named as such,
-//!   never waited for.
+//!   link into it. Every process, and every unit file, is read under one
+//!   deadline, and one that does not answer — stuck behind a dead mount — is
+//!   named as such, never waited for; a process no reader reached is named
+//!   as not looked at.
 //! - **Windows** (`windows.rs`): what holds anything in the tree. Windows
 //!   refuses the rename itself then, so that is physical, and asked when the
 //!   rename refuses, or after a staged move's scan.

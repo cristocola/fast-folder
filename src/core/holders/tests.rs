@@ -29,6 +29,7 @@ fn seen(pid: u32, program: &str, facts: &[(Kind, &str)]) -> Seen {
         started: 100 + u64::from(pid),
         program: program.to_string(),
         ns: None,
+        opaque: false,
         facts: facts
             .iter()
             .map(|(kind, path)| Fact {
@@ -147,6 +148,24 @@ fn the_most_telling_use_names_each_process() {
         Weight::Advisory,
         "a shell running a script there is more than its prompt"
     );
+}
+
+/// Another user's process is seen by its arguments alone: named with the
+/// folder itself, it still advises, since what it holds there could not be
+/// read.
+#[test]
+fn a_process_whose_folders_cannot_be_read_is_not_taken_for_a_viewer() {
+    let mut root = seen(50, "nginx", &[(Kind::Arg, "")]);
+    root.opaque = true;
+    let found = judged(
+        &Pass {
+            seen: vec![root],
+            ..Pass::default()
+        },
+        &[],
+    );
+    assert_eq!(found.uses[0].how, How::Named(PathBuf::new()));
+    assert_eq!(found.uses[0].weight(Verb::Move), Weight::Advisory);
 }
 
 /// A program tied to the folder only by the folder itself among its

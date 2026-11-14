@@ -466,8 +466,8 @@ look leaves it out too.
 
 - a shell whose prompt is in the folder — `bash (pid 1234) has its prompt in
   the old folder; cd to the new one`; what it started is judged on its own;
-- the terminal around such a shell: a program that is not a shell, has a
-  shell among its children, and is tied to the folder only by working in it
+- a terminal: a program that is not a shell, has a shell among its children
+  (wherever that shell is), and is tied to the folder only by working in it
   or by having been started with the folder itself — a terminal window
   opened there (fastf's own `t` opens one), a tmux or screen server started
   there, a file manager's terminal panel, `npm run dev` with its `sh -c
@@ -478,7 +478,9 @@ look leaves it out too.
   or a viewer whose only tie is the folder itself among its arguments, such
   as the window fastf's own *Reveal* opens: `dolphin (pid 5981) was opened on
   the folder; it shows the old one`. Started with the folder and also working
-  in it, holding a file of it or running from it, it counts;
+  in it, holding a file of it or running from it, it counts, and so does
+  another user's program started with the folder, whose files fastf cannot
+  see;
 - a unit that is disabled, stopped and started by nothing;
 - a unit file that could not be read within a second and a half — a link
   onto a mount that stopped answering, say: `coda.service's file did not

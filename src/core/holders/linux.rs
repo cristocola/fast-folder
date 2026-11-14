@@ -8,9 +8,10 @@
 //! pass takes what answered by [`DEADLINE`], and a process still being read
 //! is named as not answering — and not asked again by a later pass until its
 //! read comes back ([`GIVEN_UP`]), so a stuck process costs one parked
-//! worker, not one per pass. A process no worker reached is named as not
-//! looked at, which is no answer either way. fastf itself is recognised by
-//! the text of its executable's link, never by asking the file it names.
+//! worker, not one per pass. A process no worker reached by the deadline is
+//! named as never asked, apart from those that did not answer. fastf itself
+//! is recognised by the text of its executable's link, never by asking the
+//! file it names.
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
@@ -397,6 +398,7 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
             started: stat.started,
             program: name_of(&base, &argv, exe.as_deref()),
             ns: None,
+            opaque: false,
             facts: hits
                 .into_iter()
                 .map(|(folder, path)| Fact {
@@ -501,6 +503,7 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
         started: stat.started,
         program: name,
         ns: foreign.map(|(index, _)| index),
+        opaque: cwd.is_none(),
         facts,
     })
 }

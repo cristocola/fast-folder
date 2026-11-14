@@ -558,9 +558,9 @@ asked about; every file, and a `<unit>.d` that is a link, read under one
 deadline on a thread of its own (`paths::answer_within`), since a unit
 file may be a link onto a mount that stopped answering, and one that does
 not answer is a note (`How::UnitSilent`) — then `systemctl show` once per
-manager, killed at two seconds, no answer counting). **`Use::weight` is the one table** — physical, advisory,
-note — and `Holders::refusal`/`notes` the one wording. Asked as
-`holders::check(&Folder, Verb, &Guard)`:
+manager, killed at two seconds, no answer counting). **`Use::weight` is the
+one table** — physical, advisory, note — and `Holders::refusal`/`notes` the
+one wording. Asked as `holders::check(&Folder, Verb, &Guard)`:
 
 - **under the data lock**: the move in `move_project_unlocked_in_parts`
   before `paused_move` and the same-filesystem rename, as the named step
@@ -572,7 +572,10 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
 - **the folder in both spellings**: `Folder::of` rebuilds the configured one
   from the configured base whose canonical form is the folder's parent, since
   under the lock the project is canonical and a unit or an argument may spell
-  it through a link;
+  it through a link. Every `Folder` is resolved under a base's deadline
+  (`paths::canonical_in_time`, the path as given when it does not answer),
+  so the app's question about a folder on a base that stopped answering
+  still comes back;
 - **never counted**: fastf (by its exe link's text, never a stat through it),
   and `Guard::asking` — whoever asked, every process above them, and the
   processes the asker's own stdio pipes join it to (`judge::pipeline`; a pipe
@@ -584,13 +587,16 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
   wherever that works — `Pass::shell_parents`, the parent of every shell the
   pass read — and tied only by its working folder and the folder itself
   among its arguments: an emulator `t` opened, a tmux server, `npm run`'s
-  npm, while the dev server under its `sh -c` still advises); and a process
+  npm, while the dev server under its `sh -c` still advises); a process
   whose only tie is the folder itself among its arguments (`How::OpenedOn`:
   a file manager or a viewer opened on it, Reveal's own `xdg-open` among
   them, which would otherwise refuse the folder's move for as long as its
-  window lives). An argument naming a path *inside* the folder advises, and
-  so does the folder named beside any other tie (`judge::process_uses`). No
-  program is recognised by name but a shell, from `/etc/shells`;
+  window lives) — but not another user's, whose working folder and files
+  cannot be read (`Seen::opaque`); a unit disabled, stopped and started by
+  nothing; and whatever did not answer. An argument naming a path *inside*
+  the folder advises, and so does the folder named beside any other tie
+  (`judge::process_uses`). No program is recognised by name but a shell,
+  from `/etc/shells`;
 - **a namespace's mount counts only when this machine's table lacks its
   (dev, root)**: a namespace starts as a copy, and an inherited mount is no
   choice of its own; a foreign process's paths are translated through its own

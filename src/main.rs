@@ -664,8 +664,11 @@ enum Commands {
     /// A project's task list
     #[command(
         name = "todo",
-        after_help = "The numbers are the ones `list` prints, counted from one over the\n\
+        after_help = "A task's number is its place in the file, counted from one over the\n\
             tasks alone — a `###` phase label is not a task and takes no number.\n\
+            `list` shows each phase's open tasks with their numbers and folds the\n\
+            done ones into one line, `✓ 2 done`; their numbers do not change, and\n\
+            `list --all` prints every task with its number, in file order.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
             A todo's line carries its owner and its dates, as\n\
@@ -675,6 +678,7 @@ enum Commands {
             is a todo with no owner and no dates, and nothing fills them in.\n\n\
             Examples:\n  \
             fastf todo list ID0047\n  \
+            fastf todo list ID0047 --all\n  \
             fastf todo add ID0047 \"colour grade\"\n  \
             fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
             fastf todo add ID0047 \"cut the first minute @claude\"\n  \
@@ -1025,13 +1029,16 @@ enum NoteAction {
 
 #[derive(Subcommand)]
 enum TodoAction {
-    /// Show the task list, numbered, grouped by phase
+    /// Show the task list by phase: the open tasks, numbered, and how many are done
     List {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// Leave out the tasks already done
-        #[arg(long)]
+        /// Only the open tasks, without the count of done ones
+        #[arg(long, conflicts_with = "all")]
         open: bool,
+        /// Every task, done ones too, in file order
+        #[arg(long)]
+        all: bool,
     },
     /// Add an open task: one line, dated, with an owner or without
     Add {
@@ -1053,7 +1060,7 @@ enum TodoAction {
     Owner {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// The new owner, with or without its `@`
         #[arg(conflicts_with_all = ["none", "mine"])]
@@ -1069,7 +1076,7 @@ enum TodoAction {
     Done {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// Mark it open again instead
         #[arg(long)]
@@ -1079,7 +1086,7 @@ enum TodoAction {
     Edit {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// The new text
         text: String,
@@ -1089,7 +1096,7 @@ enum TodoAction {
     Remove {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
     },
 }
@@ -1722,7 +1729,14 @@ fn run_note(action: NoteAction) -> Result<()> {
 
 fn run_todo(action: TodoAction) -> Result<()> {
     match action {
-        TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
+        TodoAction::List { query, open, all } => cli::todo::list(cli::todo::ListArgs {
+            query,
+            show: match (open, all) {
+                (true, _) => cli::todo::ListShow::Open,
+                (false, true) => cli::todo::ListShow::All,
+                (false, false) => cli::todo::ListShow::Folded,
+            },
+        }),
         TodoAction::Add {
             query,
             text,

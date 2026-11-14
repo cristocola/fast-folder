@@ -380,19 +380,21 @@ folder, the same fixed-width stamp as `created`, so the two compare as text —
 or `null` where neither could be read; see [the project
 model](projects.md#description-and-touched) for what it does and does not see.
 `fastf show` adds what only the file knows — `last_note`, the timestamp of the
-newest dated note or `null`; `variables`; `notes`; and `todos` with the `phase`
-each one sits under, its `owner` and its `added` and `done_at` stamps, each
-`null` where the line does not say:
+newest dated note or `null`; `variables`; `notes`; and `todos` in file order,
+each with its `number` (the one `fastf todo` takes: its place in the file,
+from one), the `phase` it sits under, its `owner` and its `added` and
+`done_at` stamps, each `null` where the line does not say:
 
 ```json
 {
   "id": "ID0047",
   "name": "2026-04-20_Lullaby_ID0047",
   "todos": [
-    { "done": true,  "text": "read the order",       "phase": null,
-      "owner": null, "added": null, "done_at": null },
-    { "done": false, "text": "cut the first minute", "phase": "Main Edit",
-      "owner": "claude", "added": "2026-05-02T18:41:00Z", "done_at": null }
+    { "number": 1, "done": true,  "text": "read the order",
+      "phase": null, "owner": null, "added": null, "done_at": null },
+    { "number": 2, "done": false, "text": "cut the first minute",
+      "phase": "Main Edit", "owner": "claude",
+      "added": "2026-05-02T18:41:00Z", "done_at": null }
   ]
 }
 ```
@@ -569,7 +571,10 @@ comes first, so a library that never named an owner is listed whole. Within a
 group, the project nothing has written in for the longest comes first;
 `--order recent`, `name` or `id` change that. The column after the todo is how
 long the project has been quiet, counted from `touched` (the newer of its
-`PROJECT_INFO.md` and its folder). `active: claude` means a program with that
+`PROJECT_INFO.md` and its folder). The columns are measured in the columns
+their text takes, and a row fits the terminal, or a hundred columns when the
+list is piped: a todo too long for its column is printed whole, with the age
+two spaces after it. `active: claude` means a program with that
 name has its working folder inside the project right now. On Linux this is
 read from the process table; on other systems the column is absent. The desk
 has no due dates: it shows how long a todo has waited, and your calendar holds
@@ -939,8 +944,9 @@ Ctrl-C. See [config.md](config.md) for where both files live.
 ## Todos
 
 ```bash
-fastf todo list ID0047                            # the list, numbered
-fastf todo list ID0047 --open                     # only what is left
+fastf todo list ID0047                            # what is open, numbered; done ones counted
+fastf todo list ID0047 --open                     # only what is open, no counts
+fastf todo list ID0047 --all                      # every task, in file order
 fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
 fastf todo add ID0047 "cut @claude"               # owner: @claude
@@ -978,7 +984,10 @@ for the hat (`fastf hat`). A todo without any of these has no owner. `owner`
 prints a todo's owner, changes it, or removes it with `--none`. An owner is one word, by
 the rule a tag keeps. `list` shows the owner and the day (added, or done once
 it is) in two columns after the text, and leaves both out of a list that has
-neither.
+neither. The columns are measured over the tasks the list shows and never
+make a line wider than the terminal, or a hundred columns when the list is
+piped; a task too long for its column is printed whole, with its owner and
+day two spaces after it.
 
 **The owner is read from the end of the line only.** fastf takes the run of
 `@name`, `added:` and `done:` tokens at the end of the line as the todo's
@@ -1014,10 +1023,34 @@ opens the label when the list has none by that name: above an `### Other` if
 there is one, since that is where a list keeps what belongs to no phase, and at
 the end otherwise.
 
-**The numbers are the ones `list` prints**, counted from one over the tasks
-alone, so a label takes no number and adding a phase renumbers nothing. A
-number of 0, or one past the end of the list, is refused with the way to see
-the list. `done`, `edit` and `remove` read the list first and refuse if that
+**`list` shows what is open first.** Each phase is its label, its open
+tasks, and one `✓ n done` line for the tasks ticked off, in the order the
+file has them; an empty label is shown too, since it is where `--phase`
+puts a task. The file itself never changes order.
+
+```
+  → ID0047 2026-04-20_Lullaby_ID0047
+
+     ✓ 1 done
+  Main Edit
+  2. [ ] cut the first minute  @claude  2026-05-02
+  3. [ ] colour grade                   2026-05-02
+  Other
+
+  1/3 done
+```
+
+`--open` leaves out the `✓` lines and any phase with nothing open; `--all`
+prints every task, done ones dimmed, in file order. The two cannot be
+combined.
+
+**A task's number is its place in the file**, counted from one over the
+tasks alone, so a label takes no number, adding a phase renumbers nothing,
+and folding the done ones renumbers nothing either: `list` prints the open
+ones' numbers and `list --all` every number. A number of 0, or one past the
+end of the list, is refused with the way to see every number.
+`fastf show --json` carries each todo's `number` too. `done`, `edit` and
+`remove` read the list first and refuse if that
 task's text changed meanwhile — edited by hand, or by the app — rather than
 touch the wrong line; ticking what is already ticked, or rewording a task to
 the text it already has, says so and writes nothing.

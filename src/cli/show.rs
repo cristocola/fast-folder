@@ -54,7 +54,11 @@ pub fn run(args: ShowArgs) -> Result<()> {
                     text: n.text.clone(),
                 })
                 .collect(),
-            todos: todos.iter().map(TodoJson::of).collect(),
+            todos: todos
+                .iter()
+                .enumerate()
+                .map(|(ordinal, todo)| TodoJson::of(ordinal, todo))
+                .collect(),
         });
     }
 

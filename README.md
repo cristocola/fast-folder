@@ -142,7 +142,7 @@ fastf note add ID0047 "sent the rough cut"   # a dated note; stdin and $EDITOR t
 fastf notes ID0047 --since 2026-07           # every note since July, every line of each
 fastf journal --todos                        # every note and every ticked todo, across every project
 fastf todo add ID0047 "colour pass" --phase Edit --owner claude
-fastf todo list ID0047                       # numbered, grouped by phase, with owners and days
+fastf todo list ID0047                       # what is open, by phase, done ones counted; --all for every one
 fastf todo done ID0047 3                     # tick it, with the date; --undo unticks it
 fastf todo owner ID0047 3 acme               # set its owner to @acme; --none removes the owner
 fastf todo edit ID0047 3 "colour and grade"  # reword it; owner and dates kept

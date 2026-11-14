@@ -111,7 +111,7 @@ on its own line — change it and Enter, or empty it and Enter to remove it; on 
 over its options and nothing else; on a **note** the note opens as a text area
 over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved to
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
-every note, as `J` shows them. **F2 edits the text** of the row under the
+every note, as `J` shows them; on **`✓ n done`** the todos it folds. **F2 edits the text** of the row under the
 cursor in place — on a todo that is how you reword it, since Enter ticks it;
 emptied and Enter, the todo is removed — and on the name, the description, a
 tag, a variable or a note it opens what Enter opens. **`O` on a todo sets
@@ -124,11 +124,24 @@ Alt-Enter breaks a line), **add a todo** and **add a phase**; and **`+` adds one
 the cursor is among**, from anywhere in that section. Esc leaves the row as it
 was, and so does moving away.
 
+**Open work comes first.** Under each phase the open todos are listed, and the
+done ones fold into one dim row, `✓ 2 done` (`[x] 2 done` where the terminal
+draws no tick). Enter on it shows the project's done todos under every fold,
+dimmed, in the order the file has them, and Enter again hides them; the cursor
+stays on the row, and the choice holds for that project until fastf quits. A
+todo you tick keeps its row, ticked, until you move to another project, so the
+cursor never jumps and Enter again is the undo; one unticked under a shown
+fold stays there the same way. A todo ticked in another window goes into its
+fold, and the cursor with it. `+` on a fold adds to its phase, on a line just
+above the fold, where the new open todo will be. `<` and `>` from the todos
+land on the next project's first open todo, past a finished phase. The file
+keeps its own order throughout: only what the pane draws first changes.
+
 **Adding todos is typing a list.** `+` on the list or in the pane, Enter on
 **add a todo**, or **Add a todo** in the palette or the action menu opens an
-empty line in the todo list itself, where the todo will land — under the phase
-the cursor is in, beside the todos that sit under no phase when the cursor is on
-one of them, or at the end. Enter writes it and opens the next line under
+empty line in the todo list itself, where the todo will land — after the open
+todos of the phase the cursor is in, beside the todos that sit under no phase
+when the cursor is on one of them, or at the end. Enter writes it and opens the next line under
 it, so a list goes in one after another — the line keeps taking keys while a
 todo is being written, so nothing typed is lost to the disk; Enter on an empty
 line, or Esc, is done. Paste a list onto the line — lines from a brief, a checklist copied with

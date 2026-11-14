@@ -533,6 +533,39 @@ fn a_read_that_does_not_come_back_is_given_up_on_and_not_asked_again() {
     assert_eq!(asked.load(Ordering::Relaxed), 1, "and not read again");
 }
 
+/// A folder on a base that stopped answering is resolved under the deadline
+/// a base is given, keeping the path as given, so the app's question about
+/// what uses it always comes back.
+#[cfg(debug_assertions)]
+#[test]
+fn a_folder_on_a_base_that_does_not_answer_is_resolved_in_time() {
+    use crate::util::paths;
+    let dir = tempfile::tempdir().unwrap();
+    let stalled = dir.path().join("stalled");
+    let project = stalled.join("X");
+    std::fs::create_dir_all(&project).unwrap();
+    let marker = stalled.join(paths::STALL_MARKER);
+    std::fs::write(&marker, "").unwrap();
+    let config = crate::core::config::Config {
+        base_dir: stalled.display().to_string(),
+        ..crate::core::config::Config::default()
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asked = project.clone();
+    std::thread::spawn(move || {
+        crate::util::faults::with_thread_fault("paths:stall-base", || {
+            let configured = Folder::configured(&config, &asked, "ID0001");
+            let at = Folder::at(&asked, "ID0001");
+            let _ = tx.send((configured, at));
+        });
+    });
+    let answered = rx.recv_timeout(paths::PROBE_TIMEOUT * 2 + Duration::from_secs(2));
+    std::fs::remove_file(&marker).unwrap();
+    let (configured, at) = answered.expect("the folder is still being resolved");
+    assert_eq!(configured.path, project);
+    assert_eq!(at.path, project);
+}
+
 #[test]
 fn a_unit_line_names_the_folder_only_as_a_path_of_its_own() {
     let needles = units::needles(&[PathBuf::from(PROJECT)], Some(Path::new("/home/u")));

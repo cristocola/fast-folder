@@ -162,7 +162,7 @@ impl Folder {
 
     /// [`Self::of`], for the folder at `path`, called `label`.
     pub fn configured(cfg: &Config, path: &Path, label: &str) -> Self {
-        let path = crate::util::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+        let path = resolved(path);
         let spelled = match (path.parent(), path.file_name()) {
             (Some(parent), Some(name)) => {
                 let configured: Vec<PathBuf> = cfg
@@ -197,7 +197,7 @@ impl Folder {
     /// A folder known by its path alone.
     pub fn at(path: &Path, label: &str) -> Self {
         Self {
-            path: crate::util::paths::canonical(path).unwrap_or_else(|_| path.to_path_buf()),
+            path: resolved(path),
             spelled: None,
             label: label.to_string(),
         }
@@ -209,6 +209,14 @@ impl Folder {
             .chain(self.spelled.clone())
             .collect()
     }
+}
+
+/// `path`, canonical, under the deadline a base is given; as given when it
+/// does not answer. Canonicalizing a folder on a mount that stopped
+/// answering blocks for the kernel's own timeout, and the question would
+/// never come back.
+fn resolved(path: &Path) -> PathBuf {
+    crate::util::paths::canonical_in_time(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Everything using one folder.

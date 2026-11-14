@@ -60,6 +60,10 @@ pub const ANYWAY: &str = "anyway";
 pub const OTHERS: &str = "others";
 pub const CANCEL: &str = "cancel";
 
+/// What the status line says while a rename's question is out; the answer
+/// takes it away, unless something newer has replaced it.
+const CHECKING: &str = "checking what uses it…";
+
 /// Lines of each busy project's detail, before `and k more`: the picker's
 /// detail is a few wrapped rows.
 const DETAIL_LINES: usize = 4;
@@ -83,7 +87,7 @@ impl App {
         match after {
             After::Move(_) => self.background.starting = Some("moving…"),
             After::Delete => self.background.starting = Some("deleting…"),
-            After::Rename(_) => self.info("checking what uses it…"),
+            After::Rename(_) => self.info(CHECKING),
         }
         self.background.hidden = false;
         let folders = projects
@@ -113,6 +117,8 @@ impl App {
         if !matches!(checking.after, After::Rename(_)) {
             self.background.starting = None;
             self.background.hidden = false;
+        } else if self.status.text == CHECKING {
+            self.status = super::Status::default();
         }
         let verb = checking.after.verb();
         if std::mem::take(&mut self.background.cancel_when_started) {

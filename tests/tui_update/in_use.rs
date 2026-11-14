@@ -220,7 +220,12 @@ fn a_rename_asks_and_has_no_others() {
             .any(|effect| matches!(effect, Effect::Run(..))),
         "{effects:?}"
     );
+    assert_eq!(app.status.text, "checking what uses it…");
     answer_in_use(&mut app, &effects, &[(&selected.path, vec![sitter(3)])]);
+    assert_eq!(
+        app.status.text, "",
+        "the answer is on screen, so the status line no longer says it is coming"
+    );
     assert_eq!(choices(&app), ["Rename anyway", "Cancel"]);
     let effects = choose(&mut app, "Rename anyway");
     assert!(matches!(

@@ -224,7 +224,7 @@ fn parent_of_fastf(sb: &Sandbox, folder: &Path, program: &str, args: &[&str]) ->
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for name in common::NOT_INHERITED {
+    for name in common::not_inherited() {
         command.env_remove(name);
     }
     let child = command.spawn().unwrap();

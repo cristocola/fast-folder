@@ -60,7 +60,7 @@ use std::process::{Command, Output};
 
 // The one list of what a spawned fastf must never inherit from whoever ran the
 // suite.
-use common::NOT_INHERITED;
+use common::not_inherited;
 
 const FASTF: &str = env!("CARGO_BIN_EXE_fastf");
 
@@ -165,7 +165,7 @@ impl Live {
         cmd.env("FASTF_INSTALL_DIR", &self.install)
             .env("USERPROFILE", self._tmp.path())
             .env("HOME", self._tmp.path());
-        for name in NOT_INHERITED {
+        for name in not_inherited() {
             cmd.env_remove(name);
         }
         cmd

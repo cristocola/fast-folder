@@ -166,6 +166,22 @@ pub struct Verdict {
     pub path: PathBuf,
     pub kind: VerdictKind,
     pub reason: String,
+    /// The operation whose record the pass was finishing when it kept this
+    /// verdict, when it was one's. An in-place retire's old copy keeps the
+    /// project's own folder name, so a later move of a project in that
+    /// folder of that base has the same old copy; matched by the path alone,
+    /// it would inherit this verdict and wait for a person. `None` in a file
+    /// a fastf before 3.20 wrote, which is matched by its folder alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+}
+
+impl Verdict {
+    /// Whether this verdict can be about `operation`'s move: its pass left
+    /// it, or it does not say whose it is.
+    fn is_about(&self, operation: &str) -> bool {
+        self.operation.as_deref().is_none_or(|own| own == operation)
+    }
 }
 
 /// The decision a verdict waits for.
@@ -222,7 +238,11 @@ pub fn read_verdicts() -> Vec<Verdict> {
         .unwrap_or_default()
 }
 
-/// Keep `verdicts` as what the last complete reconcile could not settle.
+/// Keep `verdicts` as what the last complete reconcile could not settle,
+/// less any whose folder is gone. **Only an answer of "nothing there"
+/// drops one**: a folder on a mount that does not answer — asked under
+/// [`crate::util::paths::PROBE_TIMEOUT`], every one at once — is not a
+/// folder that is gone, and its verdict stays.
 pub fn write_verdicts(verdicts: &[Verdict]) {
     #[cfg(test)]
     if !crate::util::test_env::holds_guard() {
@@ -231,9 +251,22 @@ pub fn write_verdicts(verdicts: &[Verdict]) {
     let Some(path) = verdict_path() else {
         return;
     };
+    let folders: Vec<PathBuf> = verdicts
+        .iter()
+        .map(|verdict| verdict.path.clone())
+        .collect();
+    let gone =
+        crate::util::paths::answer_within(&folders, crate::util::paths::PROBE_TIMEOUT, |folder| {
+            crate::util::paths::presence(folder).is_absent()
+        });
     let file = VerdictFile {
         version: 1,
-        verdicts: verdicts.to_vec(),
+        verdicts: verdicts
+            .iter()
+            .zip(gone)
+            .filter(|(_, gone)| *gone != Some(true))
+            .map(|(verdict, _)| verdict.clone())
+            .collect(),
     };
     if let Ok(text) = serde_json::to_string_pretty(&file) {
         let _ = crate::util::atomic::write(&path, text.as_bytes());
@@ -273,7 +306,13 @@ pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> At
         }
     }
     let verdicts = read_verdicts();
-    let verdict_for = |path: &Path| verdicts.iter().find(|verdict| verdict.path == path);
+    // A move's item asks for the verdicts its own operation left; anything
+    // else, for whatever is about its folder.
+    let verdict_for = |path: &Path, operation: Option<&str>| {
+        verdicts.iter().find(|verdict| {
+            verdict.path == path && operation.is_none_or(|operation| verdict.is_about(operation))
+        })
+    };
     let incomplete = provisioning::list_incomplete_in(&answering);
     items.extend(settling(&incomplete, &answering));
     for incomplete in incomplete {
@@ -293,7 +332,7 @@ pub fn attention_probed(probed: Vec<(PathBuf, crate::util::paths::Probe)>) -> At
                             .flatten(),
                     )
                     .map(|metadata| format!("{} {}", metadata.id, metadata.folder));
-                match verdict_for(&path) {
+                match verdict_for(&path, None) {
                     Some(verdict) => needs_you("an old copy", path, project, verdict),
                     None if transactions::retired_operation(&name).is_some() => Item {
                         project,
@@ -442,7 +481,7 @@ fn needs_you(what: &str, path: PathBuf, project: Option<String>, verdict: &Verdi
 fn move_item<'v>(
     incomplete: &provisioning::Incomplete,
     path: PathBuf,
-    verdict_for: &impl Fn(&Path) -> Option<&'v Verdict>,
+    verdict_for: &impl Fn(&Path, Option<&str>) -> Option<&'v Verdict>,
 ) -> Item {
     let record = incomplete.record.as_ref().map(PathBuf::from);
     let journal = record
@@ -486,7 +525,7 @@ fn move_item<'v>(
         }
         transactions::RetireStrategy::InPlace => journal.source_base.join(&journal.source_folder),
     };
-    if let Some(verdict) = verdict_for(&old_copy) {
+    if let Some(verdict) = verdict_for(&old_copy, Some(&journal.operation_id)) {
         return needs_you("a move", old_copy, project, verdict);
     }
     Item {
@@ -792,6 +831,148 @@ mod tests {
             Path::new(r"C:\projects\.fastf-moved-1-2-4"),
             None
         ));
+    }
+
+    /// An in-place move of a project in `<base>/project`, published and
+    /// waiting for its old copy's removal, whose old copy is that folder.
+    fn an_in_place_move_waiting_for_its_old_copy(
+        source_base: &Path,
+        target_base: &Path,
+    ) -> transactions::MoveTransaction {
+        std::fs::create_dir_all(source_base.join("project")).unwrap();
+        let mut transaction = transactions::MoveTransaction::begin(
+            source_base,
+            Path::new("project"),
+            target_base,
+            Path::new("project"),
+            "ID0001",
+            transactions::Operation::Move,
+        )
+        .unwrap();
+        // As a move from a cloud mount writes it.
+        let journal = transaction.operation_dir.join(transactions::JOURNAL_FILE);
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&journal).unwrap()).unwrap();
+        raw["retire"] = serde_json::json!("in-place");
+        std::fs::write(&journal, serde_json::to_vec(&raw).unwrap()).unwrap();
+        transaction
+            .set_phase(transactions::MovePhase::CleanupPending)
+            .unwrap();
+        transaction
+    }
+
+    /// `attention.json` holding one conflict about `path`, left by the pass
+    /// of `operation` — or by a fastf that did not say which, with `None`.
+    fn plant_conflict(install: &Path, path: &Path, operation: Option<&str>) {
+        let mut verdict = serde_json::json!({
+            "path": path,
+            "kind": "conflict",
+            "reason": "the merge kept entries that differ from the moved copy",
+        });
+        if let Some(operation) = operation {
+            verdict["operation"] = serde_json::json!(operation);
+        }
+        let file = serde_json::json!({ "version": 1, "verdicts": [verdict] });
+        std::fs::write(
+            install.join(ATTENTION_FILE),
+            serde_json::to_vec(&file).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn the_move(attention: &Attention) -> &Item {
+        attention
+            .items
+            .iter()
+            .find(|item| item.what == "a move")
+            .unwrap_or_else(|| panic!("no move listed: {attention:?}"))
+    }
+
+    /// **A verdict is about the move whose pass left it.** An in-place
+    /// retire's old copy keeps the project's own folder name, so a later move
+    /// of a project in the same folder of the same base has the same old
+    /// copy: matched by the path alone, it inherits the earlier move's
+    /// conflict and waits for a person over a move fastf would finish.
+    #[test]
+    fn a_verdict_another_move_left_at_the_same_folder_is_not_this_move_s() {
+        let (_env, install) = crate::util::test_env::EnvGuard::sandbox();
+        let tmp = tempfile::tempdir().unwrap();
+        let source_base = crate::util::paths::canonical(tmp.path())
+            .unwrap()
+            .join("source");
+        let target_base = source_base.with_file_name("target");
+        std::fs::create_dir(&source_base).unwrap();
+        std::fs::create_dir(&target_base).unwrap();
+        let transaction = an_in_place_move_waiting_for_its_old_copy(&source_base, &target_base);
+        let old_copy = source_base.join("project");
+        let bases = || {
+            vec![
+                (source_base.clone(), crate::util::paths::Probe::Mounted),
+                (target_base.clone(), crate::util::paths::Probe::Mounted),
+            ]
+        };
+
+        plant_conflict(install.path(), &old_copy, Some("20260101T000000Z-1-1"));
+        let attention = attention_probed(bases());
+        assert_eq!(
+            the_move(&attention).state,
+            State::Auto,
+            "another move's conflict: {attention:?}"
+        );
+
+        plant_conflict(
+            install.path(),
+            &old_copy,
+            Some(&transaction.journal.operation_id),
+        );
+        let attention = attention_probed(bases());
+        let item = the_move(&attention);
+        assert_eq!(
+            item.state,
+            State::NeedsYou,
+            "this move's own: {attention:?}"
+        );
+        assert_eq!(item.actions, [Action::KeepMoved, Action::TakeOld]);
+
+        // A verdict an older fastf wrote names no operation, and is matched
+        // by its folder as it always was.
+        plant_conflict(install.path(), &old_copy, None);
+        let attention = attention_probed(bases());
+        assert_eq!(the_move(&attention).state, State::NeedsYou, "{attention:?}");
+    }
+
+    /// **A verdict about a folder that is gone goes when the file is
+    /// written**, and only then: one a folder fastf could not look at
+    /// stays, because a mount that does not answer is not a folder that is
+    /// gone.
+    #[cfg(unix)]
+    #[test]
+    fn a_verdict_whose_folder_is_gone_is_dropped_and_one_unanswered_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: `geteuid` reads the process's own id and cannot fail.
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root looks into a folder whatever its mode
+        }
+        let (_env, _install) = crate::util::test_env::EnvGuard::sandbox();
+        let tmp = tempfile::tempdir().unwrap();
+        let present = tmp.path().join(".fastf-moved-1-1-1");
+        let gone = tmp.path().join(".fastf-moved-1-1-2");
+        let closed = tmp.path().join("closed");
+        let unanswered = closed.join(".fastf-moved-1-1-3");
+        std::fs::create_dir_all(&present).unwrap();
+        std::fs::create_dir_all(&unanswered).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let verdict = |path: &Path| Verdict {
+            path: path.to_path_buf(),
+            kind: VerdictKind::OnlyCopy,
+            reason: "may be the only copy".to_string(),
+            operation: None,
+        };
+
+        write_verdicts(&[verdict(&present), verdict(&gone), verdict(&unanswered)]);
+        let kept: Vec<PathBuf> = read_verdicts().into_iter().map(|v| v.path).collect();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(kept, [present, unanswered]);
     }
 
     #[test]

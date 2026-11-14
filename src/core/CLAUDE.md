@@ -816,7 +816,13 @@ what a reconcile could not settle, kept as **verdicts** by the folder they are
 about (`ReconcileReport.verdicts` → the data dir's `attention.json`, written
 by every complete pass): a merge's conflicts (`KeepMoved`, `TakeOld`), an old
 copy that may be the only one or whose project is gone (`PutBack`,
-`Discard`), plus moves another machine began and unreadable records.
+`Discard`), plus moves another machine began and unreadable records. **A
+verdict kept while finishing a record names its operation**
+(`ReconcileReport::kept_by`), and a move's item takes only its own or one
+that names none (a file an older fastf wrote): an in-place old copy keeps
+the project's folder name, so a later move of a project in that folder has
+the same old copy. A verdict whose folder `presence` calls `Absent` is
+dropped as the file is written; `Unknown` keeps it.
 `attention::resolve` carries a choice out under the data lock
 (`operations::resolve_attention`), re-reading what is on disk first: `TakeOld`
 writes each file new at its place (never renamed, as the merge), `PutBack`

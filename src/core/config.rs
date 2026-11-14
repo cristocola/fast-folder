@@ -460,6 +460,57 @@ impl Config {
     }
 }
 
+/// The editor setting as a program and its arguments, the one way both the
+/// note editor and post-create's read it.
+///
+/// `code --wait` is the program `code` and the argument `--wait`. A value that
+/// is an absolute path naming a file is one program whatever spaces it holds,
+/// and quotes group words as a shell's do (`"/opt/My Editor/editor" --wait`),
+/// so an editor installed under a folder with a space in its name can be named
+/// at all: split at every space, its path was two words that name nothing.
+/// A quote opens only at the start of a word, and a value that leaves one open
+/// is split at its spaces as it always was, so an apostrophe inside a name
+/// (`D:\Tools\O'Brien\…`) stays a letter. Nothing escapes, so a Windows path
+/// keeps its backslashes.
+pub fn editor_words(editor: &str) -> Vec<String> {
+    let editor = editor.trim();
+    let path = std::path::Path::new(editor);
+    if path.is_absolute() && path.is_file() {
+        return vec![editor.to_string()];
+    }
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote = None;
+    for c in editor.chars() {
+        match quote {
+            Some(open) if c == open => quote = None,
+            Some(_) => word.push(c),
+            None if !started && (c == '"' || c == '\'') => {
+                quote = Some(c);
+                started = true;
+            }
+            None if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            None => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return editor.split_whitespace().map(str::to_string).collect();
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
 /// A command typed with quotes around the whole of it — `"claude --flag"` —
 /// as what is inside them, or `None` when it is not that.
 ///
@@ -634,6 +685,48 @@ mod tests {
             Some("claude --dangerously-skip-permissions")
         );
         assert_eq!(config.resolve_editor(), "code --wait");
+    }
+
+    /// `code --wait` keeps its argument, and an editor under a folder with a
+    /// space in its name is one program, quoted or named whole.
+    #[test]
+    fn an_editor_is_a_program_and_its_arguments() {
+        let words = |editor: &str| super::editor_words(editor);
+        assert_eq!(words("code --wait"), ["code", "--wait"]);
+        assert_eq!(words("  nvim  "), ["nvim"]);
+        assert!(words("   ").is_empty());
+        assert_eq!(
+            words(r#""/opt/My Editor/editor" --wait"#),
+            ["/opt/My Editor/editor", "--wait"]
+        );
+        assert_eq!(words("'/opt/My Editor/editor'"), ["/opt/My Editor/editor"]);
+        assert_eq!(words(r#"code "" -n"#), ["code", "", "-n"]);
+        assert_eq!(
+            words(r#"'C:\Program Files\Ed\ed.exe'"#),
+            [r"C:\Program Files\Ed\ed.exe"]
+        );
+        // A path that names nothing is split as it always was, and so is a
+        // value whose apostrophe is a letter or whose quote never closes.
+        assert_eq!(words("/nowhere/My Editor"), ["/nowhere/My", "Editor"]);
+        assert_eq!(
+            words("/home/user/bin/it's-ed -f"),
+            ["/home/user/bin/it's-ed", "-f"]
+        );
+        assert_eq!(
+            words(r"D:\Tools\O'Brien\hx.exe --wait"),
+            [r"D:\Tools\O'Brien\hx.exe", "--wait"]
+        );
+        assert_eq!(words("'open --wait"), ["'open", "--wait"]);
+        assert_eq!(words(r#"vim -c 'set tw=72'"#), ["vim", "-c", "set tw=72"]);
+
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("My Editor");
+        std::fs::create_dir_all(&folder).unwrap();
+        let editor = folder.join("editor");
+        std::fs::write(&editor, "").unwrap();
+        let whole = editor.display().to_string();
+        assert_eq!(words(&whole), std::slice::from_ref(&whole));
+        assert_eq!(words(&format!("  {whole} ")), [whole]);
     }
 
     /// `on_name_collision` writes the strings a `config.toml` holds

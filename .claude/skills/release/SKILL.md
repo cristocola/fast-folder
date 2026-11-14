@@ -61,6 +61,9 @@ green rather than a checklist to work through. Each one runs locally:
   from Linux. CI lints on a real Windows runner as well, where some lint
   thresholds differ.
 - `cargo test` and `cargo test --release`.
+- `cargo deny --locked check licenses bans sources`, by `deny.toml`
+  (cargo-deny 0.20; duplicate versions are warnings). Advisories are the
+  `audit` job's, `rustsec/audit-check`.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`, after
   `rm -rf target/doc`: `cargo doc` is incremental and reports a clean run
   without rebuilding, while the runner starts from nothing.

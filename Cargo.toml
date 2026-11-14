@@ -22,6 +22,7 @@ exclude = [
     "packaging/",
     "docs/img/",
     "tests/snapshots/",
+    "deny.toml",
 ]
 
 [[bin]]

@@ -55,7 +55,10 @@ item used only from a failpoint or tracer test is dead. `Cargo.toml`'s
 `multiple_unsafe_ops_per_block`); a handle that must be closed on every path
 gets a small type whose `Drop` closes it. The lints stay at "warn" for `-D
 warnings` to raise, never `[lints.rust] warnings = "deny"`, which would fail a
-source build on the next rustc. The full gate list is in the `release` skill
+source build on the next rustc. `cargo deny --locked check licenses bans
+sources` holds every dependency to `deny.toml`'s licenses and to crates.io;
+Dependabot's weekly cargo PR moves `Cargo.lock` alone, within what the manifest
+allows. The full gate list is in the `release` skill
 (`.claude/skills/release/SKILL.md`).
 
 `.cargo/config.toml` sets `target-feature=+crt-static` for

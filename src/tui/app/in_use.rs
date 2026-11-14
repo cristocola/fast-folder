@@ -161,15 +161,18 @@ impl App {
                 })
             })
             .collect();
-        detail.push(
-            match (verb, physical) {
-                (_, true) => "Nothing goes past that; stop it first.",
-                (Verb::Move, _) => "Moving anyway leaves them with the old folder.",
-                (Verb::Rename, _) => "Renaming anyway leaves them with the old name.",
-                (Verb::Delete, _) => "Deleting anyway takes the folder from under them.",
-            }
-            .to_string(),
-        );
+        let uses: usize = busy
+            .iter()
+            .filter_map(|project| holders(&project.path))
+            .map(|found| found.refusing(verb, false).len())
+            .sum();
+        let them = crate::util::plural::of(uses, "it", "them");
+        detail.push(match (verb, physical) {
+            (_, true) => format!("Nothing goes past {them}."),
+            (Verb::Move, _) => format!("Moving anyway leaves {them} with the old folder."),
+            (Verb::Rename, _) => format!("Renaming anyway leaves {them} with the old name."),
+            (Verb::Delete, _) => format!("Deleting anyway takes the folder from under {them}."),
+        });
         let detail = detail.join(". ");
         let word = match verb {
             Verb::Move => "Move",

@@ -276,6 +276,12 @@ pub enum How {
     /// by nothing else: a file manager or a viewer opened on it, whose
     /// window goes on showing the old path. It holds nothing of the folder.
     OpenedOn,
+    /// A terminal: a program that is no shell, hosting one (a shell among
+    /// its children, working wherever it works), tied only by its working
+    /// folder, here at `.0`, and the folder itself among its arguments — an
+    /// emulator, a multiplexer, `npm run`. Its children are judged
+    /// themselves.
+    Terminal(PathBuf),
     /// A folder from inside it is mounted at `at` — a container's or a
     /// sandbox's mount, or a bind on this machine.
     Mounts {
@@ -329,15 +335,15 @@ impl Use {
     /// **The one table.** Windows' holds are physical, and so is a
     /// filesystem mounted inside a folder being deleted — the removal would
     /// keep it, and the hidden folder with it, for good. A shell whose only
-    /// tie is its prompt, a program opened on the folder and holding nothing
-    /// of it, a unit nothing will start, and a process that did not answer
-    /// are notes. Everything else advises — a process never asked included,
-    /// since nothing was learned of it.
+    /// tie is its prompt, the terminal hosting a shell, a program opened on
+    /// the folder and holding nothing of it, a unit nothing will start, and
+    /// a process that did not answer are notes. Everything else advises — a
+    /// process never asked included, since nothing was learned of it.
     pub fn weight(&self, verb: Verb) -> Weight {
         match &self.how {
             How::Held(_) | How::BusyFolder(_) => Weight::Physical,
             How::MountedInside(_) if verb == Verb::Delete => Weight::Physical,
-            How::WorkingIn { shell: true, .. } | How::OpenedOn => Weight::Note,
+            How::WorkingIn { shell: true, .. } | How::Terminal(_) | How::OpenedOn => Weight::Note,
             How::Unit { dormant: true, .. } => Weight::Note,
             How::Silent(_) => Weight::Note,
             _ => Weight::Advisory,
@@ -368,6 +374,7 @@ impl Use {
             How::Loaded(path) => format!("{who} has {} loaded", at(path)),
             How::Named(path) => format!("{who} was started with {}", at(path)),
             How::OpenedOn => format!("{who} was opened on {}", at(Path::new(""))),
+            How::Terminal(path) => format!("{who} has a terminal in {}", at(path)),
             How::Mounts { folder, at: point } if self.by == By::Nobody => format!(
                 "{} is mounted at {} too",
                 at(folder),
@@ -418,6 +425,7 @@ impl Use {
                 _ => format!("{who} has its prompt in {old}; cd to the new one"),
             },
             How::WorkingIn { .. } => format!("{who} was working in {old}; {again}"),
+            How::Terminal(_) => format!("{who} has a terminal in {old}"),
             How::Open { .. } | How::Runs(_) | How::Loaded(_) | How::Named(_) => {
                 format!("{who} was using {old} ({}); {again}", self.what())
             }
@@ -754,9 +762,9 @@ pub fn in_use_all(folders: &[Folder], asking: &[Asking]) -> Vec<Holders> {
     {
         crate::util::trace::hit("what uses a folder");
         let spellings: Vec<Vec<PathBuf>> = folders.iter().map(Folder::spellings).collect();
-        let pass = linux::read(&spellings, asking, linux::Want::Everything);
-        let units = units::find(&spellings);
         let shells = linux::shells();
+        let pass = linux::read(&spellings, asking, linux::Want::Everything, &shells);
+        let units = units::find(&spellings);
         judge::judge(&spellings, &pass, &shells, &units)
             .into_iter()
             .zip(folders)
@@ -906,7 +914,12 @@ fn working(roots: &[PathBuf]) -> Vec<(usize, u32, String)> {
             .iter()
             .map(|root| vec![crate::util::paths::canonical(root).unwrap_or_else(|_| root.clone())])
             .collect();
-        let pass = linux::read(&spellings, &[], linux::Want::WorkingFolders);
+        let pass = linux::read(
+            &spellings,
+            &[],
+            linux::Want::WorkingFolders,
+            &Default::default(),
+        );
         pass.seen
             .into_iter()
             .flat_map(|seen| {

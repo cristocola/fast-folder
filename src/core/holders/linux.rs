@@ -78,6 +78,9 @@ struct Context {
     /// The foreign mount tables found so far, each once: its text's hash,
     /// its text, the table.
     tables: Mutex<Vec<(u64, Vec<u8>, Table)>>,
+    shells: HashSet<String>,
+    /// The parent of every shell read so far.
+    shell_parents: Mutex<HashSet<u32>>,
 }
 
 impl Context {
@@ -100,8 +103,14 @@ impl Context {
 }
 
 /// One pass over every process for `folders` (each its spellings), leaving
-/// out `asking`, fastf's own processes and this one.
-pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> Pass {
+/// out `asking`, fastf's own processes and this one. `shells` are the
+/// programs whose parents the pass names ([`Pass::shell_parents`]).
+pub(super) fn read(
+    folders: &[Vec<PathBuf>],
+    asking: &[Asking],
+    want: Want,
+    shells: &HashSet<String>,
+) -> Pass {
     let host_text = std::fs::read("/proc/self/mountinfo").unwrap_or_default();
     let host = mount_lines(&String::from_utf8_lossy(&host_text));
     let me = std::process::id();
@@ -127,6 +136,8 @@ pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> P
         host_text,
         host: host.clone(),
         tables: Mutex::new(Vec::new()),
+        shells: shells.clone(),
+        shell_parents: Mutex::new(HashSet::new()),
     });
     let reader = Arc::clone(&context);
     let looked = within(pids, DEADLINE, move |pid| read_one(&reader, pid));
@@ -134,6 +145,7 @@ pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> P
         .iter()
         .map(|(_, _, table)| Arc::clone(table))
         .collect();
+    let shell_parents = lock(&context.shell_parents).clone();
     // The desk asks for names only; a process that did not say is none.
     let names_only = want == Want::WorkingFolders;
     Pass {
@@ -148,6 +160,7 @@ pub(super) fn read(folders: &[Vec<PathBuf>], asking: &[Asking], want: Want) -> P
         } else {
             looked.unasked
         },
+        shell_parents,
         host,
         foreign,
     }
@@ -423,6 +436,11 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
         return None;
     }
     let argv = judge::argv(&cmdline);
+    let name = name_of(&base, &argv, exe.as_deref());
+    // Wherever the shell works, its parent hosts one.
+    if context.shells.contains(&name) {
+        lock(&context.shell_parents).insert(stat.ppid);
+    }
     let mut facts = Vec::new();
     let mut add = |hits: Vec<(usize, PathBuf)>, kind: Kind| {
         for (folder, path) in hits {
@@ -481,7 +499,7 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
     Some(Seen {
         pid,
         started: stat.started,
-        program: name_of(&base, &argv, exe.as_deref()),
+        program: name,
         ns: foreign.map(|(index, _)| index),
         facts,
     })

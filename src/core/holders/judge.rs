@@ -79,6 +79,9 @@ pub(super) struct Pass {
     pub silent: Vec<u32>,
     /// Processes never asked: the ones before them did not answer.
     pub unasked: Vec<u32>,
+    /// Every process with a shell among its children, wherever that shell
+    /// works: a terminal, a multiplexer, a script runner.
+    pub shell_parents: HashSet<u32>,
     /// This process's mount table.
     pub host: Vec<MountLine>,
     /// Every other table some process has, once each.
@@ -282,8 +285,16 @@ impl Fact {
 /// A shell whose fact there is its working folder is named as one: its
 /// prompt is the only tie, and whatever it started is judged itself. A
 /// process whose only tie is the folder itself among its arguments was
-/// opened on it — a file manager, a viewer — and holds nothing of it.
-pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize, Use)> {
+/// opened on it — a file manager, a viewer — and holds nothing of it. A
+/// process that is no shell, `hosts_shell` (a shell among its children),
+/// tied only by its working folder and the folder itself among its
+/// arguments, is that shell's terminal: its children are judged themselves.
+pub(super) fn process_uses(
+    seen: &Seen,
+    shells: &HashSet<String>,
+    hosts_shell: bool,
+) -> Vec<(usize, Use)> {
+    let shell = shells.contains(&seen.program);
     let mut folders: Vec<usize> = Vec::new();
     for fact in &seen.facts {
         if !folders.contains(&fact.folder) {
@@ -298,18 +309,24 @@ pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize,
                 .iter()
                 .filter(|fact| fact.folder == folder)
                 .collect();
+            let working = facts.iter().find(|fact| fact.kind == Kind::Cwd);
             let how = if facts.iter().all(|fact| fact.names_the_folder()) {
                 How::OpenedOn
+            } else if let Some(working) = working
+                && hosts_shell
+                && !shell
+                && facts
+                    .iter()
+                    .all(|fact| fact.kind == Kind::Cwd || fact.names_the_folder())
+            {
+                How::Terminal(working.path.clone())
             } else {
                 let best = facts
                     .iter()
                     .min_by_key(|fact| (fact.kind.rank(), fact.names_the_folder()))?;
                 let path = best.path.clone();
                 match best.kind {
-                    Kind::Cwd => How::WorkingIn {
-                        at: path,
-                        shell: shells.contains(&seen.program),
-                    },
+                    Kind::Cwd => How::WorkingIn { at: path, shell },
                     Kind::Exe => How::Runs(path),
                     Kind::Open { writing } => How::Open { at: path, writing },
                     Kind::Loaded => How::Loaded(path),
@@ -439,7 +456,8 @@ pub(super) fn judge(
     let mut seen: Vec<&Seen> = pass.seen.iter().collect();
     seen.sort_by_key(|seen| seen.pid);
     for process in &seen {
-        for (folder, found) in process_uses(process, shells) {
+        let hosts_shell = pass.shell_parents.contains(&process.pid);
+        for (folder, found) in process_uses(process, shells, hosts_shell) {
             answer[folder].push(found);
         }
     }

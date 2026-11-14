@@ -200,6 +200,61 @@ fn a_program_opened_on_the_folder_is_a_note() {
     );
 }
 
+/// A program that is no shell and hosts one — a terminal opened in the
+/// folder, a multiplexer started there, `npm run` — is a note when its only
+/// ties are its working folder and the folder itself among its arguments;
+/// it advises once it holds anything more, and so does a program working
+/// there that hosts no shell.
+#[test]
+fn a_terminal_hosting_a_shell_is_a_note() {
+    let pass = Pass {
+        seen: vec![
+            seen(40, "konsole", &[(Kind::Arg, ""), (Kind::Cwd, "")]),
+            seen(41, "zsh", &[(Kind::Cwd, "")]),
+            seen(42, "tmux", &[(Kind::Cwd, "src")]),
+            seen(
+                43,
+                "editor",
+                &[(Kind::Cwd, ""), (Kind::Open { writing: true }, "notes.md")],
+            ),
+            seen(
+                44,
+                "kitty",
+                &[(Kind::Cwd, ""), (Kind::Arg, "conf/kitty.conf")],
+            ),
+            seen(45, "node", &[(Kind::Cwd, "")]),
+        ],
+        shell_parents: [40, 42, 43, 44].into(),
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    let hows: Vec<&How> = found.uses.iter().map(|u| &u.how).collect();
+    assert_eq!(hows[0], &How::Terminal(PathBuf::new()));
+    assert_eq!(hows[2], &How::Terminal(PathBuf::from("src")));
+    let weights: Vec<Weight> = found.uses.iter().map(|u| u.weight(Verb::Move)).collect();
+    assert_eq!(
+        weights,
+        [
+            Weight::Note,
+            Weight::Note,
+            Weight::Note,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory
+        ]
+    );
+    assert_eq!(found.uses[2].line(), "tmux (pid 42) has a terminal in src");
+    let hosting = holders_of(vec![found.uses[0].clone()]);
+    assert_eq!(
+        hosting.notes(Verb::Move),
+        ["konsole (pid 40) has a terminal in the old folder"]
+    );
+    assert_eq!(
+        hosting.notes(Verb::Delete),
+        ["konsole (pid 40) has a terminal in the deleted folder"]
+    );
+}
+
 #[test]
 fn a_refusal_lists_several_uses_and_says_how_many_more() {
     let uses: Vec<Use> = (0..9)
@@ -886,6 +941,41 @@ fn spawn(command: &mut std::process::Command) -> Child {
     Child(command.stdin(std::process::Stdio::null()).spawn().unwrap())
 }
 
+/// A child in a process group of its own, which the test kills whole —
+/// what it started included — however it ends.
+struct Group(std::process::Child);
+
+impl Group {
+    fn spawn(command: &mut std::process::Command) -> Self {
+        use std::os::unix::process::CommandExt;
+        Self(
+            command
+                .stdin(std::process::Stdio::null())
+                .process_group(0)
+                .spawn()
+                .unwrap(),
+        )
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        // SAFETY: `kill` takes plain integers; the group is this child's
+        // own, made by `process_group(0)`.
+        unsafe { libc::kill(-(self.0.id() as i32), libc::SIGKILL) };
+        let _ = self.0.wait();
+    }
+}
+
+/// The uses of every process named `program`.
+fn uses_by<'a>(found: &'a Holders, program: &str) -> Vec<&'a Use> {
+    found
+        .uses
+        .iter()
+        .filter(|found| matches!(&found.by, By::Process { program: by, .. } if by == program))
+        .collect()
+}
+
 /// What uses `root`, asked until `found` holds — a child takes a moment to
 /// open what it was started to open.
 fn wait_for(root: &Path, found: impl Fn(&Holders) -> bool) -> Holders {
@@ -1078,6 +1168,37 @@ fn an_idle_shell_is_a_note_and_whoever_asked_is_left_out() {
     let started = crate::util::process::stat(pid).unwrap().started;
     let asked = in_use(&Folder::at(&root, "ID0001"), &[Asking { pid, started }]);
     assert!(use_of(&asked, pid).is_none(), "{asked:?}");
+}
+
+/// A program that is not a shell, working in the project and hosting a
+/// shell — a terminal, a multiplexer, `npm run dev` with its `sh -c vite` —
+/// is a note, like the shell it hosts; what the shell runs is judged itself,
+/// and refuses. Here `timeout` hosts `sh`, which runs `sleep`.
+#[test]
+fn a_program_hosting_a_shell_is_a_note_and_what_the_shell_runs_is_not() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let _host = Group::spawn(
+        std::process::Command::new("timeout")
+            .args(["30", "sh", "-c", "sleep 30; :"])
+            .current_dir(&root),
+    );
+    let found = wait_for(&root, |found| {
+        ["timeout", "sh", "sleep"]
+            .iter()
+            .all(|program| uses_by(found, program).len() == 1)
+    });
+    let weight = |program: &str| uses_by(&found, program)[0].weight(Verb::Move);
+    assert_eq!(
+        uses_by(&found, "timeout")[0].how,
+        How::Terminal(PathBuf::new())
+    );
+    assert_eq!(weight("timeout"), Weight::Note, "{found:?}");
+    assert_eq!(weight("sh"), Weight::Note, "{found:?}");
+    assert_eq!(weight("sleep"), Weight::Advisory, "{found:?}");
+    let refusing = found.refusing(Verb::Move, false);
+    assert_eq!(refusing, uses_by(&found, "sleep"), "{found:?}");
 }
 
 /// A user unit naming the folder, in a unit folder of its own: counted,

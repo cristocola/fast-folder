@@ -464,6 +464,14 @@ look leaves it out too.
 
 - a shell whose prompt is in the folder — `bash (pid 1234) has its prompt in
   the old folder; cd to the new one`; what it started is judged on its own;
+- the terminal around such a shell: a program that is not a shell, has a
+  shell among its children, and is tied to the folder only by working in it
+  or by having been started with the folder itself — a terminal window
+  opened there (fastf's own `t` opens one), a tmux or screen server started
+  there, a file manager's terminal panel, `npm run dev` with its `sh -c
+  vite`: `konsole (pid 4410) has a terminal in the old folder`. What runs in
+  the shell is judged on its own, so the dev server `npm run dev` started
+  still keeps the project from moving;
 - a program opened on the folder and holding nothing of it — a file manager
   or a viewer whose only tie is the folder itself among its arguments, such
   as the window fastf's own *Reveal* opens: `dolphin (pid 5981) was opened on

@@ -270,8 +270,8 @@ fn a_pane_taller_than_its_box_has_a_scrollbar() {
 
 /// **The list is calm.** An open todo's box and words are in the text
 /// colour, never the accent — the accent says what has the focus, and a list
-/// of accented boxes shouts — and never bold; a done todo and a finished
-/// phase recede to the dim colour.
+/// of accented boxes shouts — and never bold; a finished phase and the
+/// fold its done todos are in recede to the dim colour.
 #[test]
 fn an_open_todo_is_plain_text_and_a_finished_phase_recedes() {
     use fastf::tui::theme::Theme;
@@ -333,5 +333,11 @@ fn an_open_todo_is_plain_text_and_a_finished_phase_recedes() {
         buffer[(x, y)].fg,
         theme.text().fg.unwrap(),
         "an open one does not"
+    );
+    let (x, y) = find("1 done");
+    assert_eq!(
+        buffer[(x, y)].fg,
+        theme.dim().fg.unwrap(),
+        "the done ones' fold recedes with them"
     );
 }

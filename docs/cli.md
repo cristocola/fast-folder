@@ -1050,10 +1050,10 @@ and folding the done ones renumbers nothing either: `list` prints the open
 ones' numbers and `list --all` every number. A number of 0, or one past the
 end of the list, is refused with the way to see every number.
 `fastf show --json` carries each todo's `number` too. `done`, `edit` and
-`remove` read the list first and refuse if that
-task's text changed meanwhile — edited by hand, or by the app — rather than
-touch the wrong line; ticking what is already ticked, or rewording a task to
-the text it already has, says so and writes nothing.
+`remove` read the list first and refuse if that task's text changed
+meanwhile — edited by hand, or by the app — rather than touch the wrong
+line; ticking what is already ticked, or rewording a task to the text it
+already has, says so and writes nothing.
 
 `edit` rewrites the text after the brackets and nothing else: the indent, the
 `-` or `*`, the tick and the line ending stay as they were, and the task keeps

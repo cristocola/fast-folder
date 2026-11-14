@@ -206,7 +206,8 @@ impl App {
         self.pane_pending = None;
         self.pane_seek = None;
         self.pane_pulses.clear();
-        // A todo ticked on the last visit is done like any other now.
+        // Holds are one visit's: on the next, a todo ticked here is a done
+        // todo like any other, in its fold.
         self.pane_held.clear();
         true
     }

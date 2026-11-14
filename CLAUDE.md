@@ -49,8 +49,17 @@ completions.
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows
 too**, where some thresholds differ (`large_enum_variant` fires there alone), and
 **in release too**, where `#[cfg(debug_assertions)]` code does not exist and an
-item used only from a failpoint or tracer test is dead. The full gate list is in
-the `release` skill (`.claude/skills/release/SKILL.md`).
+item used only from a failpoint or tracer test is dead. `Cargo.toml`'s
+`[lints.clippy]` holds every unsafe block to **one operation under its own
+`// SAFETY:` line** (`undocumented_unsafe_blocks`,
+`multiple_unsafe_ops_per_block`); a handle that must be closed on every path
+gets a small type whose `Drop` closes it. The lints stay at "warn" for `-D
+warnings` to raise, never `[lints.rust] warnings = "deny"`, which would fail a
+source build on the next rustc. `cargo deny --locked check licenses bans
+sources` holds every dependency to `deny.toml`'s licenses and to crates.io;
+Dependabot's weekly cargo PR moves `Cargo.lock` alone, within what the manifest
+allows. The full gate list is in the `release` skill
+(`.claude/skills/release/SKILL.md`).
 
 `.cargo/config.toml` sets `target-feature=+crt-static` for
 `x86_64-pc-windows-msvc` alone, so the Windows exe carries its own C runtime and
@@ -257,7 +266,9 @@ harness redirects `HOME`.
 `Ok(default)` for an *absent* file, so a fallback only masks a parse or I/O error,
 and the config decides which directories are the library. The CLI exits 1 with a
 `hint:` naming the file; the app never takes the screen, and a launcher-started
-`fastf` still opens a window so the error can be read.
+`fastf` still opens a window so the error can be read. The hint is earned by type
+(`config::ConfigUnreadable` anywhere in the chain), never by text: every parse
+failure reads `parsing <path>`, and a path may hold `config.toml` anywhere.
 
 **`config::expand_base_path` / `resolve_base_dir_input` are the only way in for a
 base path.** The first expands `~` and requires absolute; the second also creates

@@ -48,7 +48,22 @@ impl ReconcileReport {
             path: path.to_path_buf(),
             kind,
             reason: reason.to_string(),
+            operation: None,
         });
+    }
+
+    /// The verdicts kept from `since` on were kept finishing `operation`'s
+    /// record: say so on each, so the next look matches each to its own
+    /// move and never to a later one whose old copy has the same path.
+    pub(crate) fn kept_by(&mut self, since: usize, operation: &str) {
+        if operation.is_empty() {
+            return;
+        }
+        for verdict in self.verdicts.iter_mut().skip(since) {
+            verdict
+                .operation
+                .get_or_insert_with(|| operation.to_string());
+        }
     }
 }
 

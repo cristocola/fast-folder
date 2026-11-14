@@ -1,0 +1,21 @@
+# cargo-deny: `cargo deny check licenses bans sources`, run by CI's `deny` job.
+# Advisories are `rustsec/audit-check`'s, in the `audit` job, which can open an
+# issue when the weekly schedule finds one.
+
+# fastf ships as MIT, in an MSI and the AUR packages, with every dependency
+# linked in. A crate whose license is not one of these fails the check until
+# somebody has read it; a crate offered under several is fine when one of them
+# is here.
+[licenses]
+allow = ["MIT", "Apache-2.0", "MPL-2.0", "Zlib", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate cost build time, not correctness: said, not failed.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

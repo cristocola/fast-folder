@@ -17,7 +17,6 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Text files at or below this size are candidates for `{token}` interpolation.
 /// Anything larger is copied verbatim — interpolating a 200 MB file makes no
@@ -345,25 +344,22 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-/// A copy that stopped because its cancel flag was set. Callers distinguish this
-/// from a genuine failure by checking the flag after `copy_job` returns `Err`.
-pub(crate) const CANCELLED_MSG: &str = "copy cancelled";
-
 /// Copy one deferred (large, verbatim) file into place with chunked progress.
 /// Atomic via an operation-owned unique sibling + rename;
 /// `progress.copied_bytes` is bumped per chunk so the UI shows a live bar
-/// during a multi-minute copy.
+/// during a multi-minute copy. A failure part of the way removes the exact
+/// partial sibling, so no half-written file is ever left in place.
 ///
-/// `cancel` is polled between chunks: when set, the exact partial sibling is
-/// removed and the copy returns a `CANCELLED_MSG` error so no half-written
-/// file is ever left in place.
+/// It cannot be cancelled. A caller that needs to stop one passes a flag the
+/// way the move's copy does (`transactions::copy`): polled between chunks,
+/// and known afterwards by the flag, never by the error's text.
 ///
 /// Unlike [`copy_file`] this takes an already-joined `dest`, because a
 /// [`CopyJob`] is a pair of absolute paths by the time it exists. Its one
 /// production caller — `provisioning`'s create-journal resume — derives that
 /// destination through [`crate::util::paths::contained_destination`] first, and
 /// a new caller must do the same.
-pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) -> Result<()> {
+pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>) -> Result<()> {
     if entry_exists(&job.dest)? {
         anyhow::bail!(
             "copy destination is already occupied: {}",
@@ -385,9 +381,6 @@ pub fn copy_job(job: &CopyJob, progress: &Mutex<Progress>, cancel: &AtomicBool) 
             .with_context(|| format!("opening {}", crate::util::paths::display_path(&job.src)))?;
         let mut buf = vec![0u8; 1024 * 1024];
         loop {
-            if cancel.load(Ordering::Relaxed) {
-                anyhow::bail!("{CANCELLED_MSG}");
-            }
             let n = reader.read(&mut buf).context("reading source")?;
             if n == 0 {
                 break;
@@ -863,7 +856,7 @@ mod tests {
             bytes: data.len() as u64,
         };
         let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
-        copy_job(&job, &progress, &AtomicBool::new(false)).unwrap();
+        copy_job(&job, &progress).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), data);
         assert_eq!(progress.lock().unwrap().copied_bytes, data.len() as u64);
         assert!(!dest.with_extension("bin.part").exists());
@@ -884,7 +877,7 @@ mod tests {
         };
         let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
 
-        copy_job(&job, &progress, &AtomicBool::new(false)).unwrap();
+        copy_job(&job, &progress).unwrap();
         assert_eq!(fs::read(dest).unwrap(), b"new payload");
         assert_eq!(fs::read(part_payload).unwrap(), b"real sibling payload");
     }
@@ -903,31 +896,31 @@ mod tests {
         };
         let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
 
-        let error = copy_job(&job, &progress, &AtomicBool::new(false)).unwrap_err();
+        let error = copy_job(&job, &progress).unwrap_err();
         assert!(error.to_string().contains("occupied"));
         assert_eq!(fs::read(dest).unwrap(), b"existing payload");
     }
 
+    /// A copy that fails once its sibling exists — here the source is a
+    /// folder, which opens on unix and then refuses a read — takes the
+    /// sibling with it: nothing half-written is left beside the destination.
     #[test]
-    fn copy_job_honors_cancel_and_leaves_no_partial() {
+    fn copy_job_that_fails_part_of_the_way_leaves_no_partial() {
         let tmp = tempfile::tempdir().unwrap();
-        let src = tmp.path().join("big.bin");
-        let dest = tmp.path().join("out/big.bin");
-        let data: Vec<u8> = (0..(3 * 1024 * 1024u32)).map(|i| i as u8).collect();
-        fs::write(&src, &data).unwrap();
+        let src = tmp.path().join("not-a-file");
+        fs::create_dir(&src).unwrap();
+        let out = tmp.path().join("out");
+        let dest = out.join("big.bin");
         let job = CopyJob {
             src,
             dest: dest.clone(),
-            bytes: data.len() as u64,
+            bytes: 1,
         };
         let progress = Mutex::new(Progress::new(std::slice::from_ref(&job)));
-        // Pre-set cancel so the copy bails on the first chunk check.
-        let err = copy_job(&job, &progress, &AtomicBool::new(true)).unwrap_err();
-        assert!(err.to_string().contains(CANCELLED_MSG));
-        assert!(!dest.exists(), "no destination file on cancel");
-        let mut part = dest.into_os_string();
-        part.push(".part");
-        assert!(!PathBuf::from(part).exists(), "no .part left behind");
+        copy_job(&job, &progress).unwrap_err();
+        assert!(!dest.exists(), "no destination file after a failure");
+        let left: Vec<_> = fs::read_dir(&out).unwrap().flatten().collect();
+        assert!(left.is_empty(), "nothing left beside it: {left:?}");
     }
 
     #[cfg(unix)]

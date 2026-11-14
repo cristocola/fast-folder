@@ -272,8 +272,15 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     report
 }
 
-/// Run a deferred removal and report it as the pass would have.
+/// Run a deferred removal and report it as the pass would have, its
+/// verdicts its operation's (`ReconcileReport::kept_by`).
 fn finish_deferred(deferred: Deferred, ticker: Ticker, report: &mut ReconcileReport) {
+    let (kept, operation) = (report.verdicts.len(), deferred.housekeeping.operation());
+    finish_deferred_removal(deferred, ticker, report);
+    report.kept_by(kept, &operation);
+}
+
+fn finish_deferred_removal(deferred: Deferred, ticker: Ticker, report: &mut ReconcileReport) {
     match deferred.housekeeping {
         move_cleanup::Housekeeping::Deleted(path) => {
             let fate = move_cleanup::Housekeeping::Deleted(path.clone()).run(ticker);

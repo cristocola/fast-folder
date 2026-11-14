@@ -117,12 +117,11 @@ impl Drop for EnvGuard {
     fn drop(&mut self) {
         HOLDS_GUARD.with(|holds| holds.set(false));
         for (name, value) in self.previous.drain() {
-            // SAFETY: the lock is held until this guard finishes dropping.
-            unsafe {
-                match value {
-                    Some(previous) => std::env::set_var(&name, previous),
-                    None => std::env::remove_var(&name),
-                }
+            match value {
+                // SAFETY: the lock is held until this guard finishes dropping.
+                Some(previous) => unsafe { std::env::set_var(&name, previous) },
+                // SAFETY: the same lock.
+                None => unsafe { std::env::remove_var(&name) },
             }
         }
     }

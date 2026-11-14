@@ -14,3 +14,19 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+
+  # Cargo.lock only, as one weekly PR: the minor and patch releases the
+  # manifest already allows. CI's `msrv` and `deny` jobs gate it.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    versioning-strategy: lockfile-only
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

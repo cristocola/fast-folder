@@ -12,7 +12,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
 
 use crate::core::assets::{self, CopyJob, JobPhase, Progress};
 use crate::core::config::Config;

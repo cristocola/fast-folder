@@ -151,6 +151,22 @@ only the program's, and only when your shell's `PATH` has a folder fastf's
 lacks. A shell that answers nothing leaves things as they were. Not on Windows,
 where a program from the Start menu gets the same `PATH` as one from a console.
 
+#### Ctrl-C, hang-ups and exit codes
+
+Ctrl-C asks fastf to stop where it safely can: a create in progress rolls its
+folder back, and the command says `aborted.` and exits **130**. A closed
+terminal window (SIGHUP) and a terminate (SIGTERM) ask the same way. A move, a
+copy, a delete and a reconcile are jobs of their own, and [Jobs](#jobs) says
+what each of these does to one.
+
+A second Ctrl-C, hang-up or terminate ends fastf at once, after giving the
+terminal back — the prompt's rows cleared, the app's screen left, the cursor
+shown, the terminal cooked — and exits with the code a shell reports for that
+signal: **130** when the second was a Ctrl-C (SIGINT), **129** a hang-up,
+**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130 and a
+second closed console 129. Any other failure exits 1 with an `error:` line,
+and a command line fastf cannot read exits 2.
+
 ## Browsing projects
 
 `fastf recent` and `fastf search` open the [guided app](app.md) on a

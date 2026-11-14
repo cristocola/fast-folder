@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::core::transactions::MoveTransaction;
+use std::sync::atomic::AtomicBool;
 
 mod pass;
 mod published;

@@ -142,6 +142,13 @@ fn a_conflict_needs_you_until_a_version_is_chosen() {
 
         let report = reconcile_unlocked(&cfg);
         assert_eq!(report.completed, 0, "{report:?}");
+        assert!(
+            !report.verdicts.is_empty()
+                && report.verdicts.iter().all(|verdict| {
+                    verdict.operation.as_deref() == Some(transaction.journal.operation_id.as_str())
+                }),
+            "each verdict says which move kept it: {report:?}"
+        );
         let now = attention(&cfg);
         let item = now
             .items

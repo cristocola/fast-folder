@@ -109,7 +109,11 @@ What each suite guards — the intent, not the case list:
 - `hostile_fs.rs` — corrupt caches, markers and metadata, absent bases, vanishing
   paths: **degrade, never panic, never lose data.**
 - `properties.rs` — proptest; above all, `sanitize_name` output is always
-  creatable (verified by creating it).
+  creatable (verified by creating it). The body grammar over hand-shaped
+  files (multi-byte words, CRLF, a BOM, trailer tokens in any case): the
+  reader never panics, a toggle touches only its own line and keeps what the
+  todo says, a line fastf wrote survives a double toggle byte for byte, and
+  an add reads back at the ordinal it answers.
 - `repo_hygiene.rs` — no tracked file names a real home, a personal mount, a local
   project-folder path, the maintainer outside attribution, or a personal email.
   Scans `git ls-files`, and skips unless the crate is the checkout's root, because
@@ -119,8 +123,13 @@ What each suite guards — the intent, not the case list:
 `tests/common/mod.rs` is the process-driving harness: `Sandbox` (its own
 `FASTF_INSTALL_DIR`, `HOME` redirected; `run`/`ok`/`fails`/`spawn`), `with_bases`,
 `plant_project`, `unconfigured`, and `pty::run` (unix, `libc::forkpty`, 120×40),
-because neither the app nor a prompt draws without a TTY. `#![allow(dead_code)]`,
-since each binary uses a subset.
+because neither the app nor a prompt draws without a TTY. `pty::run_signalled`
+sends real signals on a schedule — in raw mode Ctrl-C is a key, not a signal —
+and reads the terminal's modes before the first and after the exit, through a
+slave end the harness holds open: a pty's settings go back to the defaults
+when its last slave descriptor closes, so a read after the exit would
+otherwise always say cooked. `#![allow(dead_code)]`, since each binary uses a
+subset.
 
 ## Ways a test passes over the thing it is for
 

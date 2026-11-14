@@ -323,16 +323,17 @@ mod unix {
             .env(ASKING_VAR, "1")
             // oh-my-zsh checks for its own updates on start; not inside the wait.
             .env("DISABLE_AUTO_UPDATE", "true");
-        // SAFETY: `setsid` is async-signal-safe and touches nothing of the
-        // parent's; it is the one call made between fork and exec.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        let lead_a_session = || -> std::io::Result<()> {
+            // SAFETY: `setsid` is async-signal-safe and touches nothing of
+            // the parent's.
+            if unsafe { libc::setsid() } == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        };
+        // SAFETY: the closure runs between fork and exec, where it makes one
+        // async-signal-safe call and reads `errno`, and nothing else.
+        unsafe { command.pre_exec(lead_a_session) };
         let Ok(mut child) = command.spawn() else {
             return Asked::Silent;
         };

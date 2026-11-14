@@ -449,7 +449,9 @@ fn a_worker_is_in_a_session_of_its_own() {
     let (_, state) = newest(&sb).unwrap();
     let worker = state["pid"].as_u64().unwrap() as i32;
     // SAFETY: querying a process's session id has no effect on it.
-    let (worker_session, our_session) = unsafe { (libc::getsid(worker), libc::getsid(0)) };
+    let worker_session = unsafe { libc::getsid(worker) };
+    // SAFETY: the same question about this process.
+    let our_session = unsafe { libc::getsid(0) };
     assert_eq!(worker_session, worker, "the worker leads its own session");
     assert_ne!(worker_session, our_session);
     assert!(cli.wait_with_output().unwrap().status.success());

@@ -53,6 +53,11 @@ fastf config set default-template rust-project
 fastf config set date-format "%Y-%m-%d"
 fastf config set editor nvim
 
+# The editor is a program and its arguments. A path with a space in it is
+# named whole, or in quotes when arguments follow it.
+fastf config set editor "code --wait"
+fastf config set editor "'/opt/My Editor/editor' --wait"
+
 # Terminal to open when fastf is launched without one (a desktop launcher),
 # and the emulator `fastf term` opens. Empty = $TERMINAL, else probe. Names a
 # program, not a command line.

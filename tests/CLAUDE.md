@@ -177,7 +177,20 @@ the fix missed.
   (`theme::Env::VARIABLES`), because every terminal announces itself
   differently — Alacritty by a window id, WezTerm by a pane — and a child that
   inherited them would paint one palette in the developer's terminal and
-  another on a runner.
+  another on a runner. **No child inherits a display** (`DISPLAY`,
+  `WAYLAND_DISPLAY`): a test that wants one sets the fake `:99`, so a fake
+  terminal that cannot run (a `noexec` temporary folder) falls through to
+  real emulators that have no screen to open on, never the builder's.
+- **A program a test writes and runs lives where programs run**:
+  `Sandbox::programs()` (a folder under `CARGO_TARGET_TMPDIR`, beside the
+  test binaries) for the integration suites, `test_env::programs_dir()`
+  (beside the lib's test binary) for a unit test, never the sandbox's
+  `tmp` — the builder's temporary folder may be mounted `noexec`, as
+  hardening guides advise, and nothing written there starts. Its script
+  quotes every path it holds (`common::sh_word`), and a path goes into a
+  whitespace-split variable (`LD_PRELOAD`) by name, never whole: the
+  sandbox lives in the builder's `TMPDIR`, which may have a space in it,
+  and so does every project path a test plants.
 - **A unit test that reads the terminal clears the theme's whole list**
   (`for name in Env::VARIABLES { guard.also_remove(name) }`), then sets what
   it is about. Clearing only the variables one's own terminal sets passes

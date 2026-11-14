@@ -451,13 +451,14 @@ fn copy_path_falls_back_to_showing_the_path() {
     let text = pty::plain(&out);
 
     assert_eq!(code, 0, "Copy path should not end the session:\n{text}");
+    // Read from a frame, not the raw stream, which never sends a space the
+    // cell already held: the path may have one in it.
     assert!(
-        text.contains("no clipboard tool found"),
-        "with nothing on PATH it should say so:\n{text}"
-    );
-    assert!(
-        text.contains(&root.display().to_string()),
-        "and show the path it could not copy:\n{text}"
+        some_frame_shows(
+            &out,
+            &["no clipboard tool found", &root.display().to_string()]
+        ),
+        "it should say so, and show the path it could not copy:\n{text}"
     );
 }
 
@@ -520,13 +521,13 @@ fn a_note_added_in_the_editor_is_appended() {
 
     // A recorder editor: log the scratch path, write a note into the file,
     // exit 0 — the shape of a real `$EDITOR` saving the buffer.
-    let editor = sb.tmp.path().join("note-editor");
+    let editor = sb.programs().join("note-editor");
     let log = sb.tmp.path().join("note-editor.log");
     fs::write(
         &editor,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$1\" >> {}\necho 'a note from the editor' >> \"$1\"\nexit 0\n",
-            log.display()
+            common::sh_word(&log)
         ),
     )
     .unwrap();
@@ -581,10 +582,10 @@ fn the_agent_x_starts_is_found_where_the_shell_finds_it() {
 
     let sb = Sandbox::new();
     plant_dated_project(&sb, "Agented", "ID0001", "2026-01-01T00:00:00Z", 256);
-    let hidden = sb.tmp.path().join("hidden");
+    let hidden = sb.programs().join("hidden");
     let agent = common::recorder(&hidden, "fake-agent");
     sb.ok(&["config", "set", "agent", "fake-agent --resume"]);
-    let shell = sb.tmp.path().join("fake-shell");
+    let shell = sb.programs().join("fake-shell");
     fs::write(
         &shell,
         format!(
@@ -668,7 +669,7 @@ fn ctrl_c_typed_to_the_agent_leaves_the_app_running() {
 fn fake_shell(sb: &Sandbox, log: &std::path::Path, then: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
-    let shell = sb.tmp.path().join("fake-shell");
+    let shell = sb.programs().join("fake-shell");
     fs::write(
         &shell,
         format!(

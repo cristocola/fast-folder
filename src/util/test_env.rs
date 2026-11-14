@@ -113,6 +113,19 @@ impl EnvGuard {
     }
 }
 
+/// A temporary folder a test writes a program or a library into and then
+/// runs or loads it from: beside the test binary, never in the builder's
+/// temporary folder, which may be mounted `noexec`, as hardening guides
+/// advise, where nothing written can be started.
+pub fn programs_dir() -> TempDir {
+    let exe = std::env::current_exe().expect("the test binary's path");
+    let beside = exe.parent().expect("the test binary's folder");
+    tempfile::Builder::new()
+        .prefix(".programs")
+        .tempdir_in(beside)
+        .expect("a folder beside the test binary")
+}
+
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         HOLDS_GUARD.with(|holds| holds.set(false));

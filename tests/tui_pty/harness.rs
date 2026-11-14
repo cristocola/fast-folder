@@ -134,8 +134,8 @@ pub(crate) fn app_screen(transcript: &str) -> String {
 /// Whether some frame during the run showed every one of `needles` at once —
 /// for a dialog the script closes before it leaves. Replayed a slice at a
 /// time, never matched in the raw stream: ratatui sends only the cells that
-/// changed, so a sentence arrives in pieces there.
-#[cfg(debug_assertions)]
+/// changed, so a sentence arrives in pieces there, and a space the cell
+/// already held is never sent at all.
 pub(crate) fn some_frame_shows(transcript: &str, needles: &[&str]) -> bool {
     let mut parser = vt100::Parser::new(pty::PTY_ROWS, pty::PTY_COLS, 0);
     transcript.as_bytes().chunks(256).any(|chunk| {

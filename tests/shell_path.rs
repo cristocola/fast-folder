@@ -39,10 +39,10 @@ impl Shell {
 
     fn with_rc(sb: &Sandbox, rc: &str) -> Shell {
         use std::os::unix::fs::PermissionsExt;
-        let hidden = sb.tmp.path().join("hidden");
+        let hidden = sb.programs().join("hidden");
         std::fs::create_dir_all(&hidden).unwrap();
         let calls = sb.tmp.path().join("shell.calls");
-        let program = sb.tmp.path().join("fake-shell");
+        let program = sb.programs().join("fake-shell");
         std::fs::write(
             &program,
             format!(
@@ -142,7 +142,7 @@ fn an_agent_only_the_shell_finds_is_started() {
 fn a_program_fastf_finds_is_started_without_asking() {
     let sb = Sandbox::new();
     let shell = Shell::new(&sb);
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "fake-agent");
     sb.ok(&["config", "set", "agent", "fake-agent"]);
     sb.plant_project(&sb.base, "proj", "ID0001");
@@ -168,7 +168,7 @@ fn a_program_fastf_finds_is_started_without_asking() {
 fn a_fastf_leading_its_session_gives_every_program_the_shells_path() {
     let sb = Sandbox::new();
     let shell = Shell::new(&sb);
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "fake-agent");
     sb.ok(&["config", "set", "agent", "fake-agent"]);
     sb.plant_project(&sb.base, "proj", "ID0001");
@@ -360,7 +360,7 @@ fn a_terminal_only_the_shell_finds_is_the_one_opened() {
 fn an_emulator_fastf_finds_opens_without_asking() {
     let sb = Sandbox::new();
     let shell = Shell::new(&sb);
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let konsole = recorder(&bin, "konsole");
     sb.ok(&["config", "set", "agent", "true"]);
     sb.plant_project(&sb.base, "proj", "ID0001");

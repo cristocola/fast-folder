@@ -286,15 +286,15 @@ fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
 
 #[cfg(not(windows))]
 fn spawn_editor(editor: &str, path: &Path) -> Result<()> {
-    // Respect editors with embedded arguments (e.g. "code --wait"). The path is
-    // already data here — `arg` never reaches a shell — so only the variable is
-    // added.
-    let mut parts = editor.split_whitespace();
-    let bin = parts.next().unwrap_or(editor);
+    // An editor with embedded arguments (e.g. "code --wait") is a program and
+    // its arguments (`config::editor_words`). The path is already data here —
+    // `arg` never reaches a shell — so only the variable is added.
+    let words = crate::core::config::editor_words(editor);
+    let (bin, args) = words
+        .split_first()
+        .map_or((editor, &[][..]), |(bin, args)| (bin.as_str(), args));
     let mut cmd = project_command(bin, Runs::Program, path);
-    for arg in parts {
-        cmd.arg(arg);
-    }
+    cmd.args(args);
     let status = cmd.arg(path).status()?;
     if !status.success() {
         anyhow::bail!("{editor} exited with {status}");

@@ -31,7 +31,7 @@ fn term_ok(sb: &Sandbox, args: &[&str]) -> String {
 #[test]
 fn a_known_emulator_gets_its_directory_flag_and_the_cwd() {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "konsole");
+    let rec = recorder(&sb.programs().join("bin"), "konsole");
     sb.ok(&[
         "config",
         "set",
@@ -61,7 +61,7 @@ fn a_known_emulator_gets_its_directory_flag_and_the_cwd() {
 #[test]
 fn an_unknown_emulator_gets_no_flag_but_still_starts_in_the_project() {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "fake-terminal");
+    let rec = recorder(&sb.programs().join("bin"), "fake-terminal");
     sb.ok(&[
         "config",
         "set",
@@ -90,7 +90,7 @@ fn an_unknown_emulator_gets_no_flag_but_still_starts_in_the_project() {
 #[test]
 fn terminal_none_does_not_disable_an_explicit_term() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "konsole");
     sb.ok(&["config", "set", "terminal", "none"]);
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
@@ -120,7 +120,7 @@ fn terminal_none_does_not_disable_an_explicit_term() {
 #[test]
 fn the_terminal_it_opens_carries_none_of_the_relaunch_marker() {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "konsole");
+    let rec = recorder(&sb.programs().join("bin"), "konsole");
     sb.ok(&[
         "config",
         "set",
@@ -147,6 +147,10 @@ fn the_terminal_it_opens_carries_none_of_the_relaunch_marker() {
         None,
         "the window would hand the marker to its shell and its shell to everything after it"
     );
+    // The harness's own promise, read where it lands: the screen this suite
+    // was started on never reaches what it starts, only the fake `:99`.
+    assert_eq!(rec.env_var("WAYLAND_DISPLAY"), None);
+    assert_eq!(rec.env_var("DISPLAY").as_deref(), Some(":99"));
 }
 
 /// The launcher case the whole feature exists for: an ambiguous `fastf term`
@@ -155,7 +159,7 @@ fn the_terminal_it_opens_carries_none_of_the_relaunch_marker() {
 #[test]
 fn an_ambiguous_term_from_a_launcher_hands_off_to_a_terminal() {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "fake-terminal");
+    let rec = recorder(&sb.programs().join("bin"), "fake-terminal");
     sb.ok(&[
         "config",
         "set",
@@ -185,7 +189,7 @@ fn an_ambiguous_term_from_a_launcher_hands_off_to_a_terminal() {
 #[test]
 fn a_headless_unambiguous_term_opens_the_terminal_and_notifies() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "konsole");
     let notify = recorder(&bin, "notify-send");
     sb.ok(&[
@@ -221,7 +225,7 @@ fn a_headless_unambiguous_term_opens_the_terminal_and_notifies() {
 #[test]
 fn an_unambiguous_term_in_a_marked_shell_still_opens_a_window() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let term_rec = recorder(&bin, "konsole");
     let shell_rec = recorder(&bin, "fake-shell");
     sb.ok(&[
@@ -266,7 +270,7 @@ fn an_unambiguous_term_in_a_marked_shell_still_opens_a_window() {
 #[test]
 fn a_relaunched_picker_execs_the_shell_in_its_own_window() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let term_rec = recorder(&bin, "fake-terminal");
     let shell_rec = recorder(&bin, "fake-shell");
     sb.ok(&[
@@ -328,13 +332,14 @@ fn a_relaunched_picker_execs_the_shell_in_its_own_window() {
 #[test]
 fn agent_runs_the_configured_line_in_the_project_folder() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "fake-agent");
     sb.ok(&[
         "config",
         "set",
         "agent",
-        &format!("{} --resume {{path}}", rec.program.display()),
+        // The agent is a shell line, so its program's path is one quoted word.
+        &format!("{} --resume {{path}}", common::sh_word(&rec.program)),
     ]);
     let dir = sb.plant_project(&sb.base, "proj", "ID0001");
     let expected = shown_path(&dir);
@@ -375,7 +380,7 @@ fn agent_runs_the_configured_line_in_the_project_folder() {
 #[test]
 fn an_agent_typed_inside_quotes_runs_as_the_command_inside_them() {
     let sb = Sandbox::new();
-    let bin = sb.tmp.path().join("bin");
+    let bin = sb.programs().join("bin");
     let rec = recorder(&bin, "fake-agent");
     let said = sb.ok(&["config", "set", "agent", "\"fake-agent --resume\""]);
     assert!(said.contains("without the outer quotes"), "{said}");
@@ -414,7 +419,7 @@ fn agent_refuses_by_name_when_none_is_configured() {
 #[test]
 fn agent_from_a_launcher_hands_off_to_a_terminal() {
     let sb = Sandbox::new();
-    let rec = recorder(&sb.tmp.path().join("bin"), "fake-terminal");
+    let rec = recorder(&sb.programs().join("bin"), "fake-terminal");
     sb.ok(&[
         "config",
         "set",

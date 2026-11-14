@@ -282,12 +282,16 @@ pub(crate) fn note_from_editor(editor: &str, cwd: Option<&Path>) -> Result<Strin
 fn open_in_editor(editor: &str, cwd: Option<&Path>) -> Result<String> {
     let scratch = create_scratch_file()?;
 
-    // `code --wait` is one editor: the first word is the program, the rest
-    // its arguments — the same split post-create's editor gets.
-    let mut parts = editor.split_whitespace();
-    let program = parts.next().unwrap_or(editor);
+    // `code --wait` is one editor: the program and its arguments, read as
+    // post-create's editor is (`config::editor_words`).
+    let words = crate::core::config::editor_words(editor);
+    let (program, args) = words
+        .split_first()
+        .map_or((editor, &[][..]), |(program, args)| {
+            (program.as_str(), args)
+        });
     let mut command = std::process::Command::new(program);
-    command.args(parts).arg(&scratch.0);
+    command.args(args).arg(&scratch.0);
     if let Some(path) = crate::util::login_path::path_for_program(program) {
         command.env("PATH", path);
     }

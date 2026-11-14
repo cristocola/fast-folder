@@ -10,6 +10,7 @@ pub mod folder_verbs;
 
 pub mod hat;
 pub mod id;
+pub(crate) mod in_use;
 #[doc(hidden)]
 pub mod job_worker;
 pub mod jobs;

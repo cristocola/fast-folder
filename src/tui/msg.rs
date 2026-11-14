@@ -76,6 +76,12 @@ pub enum Msg {
         asked: Vec<PathBuf>,
         active: std::collections::HashMap<PathBuf, Vec<String>>,
     },
+    /// What uses each folder `Effect::CheckInUse` numbered `request` asked
+    /// about, by path.
+    InUse {
+        request: u64,
+        found: Vec<(PathBuf, crate::core::holders::Holders)>,
+    },
     /// A read of `jobs/`: every job, newest first.
     Jobs(Vec<crate::core::jobs::JobView>),
     /// A job's worker answered that it runs — or why it could not start.

@@ -642,12 +642,37 @@ impl Runtime {
                     });
                 }
                 Effect::Preview(request) => self.preview(request),
-                Effect::StartJob { kind, items } => {
+                Effect::StartJob { kind, items, force } => {
                     let tx = self.tx.clone();
                     spawn_worker("fastf-start-job", move || {
-                        let started = crate::core::jobs::start(kind, items)
+                        let started = crate::core::jobs::start(kind, items, force)
                             .map_err(|error| for_the_app(&format!("{error:#}")));
                         let _ = tx.send(Msg::JobStarted(started));
+                    });
+                }
+                Effect::CheckInUse { request, folders } => {
+                    let tx = self.tx.clone();
+                    spawn_worker("fastf-in-use", move || {
+                        use crate::core::holders::{self, Folder};
+                        let cfg = crate::core::config::Config::load().ok();
+                        let asked: Vec<Folder> = folders
+                            .iter()
+                            .map(|(path, label)| match &cfg {
+                                Some(cfg) => Folder::configured(cfg, path, label),
+                                None => Folder::at(path, label),
+                            })
+                            .collect();
+                        // The app and everything above it — the shell it was
+                        // started from, its terminal — never count.
+                        let found = holders::in_use_all(&asked, &holders::asking_chain());
+                        let _ = tx.send(Msg::InUse {
+                            request,
+                            found: folders
+                                .into_iter()
+                                .map(|(path, _)| path)
+                                .zip(found)
+                                .collect(),
+                        });
                     });
                 }
                 Effect::StartAutoReconcile => {

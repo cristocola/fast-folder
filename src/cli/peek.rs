@@ -36,13 +36,8 @@ pub fn run(query: &str) -> Result<()> {
         .unwrap_or_else(|| project.description.clone());
     // Asked only where the platform can answer: elsewhere `nobody` would be
     // a guess, and the row is left out.
-    let working: Option<Vec<String>> = crate::core::holders::WORKING_KNOWN.then(|| {
-        crate::core::holders::in_tree(&project.path)
-            .working_in
-            .iter()
-            .map(|holder| holder.who())
-            .collect()
-    });
+    let working: Option<Vec<String>> = crate::core::holders::WORKING_KNOWN
+        .then(|| crate::core::holders::working_in(&project.path));
     let facts =
         crate::util::tree_size::directory_facts_until(&project.path, &AtomicBool::new(false));
     let head = crate::core::glance::git_head(&project.path);

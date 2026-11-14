@@ -61,8 +61,14 @@ fn a_move_reports_whether_it_renamed_or_copied() {
         // Both bases are on one filesystem here, so this is the rename.
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let outcome =
-            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        let outcome = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        )
+        .unwrap();
         assert!(!outcome.staged, "one filesystem is a rename");
         assert!(outcome.copied.is_none(), "a rename copies nothing");
         // The job is over, and says so. A status left at `Running` makes the
@@ -169,7 +175,13 @@ fn a_move_that_fails_ends_failed_and_says_why() {
 
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let result = fastf::core::operations::move_project(&project, &base_b, &progress, &cancel);
+        let result = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        );
 
         assert!(result.is_err());
         let state = progress.lock().unwrap();
@@ -193,8 +205,14 @@ fn an_empty_folder_at_the_target_name_gives_way() {
 
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let outcome =
-            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        let outcome = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        )
+        .unwrap();
         assert_eq!(outcome.project.path.file_name(), marker.file_name());
         assert!(marker.join("PROJECT_INFO.md").is_file());
         assert!(!project.path.exists());
@@ -217,7 +235,13 @@ fn a_cancel_undoes_a_move_before_its_publish_and_changes_nothing_after() {
 
         let progress = Mutex::new(Progress::new(&[]));
         let cancel = AtomicBool::new(true);
-        let early = fastf::core::operations::move_project(&project, &base_b, &progress, &cancel);
+        let early = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        );
         assert!(early.is_err());
         assert_eq!(progress.lock().unwrap().status, JobStatus::Cancelled);
         assert!(project.path.is_dir(), "the original is where it was");
@@ -239,7 +263,13 @@ fn a_cancel_undoes_a_move_before_its_publish_and_changes_nothing_after() {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             });
-            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel)
+            fastf::core::operations::move_project(
+                &project,
+                &base_b,
+                &fastf::core::holders::Guard::here(false),
+                &progress,
+                &cancel,
+            )
         })
         .expect("a cancel after the publish does not stop the move");
         assert!(cancel.load(Ordering::Relaxed), "the cancel was asked for");
@@ -538,8 +568,14 @@ fn a_same_filesystem_move_preserves_a_symlink_inside_the_project() {
 
         let progress = Mutex::new(fastf::core::assets::Progress::new(&[]));
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let outcome =
-            fastf::core::operations::move_project(&project, &base_b, &progress, &cancel).unwrap();
+        let outcome = fastf::core::operations::move_project(
+            &project,
+            &base_b,
+            &fastf::core::holders::Guard::here(false),
+            &progress,
+            &cancel,
+        )
+        .unwrap();
         assert!(!outcome.staged, "one filesystem is a rename");
 
         let moved = base_b.join(&project.name).join("shortcut");

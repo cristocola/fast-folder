@@ -172,8 +172,18 @@ fn a_log_written_into_the_old_copy_after_the_retire_reaches_the_moved_copy() {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
 
+    let (folder, guard) = unasked(&project);
     let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
-        &project, new_base, &new_path, &progress, &cancel,
+        &project,
+        new_base,
+        &new_path,
+        crate::core::move_engine::Asked {
+            in_use: None,
+            folder: &folder,
+            guard: &guard,
+        },
+        &progress,
+        &cancel,
     )
     .unwrap();
     let housekeeping = housekeeping.expect("the old copy is left to remove");
@@ -212,8 +222,18 @@ fn a_file_changed_in_both_copies_keeps_only_that_entry_and_the_record() {
     let progress = Mutex::new(Progress::new(&[]));
     let cancel = AtomicBool::new(false);
 
+    let (folder, guard) = unasked(&project);
     let (outcome, housekeeping) = crate::core::move_engine::staged_copy_verify_commit_in_parts(
-        &project, new_base, &new_path, &progress, &cancel,
+        &project,
+        new_base,
+        &new_path,
+        crate::core::move_engine::Asked {
+            in_use: None,
+            folder: &folder,
+            guard: &guard,
+        },
+        &progress,
+        &cancel,
     )
     .unwrap();
     let housekeeping = housekeeping.unwrap();
@@ -383,7 +403,15 @@ fn a_move_that_loses_its_mount_pauses_and_resumes_from_its_copy() {
 
     let paused = crate::util::faults::with_thread_fault(
         "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
-        || crate::core::move_engine::move_project_in_parts(&project, new_base, &progress, &cancel),
+        || {
+            crate::core::move_engine::move_project_in_parts(
+                &project,
+                new_base,
+                &crate::core::holders::Guard::off(),
+                &progress,
+                &cancel,
+            )
+        },
     );
     let error = paused.unwrap_err();
     assert!(
@@ -406,9 +434,14 @@ fn a_move_that_loses_its_mount_pauses_and_resumes_from_its_copy() {
         fs::metadata(new_path.join("aa-empty.txt")).unwrap().ino()
     };
 
-    let (outcome, housekeeping) =
-        crate::core::move_engine::move_project_in_parts(&project, new_base, &progress, &cancel)
-            .unwrap();
+    let (outcome, housekeeping) = crate::core::move_engine::move_project_in_parts(
+        &project,
+        new_base,
+        &crate::core::holders::Guard::off(),
+        &progress,
+        &cancel,
+    )
+    .unwrap();
     let outcome = crate::core::move_engine::finish_housekeeping(
         outcome,
         housekeeping,
@@ -426,4 +459,96 @@ fn a_move_that_loses_its_mount_pauses_and_resumes_from_its_copy() {
         );
     }
     assert!(!project.path.exists());
+}
+
+/// **A paused move whose folder something uses waits for it**: reconcile
+/// files it under waiting and leaves the record and the copy as they are —
+/// resuming into the refusal would throw the copy away — and the item waits
+/// rather than asking for a reconcile every minute. Once nothing uses the
+/// folder, the next reconcile goes on from the copy.
+#[cfg(target_os = "linux")]
+#[test]
+fn reconcile_keeps_a_paused_moves_copy_while_its_folder_is_in_use() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    fs::write(old_base.join("proj_a/aa-empty.txt"), "").unwrap();
+    fs::write(old_base.join("proj_a/data.bin"), [9_u8; 4096]).unwrap();
+    let cfg = cfg_for(old_base, &[new_base]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+    let new_path = new_base.join("proj_a");
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    let paused = crate::util::faults::with_thread_fault(
+        "pool:serial,move:force-staged,fs:short-mount-wait,copy:write:enotconn",
+        || {
+            crate::core::move_engine::move_project_in_parts(
+                &project,
+                new_base,
+                &crate::core::holders::Guard::off(),
+                &progress,
+                &cancel,
+            )
+        },
+    );
+    assert!(
+        paused
+            .unwrap_err()
+            .downcast_ref::<crate::core::move_engine::Paused>()
+            .is_some()
+    );
+    assert!(new_path.join("aa-empty.txt").is_file());
+
+    let mut sitter = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(&project.path)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let asked = crate::core::holders::Folder::at(&project.path, &project.id);
+    for _ in 0..40 {
+        if crate::core::holders::in_use(&asked, &[]).in_use(crate::core::holders::Verb::Move) {
+            break;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    let waiting = crate::core::provisioning::reconcile_unlocked(&cfg);
+    let item = crate::core::attention::attention(&cfg)
+        .items
+        .into_iter()
+        .find(|item| item.what == "a move");
+    let _ = sitter.kill();
+    let _ = sitter.wait();
+    assert_eq!(waiting.resumed, 0, "{waiting:?}");
+    assert!(
+        waiting.waiting.iter().any(|said| said.contains("sleep")),
+        "{waiting:?}"
+    );
+    assert!(
+        new_path.join("aa-empty.txt").is_file(),
+        "the copy is kept while it waits"
+    );
+    assert_eq!(v2_transaction_count(new_base), 1, "and so is its record");
+    let item = item.expect("the paused move is listed");
+    assert_eq!(
+        item.state,
+        crate::core::attention::State::Waiting,
+        "{item:?}"
+    );
+    assert!(item.reason.contains("sleep"), "{}", item.reason);
+
+    let resumed = crate::core::provisioning::reconcile_unlocked(&cfg);
+    assert_eq!(resumed.resumed, 1, "{resumed:?}");
+    assert_eq!(fs::read(new_path.join("data.bin")).unwrap(), [9_u8; 4096]);
+}
+
+/// A staged move that asks nothing about what uses its folder.
+fn unasked(project: &Project) -> (crate::core::holders::Folder, crate::core::holders::Guard) {
+    (
+        crate::core::holders::Folder::at(&project.path, &project.id),
+        crate::core::holders::Guard::off(),
+    )
 }

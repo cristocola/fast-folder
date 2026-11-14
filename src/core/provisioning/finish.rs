@@ -125,6 +125,20 @@ pub(super) fn reconcile_paused(
             return;
         }
     };
+    // What uses the folder, before the copy is taken over: a refusal then
+    // leaves the record and the copy as they are, waiting.
+    let folder = crate::core::holders::Folder::at(&project.path, &project.id);
+    let guard = crate::core::holders::Guard::asked_by(false, pass.asking.clone());
+    let found = match crate::core::move_engine::ask_before_resuming(&project, &folder, &guard, None)
+    {
+        Ok(found) => found,
+        Err(error) => {
+            report.waiting.push(format!(
+                "{subject}: {error}; fastf goes on with the paused move once nothing uses it"
+            ));
+            return;
+        }
+    };
     let local_progress = std::sync::Mutex::new(crate::core::assets::Progress::new(&[]));
     let local_cancel = std::sync::atomic::AtomicBool::new(false);
     let progress = pass.ticker.progress().unwrap_or(&local_progress);
@@ -134,6 +148,11 @@ pub(super) fn reconcile_paused(
         target_base,
         final_path,
         transaction,
+        crate::core::move_engine::Asked {
+            in_use: Some(&found),
+            folder: &folder,
+            guard: &guard,
+        },
         progress,
         cancel,
     );

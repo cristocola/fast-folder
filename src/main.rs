@@ -279,12 +279,15 @@ enum Commands {
             Only the operating system's cross-device error enables the copy fallback.\n\
             It uses a private target-base transaction, copies every regular file and\n\
             empty directory, verifies exact paths/types/byte lengths plus unchanged\n\
-            source metadata, publishes atomically, and only then removes the source.\n\
-            Keep the project untouched while this copy is running.",
+            source metadata, publishes atomically, and only then removes the source.\n\n\
+            A project something is using is not moved: a program working in it or\n\
+            holding a file open, a container or sandbox mounting part of it, a service\n\
+            that names it. The refusal names each one; --force moves it anyway.",
         after_help = "Examples:\n  \
             fastf move ID0047 /mnt/projects/archive   # by full base path\n  \
             fastf move ID0047 01_PROJECTS             # by base folder name\n  \
-            fastf move lullaby                        # interactive base picker (TTY)"
+            fastf move lullaby                        # interactive base picker (TTY)\n  \
+            fastf move ID0047 archive --yes --force   # even while something uses it"
     )]
     Move {
         /// Project ID (e.g. ID0047), ID prefix, or name substring
@@ -297,6 +300,12 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
+        /// Move it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
+
         /// Start the move and return at once; `fastf jobs` follows it
         #[arg(long)]
         detach: bool,
@@ -305,7 +314,8 @@ enum Commands {
     /// Rename a project's folder on disk
     #[command(
         after_help = "The folder is renamed in place and the library's index updated; the project's\n\
-        ID and metadata do not change. Without a name, the current one is offered to edit.\n\n\
+        ID and metadata do not change. Without a name, the current one is offered to edit.\n\
+        A folder something is using is not renamed; --force renames it anyway.\n\n\
         Examples:\n  \
             fastf rename ID0047 2026-07-16_Spring_Campaign_v2_ID0047\n  \
             fastf rename lullaby                    # edit the current name in a prompt\n  \
@@ -321,6 +331,12 @@ enum Commands {
         /// Skip the confirmation prompt (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Rename it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Forget a project: remove its PROJECT_INFO.md and leave the files
@@ -343,7 +359,8 @@ enum Commands {
     /// Delete a project's folder and everything inside it
     #[command(
         after_help = "Permanent: there is no trash. Without --yes it names the folder and asks you\n\
-        to type the word `delete`, exactly as the guided app does.\n\n\
+        to type the word `delete`, exactly as the guided app does. A folder something is\n\
+        using is not deleted; --force deletes it anyway.\n\n\
         Examples:\n  \
             fastf delete ID0047\n  \
             fastf delete ID0047 --yes               # no confirmation (for scripts)"
@@ -355,6 +372,12 @@ enum Commands {
         /// Skip the confirmation (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Delete it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
 
         /// Start the delete and return at once; `fastf jobs` follows it
         #[arg(long)]
@@ -1399,18 +1422,28 @@ fn run() -> Result<()> {
             query,
             base,
             yes,
+            force,
             detach,
         }) => cli::move_project::run(cli::move_project::MoveArgs {
             query,
             base,
             yes,
+            force,
             detach,
         }),
-        Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
+        Some(Commands::Rename {
+            query,
+            name,
+            yes,
+            force,
+        }) => cli::folder_verbs::rename(&query, name, yes, force),
         Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
-        Some(Commands::Delete { query, yes, detach }) => {
-            cli::folder_verbs::delete(&query, yes, detach)
-        }
+        Some(Commands::Delete {
+            query,
+            yes,
+            force,
+            detach,
+        }) => cli::folder_verbs::delete(&query, yes, force, detach),
 
         Some(Commands::Reindex) => cli::reindex::run(),
         Some(Commands::Reconcile {

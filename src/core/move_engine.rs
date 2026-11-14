@@ -18,6 +18,7 @@ use std::sync::atomic::AtomicBool;
 
 use crate::core::assets::{JobPhase, Progress};
 use crate::core::config::Config;
+use crate::core::holders::{self, Folder, Guard, Holders, Verb};
 use crate::core::library::{
     Project, cache_remove, cache_upsert, project_from_meta, revalidate_project,
     revalidate_recorded_project, to_forward_slashes,
@@ -142,7 +143,8 @@ pub struct MoveOutcome {
     pub links: usize,
     /// What a person should know about the moved project: links whose
     /// meaning the new place may change (`MoveManifest::link_notes`), and
-    /// programs that were running in the old folder (`core::holders`).
+    /// what used the old folder (`core::holders`) — a shell's prompt, or
+    /// whatever a forced move went past.
     pub notes: Vec<String>,
 }
 
@@ -162,7 +164,8 @@ impl MoveOutcome {
 /// coarse data lock, revalidates the recorded source base and identity beneath
 /// it, and runs with throwaway progress/cancel handles. Applications use
 /// [`move_project_configured_with_outcome`], which also revalidates the target
-/// against freshly loaded configuration.
+/// against freshly loaded configuration. **It asks nothing about what uses
+/// the folder** (`Guard::off`): the tests drive it, and no surface reaches it.
 ///
 /// **Safety invariant: the source is never removed until the destination is
 /// fully copied AND verified.** Same-filesystem moves take an instant, atomic
@@ -176,7 +179,15 @@ pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
     let (outcome, housekeeping) = {
         let _data_lock = crate::util::lockfile::DataLock::acquire()?;
         let revalidated = revalidate_recorded_project(project)?;
-        move_project_unlocked_in_parts(&revalidated, new_base, &progress, &cancel)?
+        let folder = Folder::at(&revalidated.path, &revalidated.id);
+        move_project_unlocked_in_parts(
+            &revalidated,
+            new_base,
+            &folder,
+            &Guard::off(),
+            &progress,
+            &cancel,
+        )?
     };
     let outcome = finish_housekeeping(outcome, housekeeping, Ticker::none());
     report_cleanup_pending(&outcome, &project.path);
@@ -187,13 +198,27 @@ pub fn move_project(project: &Project, new_base: &Path) -> Result<Project> {
 /// mutation lock, then revalidates both source and target against that fresh
 /// snapshot before touching either path. Removing the old copy runs after the
 /// lock is released ([`move_project_in_parts`], [`finish_housekeeping`]).
+/// Like [`move_project`], it asks nothing about what uses the folder;
+/// [`move_project_with_outcome`] does.
 pub fn move_project_configured_with_outcome(
     project: &Project,
     new_base: &Path,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
-    let result = move_project_in_parts(project, new_base, progress, cancel).map(
+    move_project_with_outcome(project, new_base, &Guard::off(), progress, cancel)
+}
+
+/// [`move_project_configured_with_outcome`], asking what uses the folder
+/// first, as `guard` says.
+pub fn move_project_with_outcome(
+    project: &Project,
+    new_base: &Path,
+    guard: &Guard,
+    progress: &Mutex<Progress>,
+    cancel: &AtomicBool,
+) -> Result<MoveOutcome> {
+    let result = move_project_in_parts(project, new_base, guard, progress, cancel).map(
         |(outcome, housekeeping)| {
             finish_housekeeping(
                 outcome,
@@ -217,9 +242,13 @@ pub fn move_project_configured_with_outcome(
 ///
 /// The progress is not settled here: the caller does that, after the
 /// housekeeping, or when it hands it on.
+///
+/// **What uses the folder is asked first, under the lock** (`guard`), and
+/// refuses the move before anything changes unless the guard goes past it.
 pub fn move_project_in_parts(
     project: &Project,
     new_base: &Path,
+    guard: &Guard,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
@@ -254,7 +283,12 @@ pub fn move_project_in_parts(
                     crate::util::paths::display_path(new_base)
                 )
             })?;
-        move_project_unlocked_in_parts(&project, &target, progress, cancel)
+        let folder = if guard.look {
+            Folder::of(&cfg, &project)
+        } else {
+            Folder::at(&project.path, &project.id)
+        };
+        move_project_unlocked_in_parts(&project, &target, &folder, guard, progress, cancel)
     })();
     ticker.update(|state| state.holds_lock = false);
     moved
@@ -323,6 +357,8 @@ pub fn move_project_staged_for_test(project: &Project, new_base: &Path) -> Resul
 fn move_project_unlocked_in_parts(
     project: &Project,
     new_base: &Path,
+    asked: &Folder,
+    guard: &Guard,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
@@ -355,11 +391,41 @@ fn move_project_unlocked_in_parts(
     })?;
     let folder = PathBuf::from(folder_os);
     let new_path = new_base.join(&folder);
+    // What uses the folder, before anything changes — the rename on one
+    // filesystem included: a program working in the folder follows a
+    // rename, but a service, a container or a script that names the path
+    // does not, and makes the old folder again empty. The staged path and a
+    // resumed one take this answer rather than asking again.
+    let in_use = if holders::BEFORE_THE_RENAME && guard.look {
+        Ticker::new(progress, cancel).phase(JobPhase::Asking, 0);
+        Some(holders::check(asked, Verb::Move, guard)?)
+    } else {
+        None
+    };
+    let in_use = in_use.as_ref();
     // The same move, paused before its publish: it goes on from its copy.
     if let Some(transaction) = paused_move(project, &new_base) {
-        return resume_in_parts(project, &new_base, &new_path, transaction, progress, cancel);
+        let found = ask_before_resuming(project, asked, guard, in_use)?;
+        return resume_in_parts(
+            project,
+            &new_base,
+            &new_path,
+            transaction,
+            Asked {
+                in_use: Some(&found),
+                folder: asked,
+                guard,
+            },
+            progress,
+            cancel,
+        );
     }
     transactions::clear_target(&new_path)?;
+    let asked = Asked {
+        in_use,
+        folder: asked,
+        guard,
+    };
 
     // Fast path: same-filesystem rename is atomic and instant — no staging,
     // no verification needed (there is no window in which data is half-there).
@@ -374,12 +440,11 @@ fn move_project_unlocked_in_parts(
     // path is what a test is about, and a same-volume rename would succeed and
     // never reach it. The arm is a decision, not a failure to propagate, which
     // is why the engine asks `is_armed` rather than letting `check` trip.
-    // A program working in the folder follows it through a rename on one
-    // filesystem — its open files are the same files — but one that writes
-    // by path makes the old folder again: say so.
-    let rename_notes = crate::core::holders::in_tree(&project.path).notes();
+    let rename_notes = in_use
+        .map(|found| found.notes(Verb::Move))
+        .unwrap_or_default();
     let outcome = if crate::util::faults::is_armed("move:force-staged") {
-        staged_copy_verify_commit_in_parts(project, &new_base, &new_path, progress, cancel)?
+        staged_copy_verify_commit_in_parts(project, &new_base, &new_path, asked, progress, cancel)?
     } else {
         match fs::rename(&project.path, &new_path) {
             Ok(()) => {
@@ -398,16 +463,14 @@ fn move_project_unlocked_in_parts(
             }
             Err(error) if is_cross_device_error(&error) => {
                 return staged_copy_verify_commit_in_parts(
-                    project, &new_base, &new_path, progress, cancel,
+                    project, &new_base, &new_path, asked, progress, cancel,
                 );
             }
             Err(error) => {
                 // Windows refuses a folder with anything in it open, and
                 // says only "access is denied": say who. The sentence is
                 // the error, so nothing explains it as a permission.
-                if cfg!(windows)
-                    && let Some(held) = crate::core::holders::in_tree(&project.path).refusal()
-                {
+                if let Some(held) = holders::held_on_windows(&project.path) {
                     anyhow::bail!("{held}");
                 }
                 return Err(error).with_context(|| {
@@ -473,8 +536,20 @@ pub const MOVE_STEPS: &[JobPhase] = &[
     JobPhase::Clearing,
 ];
 
+/// What a move asked about its folder before it staged, and how to ask when
+/// it did not ([`holders::check`]).
+#[derive(Clone, Copy)]
+pub(crate) struct Asked<'a> {
+    /// The answer asked before the rename; `None` where nothing was asked
+    /// then, and the staged path asks after its scan.
+    pub(crate) in_use: Option<&'a Holders>,
+    pub(crate) folder: &'a Folder,
+    pub(crate) guard: &'a Guard,
+}
+
 /// The whole staged move in one call, for the tests and the test-only entry
-/// point that force the staged path.
+/// point that force the staged path. It asks what uses the folder after its
+/// scan, as this process.
 #[cfg(any(test, debug_assertions))]
 pub(crate) fn staged_copy_verify_commit(
     project: &Project,
@@ -483,8 +558,15 @@ pub(crate) fn staged_copy_verify_commit(
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
+    let folder = Folder::at(&project.path, &project.id);
+    let guard = Guard::here(false);
+    let asked = Asked {
+        in_use: None,
+        folder: &folder,
+        guard: &guard,
+    };
     let (outcome, housekeeping) =
-        staged_copy_verify_commit_in_parts(project, new_base, new_path, progress, cancel)?;
+        staged_copy_verify_commit_in_parts(project, new_base, new_path, asked, progress, cancel)?;
     Ok(finish_housekeeping(
         outcome,
         housekeeping,
@@ -498,6 +580,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
+    asked: Asked<'_>,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
@@ -529,6 +612,7 @@ pub(crate) fn staged_copy_verify_commit_in_parts(
         new_path,
         transaction,
         false,
+        asked,
         progress,
         cancel,
     )
@@ -571,13 +655,39 @@ pub(crate) fn paused_move(project: &Project, new_base: &Path) -> Option<MoveTran
     })
 }
 
+/// What uses a paused move's folder, asked **before** its copy is adopted:
+/// a refusal after that would be a failure before the publish, which throws
+/// the copy away. The answer from before the rename when there is one; where
+/// nothing is asked then, Windows' holds.
+pub(crate) fn ask_before_resuming(
+    project: &Project,
+    folder: &Folder,
+    guard: &Guard,
+    in_use: Option<&Holders>,
+) -> Result<Holders> {
+    if let Some(found) = in_use {
+        return Ok(found.clone());
+    }
+    if holders::BEFORE_THE_RENAME {
+        return holders::check(folder, Verb::Move, guard);
+    }
+    match holders::held_on_windows(&project.path) {
+        Some(held) => anyhow::bail!("{held}"),
+        None => Ok(Holders::nothing(folder)),
+    }
+}
+
 /// Resume a paused move: the same steps as a new one, taking over the copy
 /// it made ([`transactions::adopt_staging`]) instead of starting one.
+///
+/// **What uses the folder is asked before this** ([`ask_before_resuming`]),
+/// and `asked` carries the answer.
 pub(crate) fn resume_in_parts(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
     transaction: MoveTransaction,
+    asked: Asked<'_>,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
@@ -591,6 +701,7 @@ pub(crate) fn resume_in_parts(
         new_path,
         transaction,
         true,
+        asked,
         progress,
         cancel,
     )
@@ -609,12 +720,14 @@ pub(crate) fn resume_in_parts(
 /// and removing it are housekeeping, run with a ticker that cannot cancel,
 /// and a surface answers a late cancel with "too late"
 /// ([`Progress::committed`]).
+#[allow(clippy::too_many_arguments)]
 fn staged_in_parts(
     project: &Project,
     new_base: &Path,
     new_path: &Path,
     transaction: MoveTransaction,
     adopt: bool,
+    asked: Asked<'_>,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
@@ -632,6 +745,7 @@ fn staged_in_parts(
         old_base: &old_base,
         new_base,
         new_path,
+        asked,
         progress,
         cancel,
         ticker,
@@ -665,6 +779,7 @@ struct Staged<'a> {
     old_base: &'a Path,
     new_base: &'a Path,
     new_path: &'a Path,
+    asked: Asked<'a>,
     progress: &'a Mutex<Progress>,
     cancel: &'a AtomicBool,
     ticker: Ticker<'a>,
@@ -673,9 +788,10 @@ struct Staged<'a> {
 /// How far a staged move has come, which decides what a failure undoes.
 #[derive(Default)]
 struct Reached {
-    /// Who works in the folder: asked after the scan, which Windows needs —
-    /// it asks about each file and folder the scan found.
-    holders: crate::core::holders::Holders,
+    /// What uses the folder: asked before the rename where that is asked
+    /// (Linux), or after the scan, which Windows needs — it asks about each
+    /// file and folder the scan found.
+    holders: Holders,
     /// Set once the copy is there to keep: a mount that stops answering from
     /// then on pauses the move instead of throwing the copy away.
     claimed: bool,
@@ -703,6 +819,7 @@ impl Staged<'_> {
             project,
             old_base,
             new_base,
+            asked,
             progress,
             cancel,
             ticker,
@@ -712,14 +829,14 @@ impl Staged<'_> {
         ticker.working_in(&project.path);
         let manifest = MoveManifest::scan_with(&project.path, ticker)?;
         ticker.phase(JobPhase::Probing, 0);
-        // Before a byte is copied: is a program writing in it — after the
-        // move its writes would land in the old copy, which then goes — or,
-        // on Windows, holding anything in it, which keeps the old copy from
-        // ever being set aside?
-        reached.holders = crate::core::holders::in_manifest(&project.path, &manifest);
-        if let Some(refusal) = reached.holders.refusal() {
-            anyhow::bail!("{refusal}");
-        }
+        // Before a byte is copied: what uses it — its writes would land in
+        // the old copy, which then goes — or, on Windows, what holds anything
+        // in it, which keeps the old copy from ever being set aside. Asked
+        // before the rename already where that is asked at all.
+        reached.holders = match asked.in_use {
+            Some(found) => found.clone(),
+            None => holders::check_scanned(asked.folder, &manifest, Verb::Move, asked.guard)?,
+        };
         // Can the original be taken out of its base afterwards, and does the
         // target have the room?
         crate::core::move_preflight::probe_source_base(
@@ -926,7 +1043,7 @@ impl Staged<'_> {
         mut transaction: MoveTransaction,
         manifest: &MoveManifest,
         published_record: &MoveManifest,
-        holders: &crate::core::holders::Holders,
+        holders: &Holders,
     ) -> Result<(MoveOutcome, Option<move_cleanup::Housekeeping>)> {
         let Self {
             project,
@@ -1014,7 +1131,7 @@ impl Staged<'_> {
                 notes: manifest
                     .link_notes(&project.path)
                     .into_iter()
-                    .chain(holders.notes())
+                    .chain(holders.notes(Verb::Move))
                     .collect(),
             },
             housekeeping,

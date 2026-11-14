@@ -480,6 +480,21 @@ fn move_item<'v>(
             actions: Vec::new(),
         };
     }
+    // A paused move whose folder something uses waits for it: a reconcile
+    // would only be refused, every time the app starts one.
+    if let Some(why) = record
+        .as_deref()
+        .and_then(|record| paused_in_use(record, &journal))
+    {
+        return Item {
+            state: State::Waiting,
+            what: "a move".to_string(),
+            path,
+            project,
+            reason: format!("{why}; fastf goes on with the paused move once nothing uses it"),
+            actions: Vec::new(),
+        };
+    }
     let old_copy = match journal.retire {
         transactions::RetireStrategy::Rename => {
             transactions::retired_path(&journal.source_base, &journal.operation_id)
@@ -497,6 +512,23 @@ fn move_item<'v>(
         reason: "an interrupted move, or its old copy's removal; fastf finishes it".to_string(),
         actions: Vec::new(),
     }
+}
+
+/// What uses a paused move's original, as the refusal its resume would
+/// give; `None` when the record is not a paused move, or nothing does.
+fn paused_in_use(record: &Path, journal: &transactions::MoveJournal) -> Option<String> {
+    let target_base = record.parent()?.parent()?;
+    let paused = journal.phase == transactions::MovePhase::Copying
+        && transactions::transaction_from_journal(target_base, record, journal.clone()).is_paused();
+    if !paused {
+        return None;
+    }
+    let source = journal.source_base.join(&journal.source_folder);
+    let folder = crate::core::holders::Folder::at(&source, &journal.project_id);
+    let guard = crate::core::holders::Guard::here(false);
+    crate::core::holders::check(&folder, crate::core::holders::Verb::Move, &guard)
+        .err()
+        .map(|error| format!("{error}"))
 }
 
 /// **Settle an item that needs a person, as they chose.** The caller holds

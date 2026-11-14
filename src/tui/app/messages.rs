@@ -107,6 +107,7 @@ impl App {
             }
             Msg::Details(read) => self.on_details(read),
             Msg::Working { asked, active } => self.on_working(asked, active),
+            Msg::InUse { request, found } => self.on_in_use(request, found),
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
                 self.recompute();

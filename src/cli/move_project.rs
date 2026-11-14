@@ -5,13 +5,16 @@
 //! so a moved project always stays discoverable. Only a cross-device rename
 //! (EXDEV, Windows's `ERROR_NOT_SAME_DEVICE`) takes the staged copy
 //! transaction, which copies, verifies and publishes before the original is set
-//! aside (`src/core/CLAUDE.md` › Moving projects).
+//! aside (`src/core/CLAUDE.md` › Moving projects). What uses the folder is
+//! asked before the confirmation (`cli::in_use`).
 
 use anyhow::Result;
 use colored::Colorize;
 use std::path::PathBuf;
 
+use crate::cli::in_use::{Go, shell_word};
 use crate::core::config::Config;
+use crate::core::holders::Verb;
 use crate::core::library;
 
 pub struct MoveArgs {
@@ -21,6 +24,8 @@ pub struct MoveArgs {
     pub base: Option<String>,
     /// Skip the confirmation prompt.
     pub yes: bool,
+    /// Move it even when something uses the folder (`cli::in_use`).
+    pub force: bool,
     /// Start the move and return; `fastf jobs` follows it.
     pub detach: bool,
 }
@@ -101,33 +106,71 @@ pub fn run(args: MoveArgs) -> Result<()> {
         }
     };
 
-    // Confirm before touching anything. Deliberately no size figure: getting one
-    // means walking the whole tree, which is wasted on the same-filesystem
-    // rename that handles most moves, and slow over NTFS. The job's progress
-    // reports real numbers once there is actually something to copy.
-    if !args.yes {
-        // A confirmation that cannot be shown is not a confirmation: without a
-        // terminal, only `--yes` answers it.
-        crate::util::tty::require_tty("confirm", "pass --yes to move without confirming")?;
+    let heading = || {
         println!(
             "  {} {}  {} {}",
             "move".dimmed(),
             project.name.bold(),
             "→".cyan(),
             crate::util::paths::display_path(&target)
-        );
-        let ok = crate::tui::prompt::confirm("Move this project?", true)?.unwrap_or(false);
-        if !ok {
-            crate::tui::prompt::report_cancelled("nothing moved");
-            return Ok(());
+        )
+    };
+    let again = format!(
+        "fastf move {} {} --yes --force",
+        shell_word(&project.id),
+        shell_word(
+            &args
+                .base
+                .clone()
+                .unwrap_or_else(|| crate::util::paths::display_path(&target))
+        )
+    );
+    // What uses the folder, before the question: a list and `Move anyway?`
+    // in its place, or a refusal under `--yes`.
+    let force = match crate::cli::in_use::before(
+        &cfg,
+        &project,
+        Verb::Move,
+        args.yes,
+        args.force,
+        &again,
+        heading,
+    )? {
+        Go::Cancelled => return Ok(()),
+        Go::Ahead { asked: true, force } => force,
+        Go::Ahead { force, .. } => {
+            // Confirm before touching anything. Deliberately no size figure:
+            // getting one means walking the whole tree, which is wasted on the
+            // same-filesystem rename that handles most moves, and slow over
+            // NTFS. The job's progress reports real numbers once there is
+            // actually something to copy.
+            if !args.yes {
+                // A confirmation that cannot be shown is not a confirmation:
+                // without a terminal, only `--yes` answers it.
+                crate::util::tty::require_tty("confirm", "pass --yes to move without confirming")?;
+                heading();
+                let ok = crate::tui::prompt::confirm("Move this project?", true)?.unwrap_or(false);
+                if !ok {
+                    crate::tui::prompt::report_cancelled("nothing moved");
+                    return Ok(());
+                }
+            }
+            force
         }
-    }
+    };
 
     // A job of its own: this terminal follows it, and closing it or killing
     // this process leaves the move to finish (`cli::jobs`).
     let item = crate::core::jobs::JobItem::of(&project, Some(&target))?;
-    match crate::cli::jobs::start(crate::core::jobs::JobKind::Move, vec![item], args.detach)? {
-        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+    match crate::cli::jobs::start(
+        crate::core::jobs::JobKind::Move,
+        vec![item],
+        force,
+        args.detach,
+    )? {
+        crate::cli::jobs::Followed::Ended(state) => {
+            crate::cli::jobs::finish(&state, Some((Verb::Move, &again)))
+        }
         _ => Ok(()),
     }
 }

@@ -93,10 +93,18 @@ pub enum Effect {
     /// field that was wrong.
     Preview(Box<Request>),
     /// Start a job — a move, a copy, a delete, a reconcile — in a process of
-    /// its own.
+    /// its own. `force` goes past what uses a folder.
     StartJob {
         kind: crate::core::jobs::JobKind,
         items: Vec<crate::core::jobs::JobItem>,
+        force: bool,
+    },
+    /// What uses each folder, before a move, a delete or a rename takes it
+    /// away (`core::holders`): each by its path and the id the sentences
+    /// call it, answered by `Msg::InUse` carrying `request` back.
+    CheckInUse {
+        request: u64,
+        folders: Vec<(PathBuf, String)>,
     },
     /// Read `jobs/` now, rather than at the next watch.
     WatchJobs,
@@ -255,6 +263,8 @@ pub enum Action {
     Rename {
         project: Box<Project>,
         name: String,
+        /// Past what uses the folder (`core::holders`).
+        force: bool,
     },
     Unregister(Box<Project>),
     /// Settle an unfinished item as the person chose

@@ -144,6 +144,8 @@ pub enum JobPhase {
     Starting,
     /// Another fastf holds the data lock.
     Waiting,
+    /// Asking what uses the folder before it goes (`core::holders`).
+    Asking,
     /// Walking the project to record what it holds.
     Scanning,
     /// Asking the original's base whether the original can leave it.
@@ -175,6 +177,7 @@ impl JobPhase {
         match self {
             JobPhase::Starting => "starting",
             JobPhase::Waiting => "waiting for another fastf",
+            JobPhase::Asking => "checking what uses it",
             JobPhase::Scanning => "scanning",
             JobPhase::Probing => "checking the original's base",
             JobPhase::Copying => "copying",
@@ -194,6 +197,7 @@ impl JobPhase {
         match self {
             JobPhase::Starting => "started",
             JobPhase::Waiting => "waited for another fastf",
+            JobPhase::Asking => "checked what uses it",
             JobPhase::Scanning => "scanned",
             JobPhase::Probing => "checked the original's base",
             JobPhase::Copying => "copied",

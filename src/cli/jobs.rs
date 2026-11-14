@@ -30,9 +30,15 @@ pub(crate) enum Followed {
     Detached,
 }
 
-/// Start a job and follow it, or only start it.
-pub(crate) fn start(kind: JobKind, items: Vec<JobItem>, detach: bool) -> Result<Followed> {
-    let id = crate::core::jobs::start(kind, items)?;
+/// Start a job and follow it, or only start it. `force` goes past what uses
+/// a folder (`core::jobs::JobRequest::force`).
+pub(crate) fn start(
+    kind: JobKind,
+    items: Vec<JobItem>,
+    force: bool,
+    detach: bool,
+) -> Result<Followed> {
+    let id = crate::core::jobs::start(kind, items, force)?;
     if detach {
         println!(
             "{}  started job {}: {}",
@@ -108,15 +114,24 @@ pub(crate) fn follow(id: &str) -> Result<Followed> {
 }
 
 /// Print a job's items as the verb's own outcome, and fail with the verb's own
-/// error.
-pub(crate) fn finish(state: &JobState) -> Result<()> {
+/// error. `again` is the verb and the command that goes past what uses a
+/// folder, for an item the job refused for that.
+pub(crate) fn finish(
+    state: &JobState,
+    again: Option<(crate::core::holders::Verb, &str)>,
+) -> Result<()> {
     let mut failures = Vec::new();
     for item in &state.items {
         if item.headline.is_empty() {
             continue;
         }
         if let Some(error) = &item.error {
-            failures.push(error.clone());
+            failures.push(match again {
+                Some((verb, again)) if item.in_use => {
+                    format!("{error}\nhint: {}", crate::cli::in_use::hint(verb, again))
+                }
+                _ => error.clone(),
+            });
             continue;
         }
         println!("{}  {}", "✓".green().bold(), bold_headline(&item.headline));
@@ -230,9 +245,13 @@ fn pick(id: Option<String>) -> Result<String> {
 /// `fastf jobs watch [id]`.
 pub fn watch(id: Option<String>) -> Result<()> {
     let id = pick(id)?;
+    let again = crate::core::jobs::view(&id).and_then(|job| again_for(&job));
     match follow(&id)? {
         Followed::Ended(state) => {
-            finish(&state)?;
+            finish(
+                &state,
+                again.as_ref().map(|(verb, again)| (*verb, again.as_str())),
+            )?;
             if state.items.iter().all(|item| item.headline.is_empty()) && !state.summary.is_empty()
             {
                 println!("{}  {}", "✓".green().bold(), state.summary);
@@ -240,6 +259,30 @@ pub fn watch(id: Option<String>) -> Result<()> {
             Ok(())
         }
         Followed::LeftRunning | Followed::Detached => Ok(()),
+    }
+}
+
+/// The command that does a job of one move or one delete again past what
+/// uses its folder.
+fn again_for(job: &JobView) -> Option<(crate::core::holders::Verb, String)> {
+    use crate::cli::in_use::shell_word;
+    let [item] = job.request.as_ref()?.items.as_slice() else {
+        return None;
+    };
+    match job.kind()? {
+        JobKind::Move => Some((
+            crate::core::holders::Verb::Move,
+            format!(
+                "fastf move {} {} --yes --force",
+                shell_word(&item.id),
+                shell_word(&item.target)
+            ),
+        )),
+        JobKind::Delete => Some((
+            crate::core::holders::Verb::Delete,
+            format!("fastf delete {} --yes --force", shell_word(&item.id)),
+        )),
+        _ => None,
     }
 }
 

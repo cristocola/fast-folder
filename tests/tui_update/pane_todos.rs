@@ -1226,6 +1226,57 @@ fn unticking_under_an_open_fold_keeps_it_there_until_the_fold_is_hidden() {
         ["[ ] 0", "[ ] 1", "add", "add"],
         "hidden, the open one is with the open ones"
     );
+    assert_eq!(
+        on(&app),
+        "[ ] 1",
+        "the fold is gone, so the cursor is on its run's last todo"
+    );
+
+    // Among several phases the cursor stays in the run whose fold went,
+    // not on the add line at the end of the last one.
+    let mut app = editing_fixture();
+    let phased = |shoot_done: bool| {
+        [
+            (shoot_done, "shoot the band", Some("Shoot")),
+            (false, "shoot the crowd", Some("Shoot")),
+            (false, "cut", Some("Edit")),
+            (true, "grade", Some("Edit")),
+            (false, "deliver", Some("Deliver")),
+            (false, "invoice", Some("Deliver")),
+        ]
+    };
+    with_todos(&mut app, &phased(true));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Fold { group: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Reopened.");
+    with_todos(&mut app, &phased(false));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Fold { group: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        shape(&app),
+        [
+            "## Shoot",
+            "[ ] 0",
+            "[ ] 1",
+            "## Edit",
+            "[ ] 2",
+            "fold 1",
+            "## Deliver",
+            "[ ] 4",
+            "[ ] 5",
+            "add",
+            "add"
+        ]
+    );
+    assert_eq!(on(&app), "[ ] 1", "the cursor stays in the Shoot run");
 }
 
 /// **F2 rewording a todo ticked on this visit keeps its row.** The hold

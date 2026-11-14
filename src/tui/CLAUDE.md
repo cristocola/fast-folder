@@ -1076,9 +1076,11 @@ on its way when the tick was made. The pane's own F2 is not an outside edit:
 when its write lands the hold takes the new words as the reader will return
 them (`hold_through_a_reword`), keeping the old ones until the re-read, so a
 todo ticked and then reworded keeps its row. Hiding the done todos drops the
-holds under the folds, or an untick held there would vanish with them.
-`App::pane_rows` also applies a hold only while one of its texts matches. A
-todo that went into its fold under the cursor — ticked elsewhere — leaves the cursor on that fold
+holds under the folds, or an untick held there would vanish with them; when
+that leaves a run nothing under its fold, the fold goes, and the cursor goes
+to the run's last todo, the row just above it, rather than to the add line
+at the end of the last run. `App::pane_rows` also applies a hold only while
+one of its texts matches. A todo that went into its fold under the cursor — ticked elsewhere — leaves the cursor on that fold
 (`find_row`). **`+` on a fold is `+` in its run** (`place_at`), and the add
 line goes at the end of the run's open todos, above the fold, where the new
 open todo will be drawn (`with_adding`; `End` is the last run's open end);

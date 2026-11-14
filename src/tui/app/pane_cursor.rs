@@ -78,17 +78,36 @@ impl App {
     /// the fold. Hiding drops the holds under the folds — an untick held
     /// there would otherwise vanish with them — and the pulses go, since
     /// they are kept by row and the rows below have moved.
+    ///
+    /// A fold whose rows were all unticked under it is gone once they join
+    /// the open ones, and the cursor goes to its run's last todo, the row
+    /// just above where the fold was: drawn open, since nothing of the run
+    /// is under a fold any more. Left to find the fold, it would land on
+    /// the add line at the end of the last run, maybe out of view.
     pub(super) fn toggle_done_shown(&mut self, group: usize) {
         let Some(path) = self.library.selected().map(|p| p.path.clone()) else {
             return;
         };
+        let run = self.pane_rows().into_iter().find_map(|row| match row {
+            PaneRow::Fold {
+                group: g, tasks, ..
+            } if g == group => Some(tasks),
+            _ => None,
+        });
         if !self.done_shown.remove(&path) {
             self.done_shown.insert(path);
         } else {
             self.pane_held.retain(|_, (at, _)| *at == HeldAt::OpenRun);
         }
         self.pane_pulses.clear();
-        self.pane_anchor = Some(PaneTarget::Fold(group));
+        let fold_drawn = self
+            .pane_rows()
+            .iter()
+            .any(|row| matches!(row, PaneRow::Fold { group: g, .. } if *g == group));
+        self.pane_anchor = Some(match run.and_then(|mut tasks| tasks.next_back()) {
+            Some(last) if !fold_drawn => PaneTarget::Todo(last),
+            _ => PaneTarget::Fold(group),
+        });
         self.refind_pane();
     }
 

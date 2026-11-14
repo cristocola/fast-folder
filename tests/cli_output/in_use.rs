@@ -281,3 +281,38 @@ fn whoever_asked_is_left_out() {
     );
     assert!(archive.join("second").is_dir() && !second.exists());
 }
+
+/// **Neither does what the command is piped to or from.** `tail`, `grep` or a
+/// `sleep` feeding its input work in the project only because the shell that
+/// ran the pipeline does; an agent in the project that pipes `fastf move` to
+/// `tail` is not refused by its own `tail`, by the command line's look or by
+/// the job's.
+#[test]
+fn what_the_command_is_piped_to_or_from_is_left_out() {
+    let sb = Sandbox::new();
+    let archive = sb.with_bases(&["archive"]).remove(0);
+    let first = sb.plant_project(&sb.base, "first", "ID0001");
+    let second = sb.plant_project(&sb.base, "second", "ID0002");
+
+    parent_of_fastf(
+        &sb,
+        &first,
+        "bash",
+        &[
+            "-c",
+            "set -o pipefail; \"$FASTF\" move ID0001 archive --yes 2>&1 | cat | tail -n 50",
+        ],
+    );
+    assert!(archive.join("first").is_dir() && !first.exists());
+
+    parent_of_fastf(
+        &sb,
+        &second,
+        "bash",
+        &[
+            "-c",
+            "set -o pipefail; sleep 20 | \"$FASTF\" move ID0002 archive --yes",
+        ],
+    );
+    assert!(archive.join("second").is_dir() && !second.exists());
+}

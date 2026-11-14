@@ -353,6 +353,52 @@ fn read_one(context: &Context, pid: u32) -> Option<Seen> {
     })
 }
 
+/// The pipes a process holds as its standard input, output and error, by
+/// the text of their links (`pipe:[4242]`).
+fn stdio_pipes(pid: u32) -> HashSet<String> {
+    let fd = PathBuf::from(format!("/proc/{pid}/fd"));
+    (0..3)
+        .filter_map(|n| std::fs::read_link(fd.join(n.to_string())).ok())
+        .map(|target| target.to_string_lossy().into_owned())
+        .filter(|target| target.starts_with("pipe:["))
+        .collect()
+}
+
+/// The processes this one's own pipes join it to ([`judge::pipeline`]),
+/// each with when it started. `chain` is this process and those above it.
+/// Reading a link under `fd` asks nothing of the process or of a mount.
+pub(super) fn pipeline_partners(chain: &[Asking]) -> Vec<Asking> {
+    let me = std::process::id();
+    let mine = stdio_pipes(me);
+    if mine.is_empty() {
+        return Vec::new();
+    }
+    let inherited: HashSet<String> = chain
+        .iter()
+        .filter(|asking| asking.pid != me)
+        .flat_map(|asking| stdio_pipes(asking.pid))
+        .collect();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let others: Vec<(u32, HashSet<String>)> = entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| !chain.iter().any(|asking| asking.pid == *pid))
+        .map(|pid| (pid, stdio_pipes(pid)))
+        .filter(|(_, pipes)| !pipes.is_empty())
+        .collect();
+    judge::pipeline(&mine, &inherited, &others)
+        .into_iter()
+        .filter_map(|pid| {
+            crate::util::process::stat(pid).map(|stat| Asking {
+                pid,
+                started: stat.started,
+            })
+        })
+        .collect()
+}
+
 /// The process's name ([`judge::program_name`]), reading `comm` only when
 /// nothing else says.
 fn name_of(base: &Path, argv: &[String], exe: Option<&Path>) -> String {

@@ -208,6 +208,35 @@ pub(super) fn started_from(argv: &[String], cwd: Option<&Path>) -> Option<PathBu
     cwd.map(|cwd| normalise(&cwd.join(first)))
 }
 
+/// The processes joined to the asker by its own pipes: those holding, as
+/// their standard input, output or error, a pipe the asker holds as one of
+/// its own, and so on along the pipeline (`fastf move … | grep x | tail`).
+/// The shell started them with the command, so they work in its folder only
+/// because it does. A pipe a process above the asker also holds (`inherited`)
+/// joins nothing: it is a whole session's output, which a job started in the
+/// background shares too.
+pub(super) fn pipeline(
+    mine: &HashSet<String>,
+    inherited: &HashSet<String>,
+    others: &[(u32, HashSet<String>)],
+) -> Vec<u32> {
+    let mut pipes: HashSet<&String> = mine.difference(inherited).collect();
+    let mut joined: Vec<u32> = Vec::new();
+    loop {
+        let before = joined.len();
+        for (pid, theirs) in others {
+            if joined.contains(pid) || !theirs.iter().any(|pipe| pipes.contains(pipe)) {
+                continue;
+            }
+            joined.push(*pid);
+            pipes.extend(theirs.iter().filter(|pipe| !inherited.contains(*pipe)));
+        }
+        if joined.len() == before {
+            return joined;
+        }
+    }
+}
+
 /// The paths a process's arguments name: each argument after the program,
 /// and its pieces between `=`, `,` and `:` (`--config=/p/c.toml`,
 /// `-v /p/data:/app/data`), the pieces first. A relative one is taken from

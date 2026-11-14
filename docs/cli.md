@@ -952,7 +952,8 @@ using the project (unless the job was started with `--force`), a full or
 read-only drive, a name the drive will not take — and then the first thing it
 says is what kind of problem it is and what to do. A job asks what uses each
 folder again under the library's lock, leaving out whoever started it: its
-request records that process and every one above it.
+request records that process, every one above it and what the command is
+piped to or from.
 
 While a move copies it holds the library's lock, so a change made elsewhere
 meanwhile — a tag, a note — waits, and says which job it waits for. Removing

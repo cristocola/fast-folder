@@ -568,8 +568,10 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
   under the lock the project is canonical and a unit or an argument may spell
   it through a link;
 - **never counted**: fastf (by its exe link's text, never a stat through it),
-  and `Guard::asking` — whoever asked and every process above them, by pid and
-  start time; a job carries its starter's chain in `JobRequest::asking`;
+  and `Guard::asking` — whoever asked, every process above them, and the
+  processes the asker's own stdio pipes join it to (`judge::pipeline`; a pipe
+  an ancestor also holds is the session's output and joins nothing), by pid
+  and start time; a job carries its starter's chain in `JobRequest::asking`;
 - **a namespace's mount counts only when this machine's table lacks its
   (dev, root)**: a namespace starts as a copy, and an inherited mount is no
   choice of its own; a foreign process's paths are translated through its own

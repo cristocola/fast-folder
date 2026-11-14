@@ -451,7 +451,8 @@ names the path does.
 
 **What never counts**: fastf itself, and whoever asked — the shell that typed
 the command, the agent that ran it, the app and the terminal it runs in — and
-every process above them. A job records that chain when it starts, so its own
+every process above them, and what the command is piped to or from
+(`fastf move … | tail`). A job records that chain when it starts, so its own
 look leaves it out too.
 
 **What is only a note** in the result:

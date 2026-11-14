@@ -660,8 +660,9 @@ pub const BEFORE_THE_RENAME: bool = cfg!(target_os = "linux");
 /// would be a guess.
 pub const WORKING_KNOWN: bool = cfg!(target_os = "linux");
 
-/// This process and every process above it, each with when it started: what
-/// a verb asked from here records as [`Guard::asking`]. Linux only; empty
+/// This process, every process above it, and the processes its own pipes
+/// join it to (`fastf move … | tail`), each with when it started: what a
+/// verb asked from here records as [`Guard::asking`]. Linux only; empty
 /// elsewhere.
 pub fn asking_chain() -> Vec<Asking> {
     #[cfg(target_os = "linux")]
@@ -683,6 +684,8 @@ pub fn asking_chain() -> Vec<Asking> {
             }
             pid = stat.ppid;
         }
+        let partners = linux::pipeline_partners(&chain);
+        chain.extend(partners);
         chain
     }
     #[cfg(not(target_os = "linux"))]

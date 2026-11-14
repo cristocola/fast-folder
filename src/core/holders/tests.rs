@@ -291,6 +291,32 @@ fn arguments_name_paths_in_every_form() {
     );
 }
 
+/// The pipeline is followed from the asker's own pipes through every
+/// process on them, but never through a pipe a process above the asker holds
+/// too: that is the session's output, shared by whatever ran in the
+/// background.
+#[test]
+fn the_asker_s_pipeline_is_followed_but_not_its_session_s_output() {
+    let pipes = |names: &[&str]| -> HashSet<String> {
+        names.iter().map(|name| format!("pipe:[{name}]")).collect()
+    };
+    let others = vec![
+        (10, pipes(&["out", "a"])),     // `| cat`, writing on to the session
+        (11, pipes(&["a"])),            // `| tail`, after cat
+        (12, pipes(&["in"])),           // `sleep |`, feeding the asker
+        (13, pipes(&["session"])),      // a job in the background
+        (14, pipes(&["b", "session"])), // another pipeline of the session
+    ];
+    let mut joined = judge::pipeline(
+        &pipes(&["out", "in", "session"]),
+        &pipes(&["session"]),
+        &others,
+    );
+    joined.sort_unstable();
+    assert_eq!(joined, [10, 11, 12]);
+    assert!(judge::pipeline(&pipes(&["session"]), &pipes(&["session"]), &others).is_empty());
+}
+
 /// A program started by a path inside the project runs from it, though its
 /// executable link leads out (a virtualenv's `python`); a bare name, a
 /// login shell's `-bash` and a rewritten title are no path.

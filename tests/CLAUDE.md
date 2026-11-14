@@ -109,7 +109,11 @@ What each suite guards — the intent, not the case list:
 - `hostile_fs.rs` — corrupt caches, markers and metadata, absent bases, vanishing
   paths: **degrade, never panic, never lose data.**
 - `properties.rs` — proptest; above all, `sanitize_name` output is always
-  creatable (verified by creating it).
+  creatable (verified by creating it). The body grammar over hand-shaped
+  files (multi-byte words, CRLF, a BOM, trailer tokens in any case): the
+  reader never panics, a toggle touches only its own line and keeps what the
+  todo says, a line fastf wrote survives a double toggle byte for byte, and
+  an add reads back at the ordinal it answers.
 - `repo_hygiene.rs` — no tracked file names a real home, a personal mount, a local
   project-folder path, the maintainer outside attribution, or a personal email.
   Scans `git ls-files`, and skips unless the crate is the checkout's root, because

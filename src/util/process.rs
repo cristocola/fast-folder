@@ -26,10 +26,42 @@ pub fn is_live_fastf_since(pid: u32, minted_nanos: u128) -> bool {
 
 /// Whether a file name is one fastf is started by: the installed `fastf`,
 /// `fastf.exe`, or a renamed build (`fastf-3.14.0`).
-fn is_fastf_name(name: &std::ffi::OsStr) -> bool {
+pub(crate) fn is_fastf_name(name: &std::ffi::OsStr) -> bool {
     name.to_string_lossy()
         .to_ascii_lowercase()
         .starts_with("fastf")
+}
+
+/// What a process's `stat` says of it, as far as fastf asks.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stat {
+    pub ppid: u32,
+    /// When it started, in clock ticks after boot. With the pid it names one
+    /// process: a pid is reused, a pid and a start are not.
+    pub started: u64,
+    /// It has finished, and only waits to be reaped.
+    pub zombie: bool,
+}
+
+/// `/proc/<pid>/stat`'s text, read. The command name may hold spaces and
+/// parentheses, so the fields after it are counted from its last `)`: the
+/// state is field 3, the parent 4, the start 22.
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_stat(text: &str) -> Option<Stat> {
+    let after = text.get(text.rfind(')')? + 1..)?;
+    let fields: Vec<&str> = after.split_whitespace().collect();
+    Some(Stat {
+        zombie: *fields.first()? == "Z",
+        ppid: fields.get(4 - 3)?.parse().ok()?,
+        started: fields.get(22 - 3)?.parse().ok()?,
+    })
+}
+
+/// [`parse_stat`] of the process `pid` now; `None` once it has gone.
+#[cfg(target_os = "linux")]
+pub fn stat(pid: u32) -> Option<Stat> {
+    parse_stat(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?)
 }
 
 #[cfg(target_os = "linux")]
@@ -41,16 +73,11 @@ mod imp {
         if !super::is_fastf_name(exe.file_name()?) {
             return None;
         }
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // The command name may hold spaces and parentheses: the fields that
-        // follow are counted from its last `)`, the state being field 3.
-        let after = stat.get(stat.rfind(')')? + 1..)?;
-        let fields: Vec<&str> = after.split_whitespace().collect();
-        // A zombie has finished; it only waits to be reaped.
-        if fields.first() == Some(&"Z") {
+        let stat = super::stat(pid)?;
+        if stat.zombie {
             return None;
         }
-        let ticks: u128 = fields.get(22 - 3)?.parse().ok()?;
+        let ticks = u128::from(stat.started);
         // SAFETY: `sysconf` reads a constant of the running system.
         let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
         if hz <= 0 {
@@ -178,5 +205,29 @@ mod tests {
     #[test]
     fn a_process_that_is_not_there_is_not_live() {
         assert!(!is_live_fastf_since(u32::MAX - 7, now_nanos()));
+    }
+
+    /// A command name with spaces and parentheses in it does not shift the
+    /// fields after it.
+    #[test]
+    fn a_stat_is_read_after_the_last_parenthesis() {
+        let tail = "S 7 7 7 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 98765 1 1";
+        for name in ["(tmux: server)", "(a) b)", "(sleep)"] {
+            assert_eq!(
+                parse_stat(&format!("4242 {name} {tail}")),
+                Some(Stat {
+                    ppid: 7,
+                    started: 98765,
+                    zombie: false
+                }),
+                "{name}"
+            );
+        }
+        assert!(
+            parse_stat("1 (x) Z 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0")
+                .unwrap()
+                .zombie
+        );
+        assert_eq!(parse_stat("1 (x) S 1"), None, "cut short");
     }
 }

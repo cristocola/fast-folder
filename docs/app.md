@@ -128,14 +128,18 @@ was, and so does moving away.
 done ones fold into one dim row, `✓ 2 done` (`[x] 2 done` where the terminal
 draws no tick). Enter on it shows the project's done todos under every fold,
 dimmed, in the order the file has them, and Enter again hides them; the cursor
-stays on the row, and the choice holds for that project until fastf quits. A
-todo you tick keeps its row, ticked, until you move to another project, so the
-cursor never jumps and Enter again is the undo; one unticked under a shown
-fold stays there the same way. A todo ticked in another window goes into its
-fold, and the cursor with it. `+` on a fold adds to its phase, on a line just
-above the fold, where the new open todo will be. `<` and `>` from the todos
-land on the next project's first open todo, past a finished phase. The file
-keeps its own order throughout: only what the pane draws first changes.
+stays on the row (or, when every todo under it was unticked and the row goes,
+on the todo just above it), and the choice holds for that project until fastf
+quits. A todo you tick keeps its row, ticked, while you stay on the project, so
+the cursor never jumps and Enter again is the undo; one unticked under a shown
+fold stays there the same way until you hide the done todos. Rewording it with
+F2 keeps its row too. It joins its fold sooner only when a todo is added or
+removed above it, or it is reworded somewhere else. A todo ticked in another
+window goes into its fold, and the cursor with it. `+` on a fold adds to its
+phase, on a line just above the fold, where the new open todo will be. `<` and
+`>` from the todos land on the next project's first open todo, past a finished
+phase. The file keeps its own order throughout: only what the pane draws first
+changes.
 
 **Adding todos is typing a list.** `+` on the list or in the pane, Enter on
 **add a todo**, or **Add a todo** in the palette or the action menu opens an

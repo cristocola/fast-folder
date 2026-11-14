@@ -34,6 +34,13 @@ impl After {
             After::Rename(_) => Verb::Rename,
         }
     }
+
+    /// Whether the verb is a job, whose progress dialog the question puts
+    /// up as its start would. A rename has no dialog, so a job started
+    /// while it is asked about owns the dialog and its Ctrl-C.
+    fn starts_a_job(&self) -> bool {
+        !matches!(self, After::Rename(_))
+    }
 }
 
 /// A question on its way: its number, the projects it is about and what it
@@ -43,6 +50,10 @@ pub struct Checking {
     pub request: u64,
     pub targets: Targets,
     pub after: After,
+    /// Whether the progress dialog was hidden before a move's or a delete's
+    /// question put it up. The answer leaves it as it found it, so a job
+    /// hidden with Esc is not drawn over the in-use picker.
+    pub hidden: bool,
 }
 
 /// What the in-use picker was opened about: which projects something uses,
@@ -71,25 +82,34 @@ const DETAIL_LINES: usize = 4;
 impl App {
     /// Ask what uses `projects`' folders before `after` takes them away. A
     /// move and a delete show the progress dialog at once, as their start
-    /// does; a second question while one is out is refused.
+    /// does; a rename says so on the status line and leaves the dialog to
+    /// whatever job has it. A second question while one is out is refused,
+    /// and so is any while a job is starting.
     pub(super) fn ask_what_uses(
         &mut self,
         projects: Vec<Project>,
         batch: bool,
         after: After,
     ) -> Vec<Effect> {
-        if self.in_use.is_some() || self.background.starting.is_some() {
+        if self.in_use.is_some() {
             self.warn("still checking what uses the last folders asked about");
+            return Vec::new();
+        }
+        if let Some(starting) = self.background.starting {
+            self.warn(format!("still {starting}"));
             return Vec::new();
         }
         self.in_use_request += 1;
         let request = self.in_use_request;
+        let hidden = self.background.hidden;
         match after {
             After::Move(_) => self.background.starting = Some("moving…"),
             After::Delete => self.background.starting = Some("deleting…"),
             After::Rename(_) => self.info(CHECKING),
         }
-        self.background.hidden = false;
+        if after.starts_a_job() {
+            self.background.hidden = false;
+        }
         let folders = projects
             .iter()
             .map(|project| (project.path.clone(), project.id.clone()))
@@ -101,11 +121,18 @@ impl App {
                 batch,
             },
             after,
+            hidden,
         });
         vec![Effect::CheckInUse { request, folders }]
     }
 
     /// The answer: go on with what nothing uses, or ask.
+    ///
+    /// A move's or a delete's answer gives the dialog back as the question
+    /// found it and takes the Ctrl-C pressed on it meanwhile, which only
+    /// this question can have earned: no job starts while it is out. A
+    /// rename's leaves both alone, since they belong to any job started
+    /// while it was asked about.
     pub(super) fn on_in_use(
         &mut self,
         request: u64,
@@ -114,16 +141,16 @@ impl App {
         let Some(checking) = self.in_use.take_if(|checking| checking.request == request) else {
             return Vec::new();
         };
-        if !matches!(checking.after, After::Rename(_)) {
+        let verb = checking.after.verb();
+        if checking.after.starts_a_job() {
             self.background.starting = None;
-            self.background.hidden = false;
+            self.background.hidden = checking.hidden;
+            if std::mem::take(&mut self.background.cancel_when_started) {
+                self.info(format!("Cancelled — nothing was {}.", verb.past()));
+                return Vec::new();
+            }
         } else if self.status.text == CHECKING {
             self.status = super::Status::default();
-        }
-        let verb = checking.after.verb();
-        if std::mem::take(&mut self.background.cancel_when_started) {
-            self.info(format!("Cancelled — nothing was {}.", verb.past()));
-            return Vec::new();
         }
         let projects = self.still_here(&checking.targets);
         if projects.is_empty() {

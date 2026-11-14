@@ -643,9 +643,15 @@ older answer is dropped. **What the dialog names is resolved before the
 question**, so a project gone from the library is the usual refusal and no
 question is asked. A move and a delete put the progress dialog up at once
 (`background.starting`), so Esc hides it and Ctrl-C sets
-`cancel_when_started`; the answer clears `starting` and `hidden` first and
+`cancel_when_started`; the answer clears `starting`, gives `hidden` back as
+the question found it (a job hidden before is not drawn over the picker) and
 takes that flag, so a Ctrl-C during the question starts nothing and cancels
-no later job. One question at a time: a second is refused while one is out.
+no later job. **A rename puts no dialog up**, so it touches neither `hidden`
+nor `cancel_when_started`: both belong to any job started while it is asked
+about. One question at a time: a second is refused while one is out, and
+any while a job is starting, each refusal naming which. **Ctrl-C on the
+picker closes it** (`close_top`, before `interrupt` looks at any job), since
+the job a dialog follows is not what the question is about.
 Nothing in use starts the job (`StartJob { force: false }`) or the rename;
 otherwise a wide `Pick` (`Then::InUse`) offers anyway, the others (a batch
 with free projects; never a rename) and cancel, and hides anyway when a use

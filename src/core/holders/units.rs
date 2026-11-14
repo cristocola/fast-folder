@@ -152,7 +152,7 @@ pub(super) fn find(folders: &[Vec<PathBuf>]) -> Vec<UnitFound> {
 /// The unit files in `dir`, each with the unit it is for: a unit's own file,
 /// and the drop-ins in `<unit>.d/`. The `.wants` and `.requires` folders
 /// only hold links to units listed already.
-fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
+pub(super) fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -182,7 +182,11 @@ fn unit_files(dir: &Path) -> Vec<(String, PathBuf)> {
 
 /// How a unit file ties itself to a folder: a link into it, else the first
 /// line naming it.
-fn tie_of(file: &Path, folders: &[Vec<PathBuf>], needles: &[Vec<String>]) -> Vec<(usize, Tie)> {
+pub(super) fn tie_of(
+    file: &Path,
+    folders: &[Vec<PathBuf>],
+    needles: &[Vec<String>],
+) -> Vec<(usize, Tie)> {
     if let Ok(target) = std::fs::read_link(file) {
         let target = match file.parent() {
             Some(dir) if target.is_relative() => dir.join(target),

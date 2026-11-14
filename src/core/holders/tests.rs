@@ -494,6 +494,77 @@ fn a_unit_line_names_the_folder_only_as_a_path_of_its_own() {
     );
 }
 
+/// A unit folder as a manager loads it: a unit's own file, a drop-in that
+/// speaks for its unit, a link into the project (`systemctl --user link`);
+/// the `.wants` folder only holds links to units listed already.
+#[test]
+fn a_unit_folder_is_read_as_its_manager_reads_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("X");
+    std::fs::create_dir_all(project.join("ops")).unwrap();
+    std::fs::write(project.join("ops/linked.service"), "[Service]\n").unwrap();
+    let dir = temp.path().join("units");
+    std::fs::create_dir_all(dir.join("named.service.d")).unwrap();
+    std::fs::create_dir_all(dir.join("default.target.wants")).unwrap();
+    let line = format!("WorkingDirectory={}", project.display());
+    std::fs::write(
+        dir.join("plain.service"),
+        "[Service]\nExecStart=/bin/true\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("named.service"), "[Service]\n").unwrap();
+    std::fs::write(
+        dir.join("named.service.d/override.conf"),
+        format!("[Service]\n{line}\n"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        project.join("ops/linked.service"),
+        dir.join("linked.service"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        project.join("ops/linked.service"),
+        dir.join("default.target.wants/linked.service"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("notes.txt"), &line).unwrap();
+
+    let files = units::unit_files(&dir);
+    let names: Vec<&str> = files.iter().map(|(unit, _)| unit.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "linked.service",
+            "named.service",
+            "named.service",
+            "plain.service"
+        ],
+        "{files:?}"
+    );
+    let folders = vec![vec![project.clone()]];
+    let needles = vec![units::needles(&folders[0], None)];
+    let ties: Vec<(String, Vec<(usize, Tie)>)> = files
+        .iter()
+        .map(|(unit, file)| (unit.clone(), units::tie_of(file, &folders, &needles)))
+        .collect();
+    assert_eq!(
+        ties,
+        [
+            (
+                "linked.service".to_string(),
+                vec![(0, Tie::Link(PathBuf::from("ops/linked.service")))]
+            ),
+            ("named.service".to_string(), Vec::new()),
+            (
+                "named.service".to_string(),
+                vec![(0, Tie::Line(line.clone()))],
+            ),
+            ("plain.service".to_string(), Vec::new()),
+        ]
+    );
+}
+
 #[test]
 fn what_systemd_shows_of_a_unit_decides_whether_it_is_dormant() {
     let shown = units::parse_show(

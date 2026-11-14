@@ -537,6 +537,7 @@ impl App {
             self.adds_landed(todo_ordinal);
             todo_ordinal.map(pane::PaneTarget::Todo)
         } else {
+            self.hold_through_a_reword();
             self.pane_edit
                 .take_if(|edit| edit.pending())
                 .map(|edit| edit.target())

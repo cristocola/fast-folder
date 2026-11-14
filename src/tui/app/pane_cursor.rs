@@ -6,13 +6,14 @@ use super::data::ProjectDetail;
 use super::pane::*;
 use crate::tui::effect::Effect;
 
-/// Whether a hold made on the todo at `ordinal`, which read `text`, is
-/// still about that todo: an ordinal names whatever todo sits there now.
-fn still_reads(detail: &ProjectDetail, ordinal: usize, text: &str) -> bool {
+/// Whether a hold made on the todo at `ordinal`, which may read any of
+/// `texts`, is still about that todo: an ordinal names whatever todo sits
+/// there now.
+fn still_reads(detail: &ProjectDetail, ordinal: usize, texts: &[String]) -> bool {
     detail
         .todos
         .get(ordinal)
-        .is_some_and(|todo| todo.text == text)
+        .is_some_and(|todo| texts.contains(&todo.text))
 }
 
 impl App {
@@ -52,7 +53,7 @@ impl App {
                 Some(detail) if self.pane_for.as_ref() == Some(&project.path) => self
                     .pane_held
                     .iter()
-                    .filter(|(ordinal, (_, text))| still_reads(detail, **ordinal, text))
+                    .filter(|(ordinal, (_, texts))| still_reads(detail, **ordinal, texts))
                     .map(|(ordinal, (at, _))| (*ordinal, *at))
                     .collect(),
                 _ => Default::default(),
@@ -97,16 +98,43 @@ impl App {
     pub(super) fn hold_todo(&mut self, rows: &[PaneRow], at: usize, ordinal: usize, text: String) {
         self.pane_held
             .entry(ordinal)
-            .or_insert_with(|| (held_at(rows, at), text));
+            .or_insert_with(|| (held_at(rows, at), vec![text]));
+    }
+
+    /// The pane's own F2 on a held todo has landed: the hold takes the new
+    /// words too, as the reader will return them — an owner typed after
+    /// them taken off — so the re-read still finds it about that todo. The
+    /// old words stay, since the detail on screen reads them until the
+    /// re-read lands; an emptied todo was removed, and the re-read lets its
+    /// hold go. Called before the landed edit is taken.
+    pub(super) fn hold_through_a_reword(&mut self) {
+        let Some(PaneEdit::Line {
+            target: EditTarget::Todo { ordinal, .. },
+            input,
+            pending: true,
+            ..
+        }) = &self.pane_edit
+        else {
+            return;
+        };
+        let text = crate::core::body::NewTodo::typed(input.text().trim()).text;
+        if text.is_empty() {
+            return;
+        }
+        if let Some((_, texts)) = self.pane_held.get_mut(ordinal)
+            && !texts.contains(&text)
+        {
+            texts.push(text);
+        }
     }
 
     /// A re-read of the pane's project has landed: drop every hold whose
-    /// ordinal no longer reads the text it was toggled with — an add or a
-    /// removal renumbered the list, by this pane or anybody — since a hold
-    /// on an ordinal pins whatever todo is there now.
+    /// ordinal reads none of its texts — an add or a removal renumbered the
+    /// list, by this pane or anybody, or somebody else reworded it — since a
+    /// hold on an ordinal pins whatever todo is there now.
     pub(super) fn release_moved_holds(&mut self, detail: &ProjectDetail) {
         self.pane_held
-            .retain(|ordinal, (_, text)| still_reads(detail, *ordinal, text));
+            .retain(|ordinal, (_, texts)| still_reads(detail, *ordinal, texts));
     }
 
     /// How many rows the pane shows at once: the height of its text.

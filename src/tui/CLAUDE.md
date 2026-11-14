@@ -1065,17 +1065,20 @@ toggles `App.done_shown` for the selected project — in memory, per project,
 for the session, never in `state.toml` — which shows the done ones under every
 fold of it, in file order; the cursor stays on the fold (`PaneTarget::Fold`)
 and the index-keyed pulses go. **A todo toggled on this visit is held where
-it was drawn** (`App.pane_held`: ordinal → `HeldAt` and the text it read;
-`pane::held_at` reads the place off the rows): a tick keeps its row in the
-open run and an untick under a shown fold stays there, so the cursor never
-jumps and Enter again is the undo. The holds clear when the selection leaves
-the project (`sync_pane`); a landed re-read drops every hold whose ordinal no
-longer reads its text (`release_moved_holds` in `on_detail`), which covers an
-add or a removal by anyone, an outside edit, and a re-read already on its way
-when the tick was made; and hiding the done todos drops the holds under the
-folds, or an untick held there would vanish with them. `App::pane_rows` also
-applies a hold only while its text matches. A todo that went into its fold
-under the cursor — ticked elsewhere — leaves the cursor on that fold
+it was drawn** (`App.pane_held`: ordinal → `HeldAt` and the texts it may
+read; `pane::held_at` reads the place off the rows): a tick keeps its row in
+the open run and an untick under a shown fold stays there, so the cursor
+never jumps and Enter again is the undo. The holds clear when the selection
+leaves the project (`sync_pane`); a landed re-read drops every hold whose
+ordinal reads none of its texts (`release_moved_holds` in `on_detail`), which
+covers an add or a removal by anyone, an outside edit, and a re-read already
+on its way when the tick was made. The pane's own F2 is not an outside edit:
+when its write lands the hold takes the new words as the reader will return
+them (`hold_through_a_reword`), keeping the old ones until the re-read, so a
+todo ticked and then reworded keeps its row. Hiding the done todos drops the
+holds under the folds, or an untick held there would vanish with them.
+`App::pane_rows` also applies a hold only while one of its texts matches. A
+todo that went into its fold under the cursor — ticked elsewhere — leaves the cursor on that fold
 (`find_row`). **`+` on a fold is `+` in its run** (`place_at`), and the add
 line goes at the end of the run's open todos, above the fold, where the new
 open todo will be drawn (`with_adding`; `End` is the last run's open end);

@@ -1228,6 +1228,54 @@ fn unticking_under_an_open_fold_keeps_it_there_until_the_fold_is_hidden() {
     );
 }
 
+/// **F2 rewording a todo ticked on this visit keeps its row.** The hold
+/// takes the new words once the pane's own write has landed — as the
+/// reader returns them, an owner typed after them taken off — so the
+/// re-read finds the todo ticked where it was, the cursor on it, and Enter
+/// again unticks it.
+#[test]
+fn a_todo_ticked_then_reworded_keeps_its_row() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let at = app.pane_cursor;
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "delivered the video")],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "fold 1", "add", "add"]);
+
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "deliver the masters @editor");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        sent(&effects),
+        Some(Action::ReplaceTodo { ordinal: 1, .. })
+    ));
+    done_ok(&mut app, "Todo reworded.");
+    assert_eq!(on(&app), "[x] 1", "held while the re-read is on its way");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "deliver the masters")],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "fold 1", "add", "add"]);
+    assert_eq!(on(&app), "[x] 1", "the reworded tick keeps its row");
+    assert_eq!(app.pane_cursor, at, "and the cursor never moved");
+
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::ToggleTodo { ordinal: 1, was, .. }) if was == "deliver the masters"
+        ),
+        "Enter again is the undo: {effects:?}"
+    );
+}
+
 /// **`+` on a fold adds into its run**, a finished phase's too: the line
 /// opens at the end of the run's open todos, just above the fold, which is
 /// where the new open todo will be drawn.

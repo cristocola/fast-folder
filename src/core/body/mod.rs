@@ -21,7 +21,8 @@
 //! not a task — except a `###` line, which labels the **phase** every task
 //! below it belongs to, until the next one. A file somebody hand-edited into a
 //! shape fastf never wrote is shown as far as it can be read, which is as far
-//! as it goes.
+//! as it goes. How a list is *shown* — each run's open tasks, its done ones
+//! apart — is `todo_groups`, and never a change to the file's order.
 //!
 //! **The writer changes the bytes it is about and no others.** An append
 //! lands at the end of its section; an edit splices over the note's own lines;
@@ -885,6 +886,53 @@ pub fn read_todos(project_root: &Path) -> Result<Vec<Todo>> {
 pub fn read_todo_list(project_root: &Path) -> Result<(Vec<Todo>, Vec<PhaseLabel>)> {
     let content = crate::core::project_info::read(project_root)?;
     Ok((todos_in(&content), phase_labels_in(&content)))
+}
+
+/// One run of the todo list as a reader shows it: the tasks before the first
+/// `###` label (`phase` is `None`), or one label and the tasks up to the next.
+/// `tasks` is the run's ordinals, contiguous; `open` and `done` split them,
+/// each in file order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TodoGroup {
+    pub phase: Option<String>,
+    pub tasks: Range<usize>,
+    pub open: Vec<usize>,
+    pub done: Vec<usize>,
+}
+
+/// **The one rule every surface shows a todo list by**: the runs in file
+/// order — the loose tasks when there are any, then one per label, an empty
+/// label included, since a todo added to its phase lands there — each with
+/// its open tasks apart from its done ones. It never reorders the file: an
+/// ordinal is the task's place in it, which is the number `fastf todo` takes,
+/// so showing the open ones first changes no number. Bounds are clamped to
+/// `todos`, so labels read from another version of the file cannot index
+/// past it.
+pub fn todo_groups(todos: &[Todo], labels: &[PhaseLabel]) -> Vec<TodoGroup> {
+    let group = |phase: Option<String>, from: usize, to: usize| {
+        let from = from.min(todos.len());
+        let tasks = from..to.clamp(from, todos.len());
+        let (done, open): (Vec<usize>, Vec<usize>) =
+            tasks.clone().partition(|&ordinal| todos[ordinal].done);
+        TodoGroup {
+            phase,
+            tasks,
+            open,
+            done,
+        }
+    };
+    let first = labels.first().map_or(todos.len(), |label| label.before);
+    let mut groups = Vec::with_capacity(labels.len() + 1);
+    if first.min(todos.len()) > 0 {
+        groups.push(group(None, 0, first));
+    }
+    for (index, label) in labels.iter().enumerate() {
+        let end = labels
+            .get(index + 1)
+            .map_or(todos.len(), |next| next.before);
+        groups.push(group(Some(label.name.clone()), label.before, end));
+    }
+    groups
 }
 
 /// Flip task `ordinal` between open and done: the one character inside its

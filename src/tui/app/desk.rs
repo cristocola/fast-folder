@@ -280,8 +280,8 @@ impl DeskState {
         if let Some(path) = self.selected_path() {
             out.push(path.to_path_buf());
         }
-        for row in self.offset..(self.offset + rows).min(self.rows.len()) {
-            if let Some(path) = self.rows[row].path()
+        for row in self.rows.iter().skip(self.offset).take(rows) {
+            if let Some(path) = row.path()
                 && !out.iter().any(|seen| seen == path)
             {
                 out.push(path.to_path_buf());

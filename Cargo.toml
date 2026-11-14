@@ -6,7 +6,6 @@ rust-version = "1.88"
 description = "Fast Folder Creator — template-driven project folder generator with a guided TUI and CLI"
 license = "MIT"
 repository = "https://github.com/cristocola/fast-folder"
-homepage = "https://github.com/cristocola/fast-folder"
 authors = ["Cristo Cola"]
 readme = "README.md"
 keywords = ["cli", "tui", "template", "scaffolding", "folders"]

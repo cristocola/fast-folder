@@ -251,14 +251,11 @@ pub(super) fn copy_file_again_sleeping(
 /// An open of a source file that says it is not a file there any more:
 /// gone, a folder now, or a link now (`O_NOFOLLOW`'s `ELOOP`).
 fn is_not_a_file_now(error: &std::io::Error) -> bool {
-    if crate::util::paths::is_absence(error) {
-        return true;
-    }
     #[cfg(unix)]
-    if matches!(error.raw_os_error(), Some(libc::ELOOP) | Some(libc::EISDIR)) {
-        return true;
-    }
-    false
+    let refused_as_no_file = matches!(error.raw_os_error(), Some(libc::ELOOP | libc::EISDIR));
+    #[cfg(not(unix))]
+    let refused_as_no_file = false;
+    crate::util::paths::is_absence(error) || refused_as_no_file
 }
 
 /// Give a copied file the permission bits and times of `original`, on its

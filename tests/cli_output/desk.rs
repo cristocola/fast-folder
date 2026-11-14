@@ -146,6 +146,72 @@ fn the_desk_narrows_to_one_group_and_picks_one() {
     assert_eq!(delta["next_todo"]["phase"], "Launch");
 }
 
+/// Piped, `desk --plain` fits a hundred columns: the todo column is capped
+/// at what the id, the name and the age leave, a todo longer than that
+/// keeps its age two spaces after it, and a name in wide characters is
+/// padded by the columns it takes, not by its characters, so every todo
+/// starts in one column.
+#[test]
+fn desk_plain_fits_the_width_and_a_long_todo_keeps_its_age_after_it() {
+    use unicode_width::UnicodeWidthStr;
+    let sb = Sandbox::new();
+    let long = "trim ".repeat(60);
+    let long = long.trim_end();
+    let todos = [
+        (
+            "ID0001",
+            "映画の編集",
+            "- [ ] cut the first minute\n".to_string(),
+        ),
+        ("ID0002", "Beta", format!("- [ ] {long}\n")),
+        ("ID0003", "Проекты", "- [ ] send the invoice\n".to_string()),
+    ];
+    for (id, name, list) in todos {
+        let dir = sb.plant_project(&sb.base, name, id);
+        let path = dir.join("PROJECT_INFO.md");
+        let mut file = fs::read_to_string(&path).unwrap();
+        file.push_str("\n## Todo\n\n");
+        file.push_str(&list);
+        fs::write(&path, file).unwrap();
+    }
+    let out = sb.ok(&["desk", "--plain"]);
+    let rows: Vec<&str> = out.lines().filter(|l| l.starts_with("    ")).collect();
+    assert_eq!(rows.len(), 3, "{out}");
+    for row in &rows {
+        if row.contains(long) {
+            let after = &row[row.find(long).unwrap() + long.len()..];
+            assert!(!after.trim().is_empty(), "{row:?}");
+            assert_eq!(
+                after,
+                format!("  {:>6}", after.trim()),
+                "the age two spaces after the long todo, in its six columns"
+            );
+        } else {
+            assert!(row.width() <= 100, "{} columns: {row}", row.width());
+        }
+    }
+    let todo_column = |row: &str, todo: &str| row[..row.find(todo).unwrap()].width();
+    let short: Vec<usize> = rows
+        .iter()
+        .filter_map(|row| {
+            ["cut the first minute", "send the invoice"]
+                .iter()
+                .find(|todo| row.contains(*todo))
+                .map(|todo| todo_column(row, todo))
+        })
+        .collect();
+    assert_eq!(short.len(), 2, "{out}");
+    assert_eq!(
+        short[0], short[1],
+        "every todo starts in one column, whatever the names are written in:\n{out}"
+    );
+    assert_eq!(
+        todo_column(rows.iter().find(|r| r.contains(long)).unwrap(), long),
+        short[0],
+        "{out}"
+    );
+}
+
 /// `peek` prints one project's summary: the next todo and its owner, the
 /// todo counts, which programs work in the folder, the newest file, the
 /// repository's head when it is one, the last note, how long quiet.

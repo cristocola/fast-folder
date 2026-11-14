@@ -382,14 +382,15 @@ fn spawn_worker(id: &str) -> Result<()> {
     let child = {
         use std::os::unix::process::CommandExt;
         let detached = |mut command: Command| {
-            // SAFETY: `setsid` is async-signal-safe and touches nothing of
-            // the parent's; it is the one call made between fork and exec.
-            unsafe {
-                command.pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                });
-            }
+            let lead_a_session = || -> std::io::Result<()> {
+                // SAFETY: `setsid` is async-signal-safe and touches nothing
+                // of the parent's.
+                unsafe { libc::setsid() };
+                Ok(())
+            };
+            // SAFETY: the closure runs between fork and exec, where it makes
+            // one async-signal-safe call and nothing else.
+            unsafe { command.pre_exec(lead_a_session) };
             command.spawn()
         };
         match in_a_scope_of_its_own(&exe, id, &install) {
@@ -523,20 +524,21 @@ impl StdHandlesNotInherited {
         const WHICH: [u32; 3] = [-10i32 as u32, -11i32 as u32, -12i32 as u32];
         let mut changed = Vec::new();
         for which in WHICH {
-            // SAFETY: plain Win32 calls on this process's own standard
-            // handles; a null or invalid one is skipped.
-            unsafe {
-                let handle = GetStdHandle(which);
-                if handle.is_null() || handle as isize == -1 {
-                    continue;
-                }
-                let mut flags = 0u32;
-                if GetHandleInformation(handle, &mut flags) != 0
-                    && flags & Self::HANDLE_FLAG_INHERIT != 0
-                    && SetHandleInformation(handle, Self::HANDLE_FLAG_INHERIT, 0) != 0
-                {
-                    changed.push((handle, flags));
-                }
+            // SAFETY: asks for one of this process's own standard handles.
+            let handle = unsafe { GetStdHandle(which) };
+            if handle.is_null() || handle as isize == -1 {
+                continue;
+            }
+            let mut flags = 0u32;
+            // SAFETY: a handle of this process's own, and a word it writes.
+            let read = unsafe { GetHandleInformation(handle, &mut flags) } != 0;
+            if !read || flags & Self::HANDLE_FLAG_INHERIT == 0 {
+                continue;
+            }
+            // SAFETY: clears the inherit flag of the same handle; `drop`
+            // sets it again.
+            if unsafe { SetHandleInformation(handle, Self::HANDLE_FLAG_INHERIT, 0) } != 0 {
+                changed.push((handle, flags));
             }
         }
         Self(changed)

@@ -54,6 +54,9 @@ green rather than a checklist to work through. Each one runs locally:
 - `cargo clippy --all-targets -- -D warnings`, and again with `--release`:
   `#[cfg(debug_assertions)]` code does not exist in a release build, so an item
   used only from a failpoint or the tracer is dead there and nowhere else.
+  `Cargo.toml`'s `[lints.clippy]` adds `undocumented_unsafe_blocks` and
+  `multiple_unsafe_ops_per_block` at "warn", which `-D warnings` makes errors:
+  every unsafe block is one operation under its own `// SAFETY:` line.
 - `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
   from Linux. CI lints on a real Windows runner as well, where some lint
   thresholds differ.

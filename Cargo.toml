@@ -85,6 +85,13 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 # into a virtual screen and the assertions read the frame a person would see.
 vt100 = "0.16.2"
 
+# Every unsafe block says why it is sound, one operation at a time. "warn",
+# which CI's `-D warnings` makes an error; never `[lints.rust] warnings =
+# "deny"`, which would fail the AUR source build on the next rustc's new lint.
+[lints.clippy]
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
+
 # Do not add `panic = "abort"`. The TUI restores the terminal while unwinding;
 # aborting would leave it in raw mode with the cursor hidden.
 [profile.release]

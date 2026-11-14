@@ -103,41 +103,57 @@ mod imp {
     /// 1601-01-01 to 1970-01-01, in the 100 ns units of a FILETIME.
     const EPOCH_DIFFERENCE: u64 = 116_444_736_000_000_000;
 
+    /// A process handle with query rights, closed when dropped, so every way
+    /// out of `started_fastf` closes it.
+    struct Queried(*mut c_void);
+
+    impl Queried {
+        fn open(pid: u32) -> Option<Self> {
+            // SAFETY: asks for a handle with query rights only; null when the
+            // process is gone or is not this user's to ask about.
+            let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+            (!handle.is_null()).then_some(Self(handle))
+        }
+    }
+
+    impl Drop for Queried {
+        fn drop(&mut self) {
+            // SAFETY: the handle `open` got, closed once.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
     pub(super) fn started_fastf(pid: u32) -> Option<u128> {
         use std::os::windows::ffi::OsStringExt;
-        // SAFETY: every call gets a handle this function opened and closes,
-        // and buffers it owns, sized as the calls are told.
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return None;
-            }
-            let answer = (|| {
-                let mut code = 0u32;
-                if GetExitCodeProcess(handle, &mut code) == 0 || code != STILL_ACTIVE {
-                    return None;
-                }
-                let mut name = vec![0u16; 1024];
-                let mut size = name.len() as u32;
-                if QueryFullProcessImageNameW(handle, 0, name.as_mut_ptr(), &mut size) == 0 {
-                    return None;
-                }
-                name.truncate(size as usize);
-                let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(&name));
-                if !super::is_fastf_name(path.file_name()?) {
-                    return None;
-                }
-                let (mut created, mut exited) = (FileTime::default(), FileTime::default());
-                let (mut kernel, mut user) = (FileTime::default(), FileTime::default());
-                if GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) == 0 {
-                    return None;
-                }
-                let ticks = (u64::from(created.high) << 32) | u64::from(created.low);
-                Some(u128::from(ticks.checked_sub(EPOCH_DIFFERENCE)?) * 100)
-            })();
-            CloseHandle(handle);
-            answer
+        let process = Queried::open(pid)?;
+        let mut code = 0u32;
+        // SAFETY: a handle held open for this call, and a word it writes.
+        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 || code != STILL_ACTIVE {
+            return None;
         }
+        let mut name = vec![0u16; 1024];
+        let mut size = name.len() as u32;
+        // SAFETY: writes at most `size` units into `name`, which is that
+        // long, and answers in `size` how many it wrote.
+        if unsafe { QueryFullProcessImageNameW(process.0, 0, name.as_mut_ptr(), &mut size) } == 0 {
+            return None;
+        }
+        name.truncate(size as usize);
+        let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(&name));
+        if !super::is_fastf_name(path.file_name()?) {
+            return None;
+        }
+        let (mut created, mut exited) = (FileTime::default(), FileTime::default());
+        let (mut kernel, mut user) = (FileTime::default(), FileTime::default());
+        // SAFETY: the same handle, and four times this function owns.
+        let read = unsafe {
+            GetProcessTimes(process.0, &mut created, &mut exited, &mut kernel, &mut user)
+        };
+        if read == 0 {
+            return None;
+        }
+        let ticks = (u64::from(created.high) << 32) | u64::from(created.low);
+        Some(u128::from(ticks.checked_sub(EPOCH_DIFFERENCE)?) * 100)
     }
 }
 

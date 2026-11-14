@@ -52,13 +52,12 @@ impl<'a> EnvGuard<'a> {
         };
         for (name, value) in vars {
             guard.record(name);
-            // SAFETY: `serial` guarantees no other test thread in this binary
-            // is touching these variables.
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
+            match value {
+                // SAFETY: `serial` guarantees no other test thread in this
+                // binary is touching these variables.
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                // SAFETY: the same lock.
+                None => unsafe { std::env::remove_var(name) },
             }
         }
         guard
@@ -90,12 +89,11 @@ impl<'a> EnvGuard<'a> {
 impl Drop for EnvGuard<'_> {
     fn drop(&mut self) {
         for (name, value) in self.previous.drain() {
-            // SAFETY: the serial lock is held until this guard finishes.
-            unsafe {
-                match value {
-                    Some(previous) => std::env::set_var(&name, previous),
-                    None => std::env::remove_var(&name),
-                }
+            match value {
+                // SAFETY: the serial lock is held until this guard finishes.
+                Some(previous) => unsafe { std::env::set_var(&name, previous) },
+                // SAFETY: the same lock.
+                None => unsafe { std::env::remove_var(&name) },
             }
         }
     }

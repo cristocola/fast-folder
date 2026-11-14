@@ -1168,6 +1168,8 @@ fn main() {
     // instead of panicking — restore the default SIGPIPE disposition that the
     // Rust runtime masks on startup.
     #[cfg(unix)]
+    // SAFETY: the default disposition installs no handler, and nothing else
+    // runs yet to be racing a change of it.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }

@@ -49,8 +49,14 @@ completions.
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows
 too**, where some thresholds differ (`large_enum_variant` fires there alone), and
 **in release too**, where `#[cfg(debug_assertions)]` code does not exist and an
-item used only from a failpoint or tracer test is dead. The full gate list is in
-the `release` skill (`.claude/skills/release/SKILL.md`).
+item used only from a failpoint or tracer test is dead. `Cargo.toml`'s
+`[lints.clippy]` holds every unsafe block to **one operation under its own
+`// SAFETY:` line** (`undocumented_unsafe_blocks`,
+`multiple_unsafe_ops_per_block`); a handle that must be closed on every path
+gets a small type whose `Drop` closes it. The lints stay at "warn" for `-D
+warnings` to raise, never `[lints.rust] warnings = "deny"`, which would fail a
+source build on the next rustc. The full gate list is in the `release` skill
+(`.claude/skills/release/SKILL.md`).
 
 `.cargo/config.toml` sets `target-feature=+crt-static` for
 `x86_64-pc-windows-msvc` alone, so the Windows exe carries its own C runtime and

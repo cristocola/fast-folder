@@ -376,6 +376,7 @@ mod tests {
 
         // Root can bypass mode bits; there is no unreadable-directory fixture
         // available in that environment.
+        // SAFETY: `geteuid` reads the process's own id and cannot fail.
         if unsafe { libc::geteuid() } == 0 {
             return;
         }

@@ -49,8 +49,17 @@ completions.
 Standard cargo. Clippy is clean with `--all-targets -- -D warnings` **on Windows
 too**, where some thresholds differ (`large_enum_variant` fires there alone), and
 **in release too**, where `#[cfg(debug_assertions)]` code does not exist and an
-item used only from a failpoint or tracer test is dead. The full gate list is in
-the `release` skill (`.claude/skills/release/SKILL.md`).
+item used only from a failpoint or tracer test is dead. `Cargo.toml`'s
+`[lints.clippy]` holds every unsafe block to **one operation under its own
+`// SAFETY:` line** (`undocumented_unsafe_blocks`,
+`multiple_unsafe_ops_per_block`); a handle that must be closed on every path
+gets a small type whose `Drop` closes it. The lints stay at "warn" for `-D
+warnings` to raise, never `[lints.rust] warnings = "deny"`, which would fail a
+source build on the next rustc. `cargo deny --locked check licenses bans
+sources` holds every dependency to `deny.toml`'s licenses and to crates.io;
+Dependabot's weekly cargo PR moves `Cargo.lock` alone, within what the manifest
+allows. The full gate list is in the `release` skill
+(`.claude/skills/release/SKILL.md`).
 
 `.cargo/config.toml` sets `target-feature=+crt-static` for
 `x86_64-pc-windows-msvc` alone, so the Windows exe carries its own C runtime and
@@ -65,6 +74,16 @@ and clap's derived command tree is one function whose unoptimized frame is
 larger than that, so a debug `fastf.exe` without it overflows before it parses
 anything, and every Windows suite that runs the binary fails at its first
 command.
+
+**The static musl build allocates through mimalloc** (`src/main.rs`, a
+`cfg(target_env = "musl")` dependency): musl's own allocator serialises
+threads, and every pass that reads all the projects on several threads ran
+1.6 to 2 times as slow as on glibc (about 1.2 with mimalloc). It is the one C library fastf compiles, for
+that target alone — the AUR `fast-folder-bin` package ships it — and no PR job
+builds musl, so build it before a tag: `cargo build --release --locked
+--target x86_64-unknown-linux-musl` (needs `musl-gcc`, from the `musl`
+package), and `cargo test --target x86_64-unknown-linux-musl` runs every suite
+against it.
 
 ```bash
 # Cross-compile for Windows (from Linux). A local convenience; CI builds on a
@@ -108,8 +127,9 @@ tell you.
   `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
   table, what may be written into the moved copy, the recordless proof),
   `records.rs` (the data dir's index of every move record, and the settle),
-  `holders.rs` (which programs have something in a folder open: `/proc` on
-  Linux, the Restart Manager on Windows),
+  `holders/` (what is using a folder before a verb takes it away: processes,
+  mounts and unit files on Linux — `linux` reads, `judge` decides, `units` —
+  the Restart Manager on Windows),
   `attention.rs` (what is unfinished, by who finishes it, and the choices that
   settle what needs you),
   `desk.rs` (the desk: a project's next open todo, who it is assigned to, the
@@ -162,7 +182,8 @@ tell you.
   them, or opens the app on its tab; `peek.rs` prints one project's summary;
   `agent.rs` runs the configured agent in a project's folder; `hat.rs` prints
   or sets the hat), plus `render.rs`, the only module that prints a
-  plan, a create or an apply; `target.rs` (resolve a query to one project, asking
+  plan, a create or an apply; `in_use.rs` (what uses a folder, asked before
+  `move`, `rename` and `delete` confirm); `target.rs` (resolve a query to one project, asking
   when it is ambiguous — shared by `open`/`copy`/`path`/`term`/`agent` and the
   folder verbs); `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
   read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are named
@@ -177,7 +198,7 @@ tell you.
   `desk` (its rows and cursor) / `desk_tab` (its reads, cuts and the journal
   page), and for the templates
   tab and its builder `templates_tab` / `builder`; and a module per
-  flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
+  flow — `library`, `search`, `actions`, `jobs`, `in_use`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`, `bases`), `view/` (renderers only, `&App`
   in; `modals/` is every dialog, by what it is for), `command/` (**the one registry** every key, palette entry, help line,
   key line and hint comes from: `table` declares, `read` and `help` read),
@@ -257,7 +278,9 @@ harness redirects `HOME`.
 `Ok(default)` for an *absent* file, so a fallback only masks a parse or I/O error,
 and the config decides which directories are the library. The CLI exits 1 with a
 `hint:` naming the file; the app never takes the screen, and a launcher-started
-`fastf` still opens a window so the error can be read.
+`fastf` still opens a window so the error can be read. The hint is earned by type
+(`config::ConfigUnreadable` anywhere in the chain), never by text: every parse
+failure reads `parsing <path>`, and a path may hold `config.toml` anywhere.
 
 **`config::expand_base_path` / `resolve_base_dir_input` are the only way in for a
 base path.** The first expands `~` and requires absolute; the second also creates
@@ -529,7 +552,8 @@ skips the `$EDITOR` fallback `cfg.resolve_editor()` applies.
 - **Windows APIs are declared by hand** (`unsafe extern "system"` beside the one
   call that needs them; the numbers more than one module names are in
   `util::win`), and `libc` is the only platform crate. No bindings crate is
-  added for a handful of calls.
+  added for a handful of calls. (mimalloc, the musl build's allocator, is
+  no binding: see *Build commands*.)
 - `util::yaml` is the only module that names the YAML crate, and
   `the_emitted_bytes_are_the_ones_we_have_always_emitted` pins its output: users
   diff, commit and hand-edit these files, so the bytes may not move.

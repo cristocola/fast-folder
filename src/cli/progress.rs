@@ -109,17 +109,11 @@ pub(crate) fn finished_line(step: &FinishedStep) -> String {
 /// One carriage-returned line, single and ANSI-free for the same reason
 /// `tui::rows::clamp_label` exists — the legacy Windows console miscounts
 /// wrapped rows and leaves ghosted characters behind when a redraw spans more
-/// than one.
+/// than one — and never wider than `tui::rows::print_columns`, which keeps
+/// clear of the last column for the same console.
 pub(crate) fn draw(p: &Progress) {
     let line = format!("  {}", live_line(p));
-    let width = ratatui::crossterm::terminal::size()
-        .map(|(columns, _rows)| columns as usize)
-        .unwrap_or(0);
-    let clamped = if width > 1 {
-        crate::tui::view::fit(&line, width - 1, "…")
-    } else {
-        line
-    };
+    let clamped = crate::tui::view::fit(&line, crate::tui::rows::print_columns(), "…");
     print!("\r{clamped}\x1b[K");
     let _ = std::io::stdout().flush();
 }

@@ -244,7 +244,7 @@ fn resume_create_copy(
         bytes: source_metadata.len(),
     };
     let progress = Mutex::new(Progress::new(std::slice::from_ref(&copy)));
-    match assets::copy_job(&copy, &progress, &AtomicBool::new(false)) {
+    match assets::copy_job(&copy, &progress) {
         Ok(()) => report.resumed += 1,
         Err(error) => {
             report.unrecoverable.push(format!(

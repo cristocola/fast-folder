@@ -157,10 +157,17 @@ ending, leaves it to finish, and `fastf jobs` in any other window shows it.
 Three things are particular to Windows:
 
 - **A file open in another program** — a timeline in an editor, a document in
-  Word — stops Windows renaming the folder around it. The move then publishes
-  the copy, reports that the original is still there, whole, with nothing
-  removed, and says a program has a file in it open. Close the program and run
-  `fastf reconcile`: it finishes the move without copying again.
+  Word — or a console working in the project stops the move before anything
+  is copied, and fastf names the program: Windows will not move a folder
+  while anything in it is open. Close it and move again. If a program opens
+  something in the project while the move is copying, the move publishes the
+  copy, reports that the original is still there, whole, with nothing
+  removed, and says which program holds it; close the program and run
+  `fastf reconcile`, which finishes the move without copying again. Since it
+  is Windows that refuses, `--force` changes nothing here; on Linux, where a
+  rename would go through and leave the program behind, fastf asks first and
+  `--force` goes past it
+  ([projects.md](projects.md#a-project-something-is-using)).
 - **Junctions** travel as junctions, pointing at the same folder, and need
   nothing special. **Symbolic links** travel as symbolic links of the same kind
   (to a file, or to a folder), but Windows lets an account make one only with

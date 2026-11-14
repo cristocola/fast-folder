@@ -111,7 +111,7 @@ on its own line — change it and Enter, or empty it and Enter to remove it; on 
 over its options and nothing else; on a **note** the note opens as a text area
 over its own lines — Enter for a new line, Ctrl-S to save, emptied and saved to
 remove it; on a **todo** Enter ticks it, or unticks it; on **`… n earlier`**
-every note, as `J` shows them. **F2 edits the text** of the row under the
+every note, as `J` shows them; on **`✓ n done`** the todos it folds. **F2 edits the text** of the row under the
 cursor in place — on a todo that is how you reword it, since Enter ticks it;
 emptied and Enter, the todo is removed — and on the name, the description, a
 tag, a variable or a note it opens what Enter opens. **`O` on a todo sets
@@ -124,11 +124,28 @@ Alt-Enter breaks a line), **add a todo** and **add a phase**; and **`+` adds one
 the cursor is among**, from anywhere in that section. Esc leaves the row as it
 was, and so does moving away.
 
+**Open work comes first.** Under each phase the open todos are listed, and the
+done ones fold into one dim row, `✓ 2 done` (`[x] 2 done` where the terminal
+draws no tick). Enter on it shows the project's done todos under every fold,
+dimmed, in the order the file has them, and Enter again hides them; the cursor
+stays on the row (or, when every todo under it was unticked and the row goes,
+on the todo just above it), and the choice holds for that project until fastf
+quits. A todo you tick keeps its row, ticked, while you stay on the project, so
+the cursor never jumps and Enter again is the undo; one unticked under a shown
+fold stays there the same way until you hide the done todos. Rewording it with
+F2 keeps its row too. It joins its fold sooner only when a todo is added or
+removed above it, or it is reworded somewhere else. A todo ticked in another
+window goes into its fold, and the cursor with it. `+` on a fold adds to its
+phase, on a line just above the fold, where the new open todo will be. `<` and
+`>` from the todos land on the next project's first open todo, past a finished
+phase. The file keeps its own order throughout: only what the pane draws first
+changes.
+
 **Adding todos is typing a list.** `+` on the list or in the pane, Enter on
 **add a todo**, or **Add a todo** in the palette or the action menu opens an
-empty line in the todo list itself, where the todo will land — under the phase
-the cursor is in, beside the todos that sit under no phase when the cursor is on
-one of them, or at the end. Enter writes it and opens the next line under
+empty line in the todo list itself, where the todo will land — after the open
+todos of the phase the cursor is in, beside the todos that sit under no phase
+when the cursor is on one of them, or at the end. Enter writes it and opens the next line under
 it, so a list goes in one after another — the line keeps taking keys while a
 todo is being written, so nothing typed is lost to the disk; Enter on an empty
 line, or Esc, is done. Paste a list onto the line — lines from a brief, a checklist copied with
@@ -497,6 +514,20 @@ space to mark each; delete names the folder and asks you to type the word
 `delete` — a typo keeps your text and says why it was refused; `y` or `n`
 answers a yes/no without Enter.
 
+**A move, a delete and a rename first ask what is using the folder** — a
+program working in it or holding a file open, a container or sandbox mounting
+part of it, a service that names it
+([projects.md](projects.md#a-project-something-is-using)). Nothing using it,
+and the verb goes on as asked. Otherwise a picker says so — `ID0047 is in use`,
+or `2 of 5 projects are in use` over marks — with what uses each one in a
+sentence below, and offers *Move anyway*, *Move the 3 others* (over marks, when
+some are free) and *Cancel*; *Delete* and *Rename* likewise, a rename without
+the others. The cursor starts on *Cancel*, so Enter alone moves nothing: going
+ahead takes a move of the cursor, as the command line's question is no unless
+you say yes. Esc is Cancel, and says nothing was moved. A filesystem mounted
+inside a folder being deleted is offered no *anyway*. The shell the app was
+started from, and its terminal, never count.
+
 **A move, a copy to a folder (`C`), a delete and a reconcile each run as
 a job of their own**, which the app follows but does not own. The dialog shows
 one row per step: the steps done ticked with what they counted, the current
@@ -633,6 +664,8 @@ The terminal is always given back. Ctrl-C inside the app is a key (it cancels
 a running job, closes a dialog, or quits); a second `kill -INT`, a `kill
 -TERM`, a closed window (SIGHUP) or a panic each restore the screen and cooked
 mode before the process ends, and an interrupted create rolls its folder back.
+A second signal exits with the code a shell gives it — 130 for SIGINT, 129 for
+SIGHUP, 143 for SIGTERM ([cli.md](cli.md#ctrl-c-hang-ups-and-exit-codes)).
 `fastf 2>/dev/null` — a refusal with nowhere to go — is repeated on stdout when
 that is still a terminal.
 

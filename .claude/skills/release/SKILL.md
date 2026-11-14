@@ -54,10 +54,19 @@ green rather than a checklist to work through. Each one runs locally:
 - `cargo clippy --all-targets -- -D warnings`, and again with `--release`:
   `#[cfg(debug_assertions)]` code does not exist in a release build, so an item
   used only from a failpoint or the tracer is dead there and nowhere else.
+  `Cargo.toml`'s `[lints.clippy]` adds `undocumented_unsafe_blocks` and
+  `multiple_unsafe_ops_per_block` at "warn", which `-D warnings` makes errors:
+  every unsafe block is one operation under its own `// SAFETY:` line.
 - `cargo clippy --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
   from Linux. CI lints on a real Windows runner as well, where some lint
   thresholds differ.
 - `cargo test` and `cargo test --release`.
+- `cargo build --release --locked --target x86_64-unknown-linux-musl`: no PR
+  job builds the static musl archive, and it is the one target that compiles
+  C (mimalloc). Only the Release workflow would find a break, after the tag.
+- `cargo deny --locked check licenses bans sources`, by `deny.toml`
+  (cargo-deny 0.20; duplicate versions are warnings). Advisories are the
+  `audit` job's, `rustsec/audit-check`.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`, after
   `rm -rf target/doc`: `cargo doc` is incremental and reports a clean run
   without rebuilding, while the runner starts from nothing.

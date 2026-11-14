@@ -765,13 +765,52 @@ fn a_file_held_open_keeps_the_original_whole_until_reconcile() {
     assert_eq!(v2_transaction_count(new_base), 0);
 }
 
-/// **A program writing a file in the project stops the move, by name,
-/// before anything is copied**: after the move its writes would land in the
-/// old copy, which is then removed. One merely working in the folder does
-/// not stop it; the result says to restart it from the new place.
+/// A child process the test kills and waits for however it ends.
+#[cfg(target_os = "linux")]
+struct Child(std::process::Child);
+
+#[cfg(target_os = "linux")]
+impl Drop for Child {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A `sleep` working in `folder`, once the look at what uses it sees it.
+#[cfg(target_os = "linux")]
+fn sitter_in(folder: &Path) -> Child {
+    let child = Child(
+        std::process::Command::new("sleep")
+            .arg("30")
+            .current_dir(folder)
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_until_used(folder);
+    child
+}
+
+#[cfg(target_os = "linux")]
+fn wait_until_used(folder: &Path) {
+    let asked = crate::core::holders::Folder::at(folder, "ID0001");
+    for _ in 0..40 {
+        if crate::core::holders::in_use(&asked, &[]).in_use(crate::core::holders::Verb::Move) {
+            return;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    panic!("waited for a program to show in {}", folder.display());
+}
+
+/// **Something using the project stops the move, by name, before anything
+/// is copied** — a program writing a file, and one only working in the
+/// folder alike — **until the move is forced**, which goes ahead and says
+/// what it went past.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
-fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
+fn a_program_working_in_the_folder_refuses_the_move_until_forced() {
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
     let (old_base, new_base) = (tmp1.path(), tmp2.path());
@@ -781,27 +820,16 @@ fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
     let project = discover(&cfg).remove(0);
     let new_path = new_base.join("proj_a");
     let progress = Mutex::new(Progress::new(&[]));
-    let wait_for = |check: &dyn Fn() -> bool| {
-        for _ in 0..100 {
-            if check() {
-                return;
-            }
-            sleep(Duration::from_millis(20));
-        }
-        panic!("waited two seconds for a program to show in the folder");
-    };
 
-    let mut writer = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("exec 3>>proj_a/session.txt; exec sleep 30")
-        .current_dir(old_base)
-        .spawn()
-        .unwrap();
-    wait_for(&|| {
-        !crate::core::holders::in_tree(&project.path)
-            .blocking
-            .is_empty()
-    });
+    let writer = Child(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 3>>proj_a/session.txt; exec sleep 30")
+            .current_dir(old_base)
+            .spawn()
+            .unwrap(),
+    );
+    wait_until_used(&project.path);
     let refused = staged_copy_verify_commit(
         &project,
         new_base,
@@ -809,9 +837,10 @@ fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
         &progress,
         &AtomicBool::new(false),
     );
-    let _ = writer.kill();
-    let _ = writer.wait();
-    let error = format!("{:#}", refused.unwrap_err());
+    drop(writer);
+    let error = refused.unwrap_err();
+    assert!(crate::core::holders::is_in_use(&error), "{error:#}");
+    let error = format!("{error:#}");
     assert!(
         error.contains("session.txt") && error.contains("open for writing"),
         "{error}"
@@ -823,32 +852,168 @@ fn a_writer_refuses_the_move_and_a_program_in_the_folder_is_a_note() {
     );
     assert!(!new_path.exists());
 
-    let mut sitter = std::process::Command::new("sleep")
-        .arg("30")
-        .current_dir(&project.path)
-        .spawn()
-        .unwrap();
-    wait_for(&|| {
-        !crate::core::holders::in_tree(&project.path)
-            .working_in
-            .is_empty()
-    });
-    let moved = staged_copy_verify_commit(
+    let sitter = sitter_in(&project.path);
+    let refused = staged_copy_verify_commit(
         &project,
         new_base,
         &new_path,
         &progress,
         &AtomicBool::new(false),
     );
-    let _ = sitter.kill();
-    let _ = sitter.wait();
+    let error = format!("{:#}", refused.unwrap_err());
+    assert!(
+        error.contains("is working in the project folder"),
+        "{error}"
+    );
+    assert!(!new_path.exists());
+
+    let folder = crate::core::holders::Folder::at(&project.path, &project.id);
+    let forced = crate::core::holders::Guard::here(true);
+    let moved = crate::core::move_engine::staged_copy_verify_commit_in_parts(
+        &project,
+        new_base,
+        &new_path,
+        crate::core::move_engine::Asked {
+            in_use: None,
+            folder: &folder,
+            guard: &forced,
+        },
+        &progress,
+        &AtomicBool::new(false),
+    )
+    .map(|(outcome, housekeeping)| {
+        crate::core::move_engine::finish_housekeeping(
+            outcome,
+            housekeeping,
+            crate::core::progress::Ticker::none(),
+        )
+    });
+    drop(sitter);
     let moved = moved.unwrap();
     assert!(
         moved
             .notes
             .iter()
-            .any(|note| note.contains("restart it from the new one")),
+            .any(|note| note.contains("sleep") && note.contains("restart it from the new one")),
         "{:?}",
         moved.notes
     );
+}
+
+/// **The rename on one filesystem asks too**: a container, a service or a
+/// script that names the folder does not follow a rename, and makes the old
+/// folder again — so a project something uses is not renamed into another
+/// base on the same disk until the move is forced.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_same_filesystem_rename_refuses_too() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp1 = tempfile::tempdir().unwrap();
+    let tmp2 = tempfile::tempdir().unwrap();
+    let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(old_base, &[new_base]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+    let progress = Mutex::new(Progress::new(&[]));
+    let cancel = AtomicBool::new(false);
+    let sitter = sitter_in(&project.path);
+
+    let refused = crate::core::move_engine::move_project_in_parts(
+        &project,
+        new_base,
+        &crate::core::holders::Guard::here(false),
+        &progress,
+        &cancel,
+    );
+    let error = refused.unwrap_err();
+    assert!(crate::core::holders::is_in_use(&error), "{error:#}");
+    assert!(format!("{error:#}").contains("sleep"), "{error:#}");
+    assert!(project.path.is_dir(), "the folder stays");
+    assert!(!new_base.join("proj_a").exists());
+
+    let (outcome, housekeeping) = crate::core::move_engine::move_project_in_parts(
+        &project,
+        new_base,
+        &crate::core::holders::Guard::here(true),
+        &progress,
+        &cancel,
+    )
+    .unwrap();
+    drop(sitter);
+    assert!(!outcome.staged, "renamed on one filesystem");
+    assert!(housekeeping.is_none());
+    assert!(new_base.join("proj_a").is_dir());
+    assert!(
+        outcome.notes.iter().any(|note| note.contains("sleep")),
+        "{:?}",
+        outcome.notes
+    );
+}
+
+/// A delete and a rename ask as a move does: refused while something works
+/// in the folder, done when forced, with what they went past.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_delete_and_a_rename_refuse_until_forced() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    write_project(base, "proj_b", "ID0002", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    cfg.save().unwrap();
+    let projects = discover(&cfg);
+    let named = |id: &str| projects.iter().find(|p| p.id == id).unwrap().clone();
+    let (a, b) = (named("ID0001"), named("ID0002"));
+    let asking = crate::core::holders::Guard::here(false);
+    let forced = crate::core::holders::Guard::here(true);
+
+    let sitter = sitter_in(&a.path);
+    let error = rename_project_configured(&a, "proj_renamed", &asking).unwrap_err();
+    assert!(crate::core::holders::is_in_use(&error), "{error:#}");
+    assert!(a.path.is_dir() && !base.join("proj_renamed").exists());
+    let renamed = rename_project_configured(&a, "proj_renamed", &forced).unwrap();
+    drop(sitter);
+    assert!(base.join("proj_renamed").is_dir());
+    assert!(
+        renamed.notes.iter().any(|note| note.contains("sleep")),
+        "{:?}",
+        renamed.notes
+    );
+
+    let sitter = sitter_in(&b.path);
+    let go_on = AtomicBool::new(false);
+    let error = delete_project_in_parts(&b, &asking, &go_on).unwrap_err();
+    assert!(crate::core::holders::is_in_use(&error), "{error:#}");
+    assert!(b.path.join(project_info::RESERVED_FILENAME).is_file());
+    let (housekeeping, notes) = delete_project_in_parts(&b, &forced, &go_on).unwrap();
+    drop(sitter);
+    assert!(
+        notes.iter().any(|note| note.contains("the deleted folder")),
+        "{notes:?}"
+    );
+    finish_delete(&b.name, housekeeping, crate::core::progress::Ticker::none());
+    assert!(!b.path.exists());
+}
+
+/// **A delete cancelled before its folder leaves the library deletes
+/// nothing**: a cancel that came while it asked what uses the folder is read
+/// before the rename aside, which no cancel could undo.
+#[test]
+fn a_cancel_raised_before_the_rename_aside_deletes_nothing() {
+    let (_env, _sandbox) = crate::util::test_env::EnvGuard::sandbox();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path();
+    write_project(base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
+    let cfg = cfg_for(base, &[]);
+    cfg.save().unwrap();
+    let project = discover(&cfg).remove(0);
+
+    let cancel = AtomicBool::new(true);
+    let guard = crate::core::holders::Guard::here(false);
+    assert!(delete_project_in_parts(&project, &guard, &cancel).is_err());
+    assert!(project.path.join(project_info::RESERVED_FILENAME).is_file());
+    assert!(retired_folders(base).is_empty(), "nothing was set aside");
+    assert_eq!(discover(&cfg).len(), 1, "still in the library");
 }

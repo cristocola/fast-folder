@@ -12,6 +12,9 @@
 //! sending and landing an edit), `pane_add` and `pane_cursor`; what a change
 //! does to the file is `core::operations`'.
 
+use std::collections::BTreeMap;
+use std::ops::Range;
+
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::core::body::TodoPlace;
@@ -89,6 +92,44 @@ pub struct Glance {
     pub working: Option<Vec<String>>,
 }
 
+/// Where a todo toggled on this visit keeps its row: in its run's open
+/// todos, or under the run's fold with the done ones shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldAt {
+    OpenRun,
+    Fold,
+}
+
+/// What the pane shows of a project's done todos, handed to `pane_rows` the
+/// way the glance is: whether they are shown under their folds, and the
+/// todos held where they were drawn when they were toggled — by ordinal, so
+/// a tick leaves its row where Enter was pressed and Enter again is the
+/// undo. A todo held nowhere is drawn by what it is: open in the run, done
+/// under the fold.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TodoFold {
+    pub shown: bool,
+    pub held: BTreeMap<usize, HeldAt>,
+}
+
+/// Where row `at` is drawn now, as a hold remembers it: under a fold when
+/// one stands between it and its run's heading, in the open run otherwise.
+/// Read from the rows, so the hold puts the row back exactly where it was.
+pub fn held_at(rows: &[PaneRow], at: usize) -> HeldAt {
+    let under_fold = rows
+        .get(..at)
+        .unwrap_or(rows)
+        .iter()
+        .rev()
+        .take_while(|row| !matches!(row, PaneRow::Phase { .. } | PaneRow::Rule(_)))
+        .any(|row| matches!(row, PaneRow::Fold { .. }));
+    if under_fold {
+        HeldAt::Fold
+    } else {
+        HeldAt::OpenRun
+    }
+}
+
 /// The section row `at` belongs to: the nearest rule above it, or the header
 /// when there is none.
 pub fn section_at(rows: &[PaneRow], at: usize) -> PaneSection {
@@ -104,18 +145,34 @@ pub fn section_at(rows: &[PaneRow], at: usize) -> PaneSection {
 
 /// The first row of `section` the cursor can rest on — its first item, or
 /// the row that adds one when it has none. `None` when the section is not in
-/// the rows (yet: the detail is still being read).
+/// the rows (yet: the detail is still being read). In the todos that is the
+/// first open todo, over a finished run's fold above it, so `<` and `>` land
+/// on work.
 pub fn first_in_section(rows: &[PaneRow], section: PaneSection) -> Option<usize> {
     let start = match section {
         PaneSection::Header => 0,
         _ => rows.iter().position(|row| *row == PaneRow::Rule(section))? + 1,
     };
-    rows.iter()
-        .enumerate()
-        .skip(start)
-        .take_while(|(index, row)| *index == start || !matches!(row, PaneRow::Rule(_)))
-        .find(|(_, row)| row.selectable())
-        .map(|(index, _)| index)
+    let within = || {
+        rows.iter()
+            .enumerate()
+            .skip(start)
+            .take_while(|(index, row)| *index == start || !matches!(row, PaneRow::Rule(_)))
+    };
+    let open_todo = || {
+        within()
+            .find(|(_, row)| matches!(row, PaneRow::Todo { done: false, .. }))
+            .map(|(index, _)| index)
+    };
+    let first = || {
+        within()
+            .find(|(_, row)| row.selectable())
+            .map(|(index, _)| index)
+    };
+    match section {
+        PaneSection::Todo => open_todo().or_else(first),
+        _ => first(),
+    }
 }
 
 /// One fact the pane's header states about a project. The header is two
@@ -201,11 +258,18 @@ fn flow_facts(facts: Vec<Fact>, project: &Project, width: usize) -> Vec<Vec<Fact
 /// Where `+` on row `at` puts a new todo, as the file will have it: under the
 /// phase the cursor is in; with the tasks that belong to no phase when the
 /// cursor is on one of them and the list has phases below; at the end of the
-/// list otherwise — which, for a list ending in a phase, is that phase.
+/// list otherwise — which, for a list ending in a phase, is that phase. A
+/// fold is a todo of its run here: `+` on a finished phase's fold adds to
+/// that phase.
 pub(super) fn place_at(rows: &[PaneRow], at: usize) -> TodoPlace {
     if !matches!(
         rows.get(at),
-        Some(PaneRow::Todo { .. } | PaneRow::TodoLine { .. } | PaneRow::Phase { .. })
+        Some(
+            PaneRow::Todo { .. }
+                | PaneRow::TodoLine { .. }
+                | PaneRow::Phase { .. }
+                | PaneRow::Fold { .. }
+        )
     ) {
         return TodoPlace::End;
     }
@@ -275,15 +339,21 @@ pub fn labels_of(detail: &ProjectDetail) -> Vec<crate::core::body::PhaseLabel> {
 
 /// Where `body::add_todos_at` opens a label the list does not have: above
 /// the first `### Other`, which is where a list keeps what belongs to no
-/// phase; otherwise under the last task — above any empty labels after it —
-/// and in a list with no task, at its end, over "add a todo".
+/// phase; otherwise under the last task — below a finished run's fold and
+/// whatever it shows, above any empty labels after it — and in a list with
+/// no task, at its end, over "add a todo".
 fn new_phase_at(rows: &[PaneRow]) -> Option<usize> {
     let other = rows.iter().position(
         |row| matches!(row, PaneRow::Phase { name, .. } if name.to_lowercase() == "other"),
     );
     let after_last_task = rows
         .iter()
-        .rposition(|row| matches!(row, PaneRow::Todo { .. } | PaneRow::TodoLine { .. }))
+        .rposition(|row| {
+            matches!(
+                row,
+                PaneRow::Todo { .. } | PaneRow::TodoLine { .. } | PaneRow::Fold { .. }
+            )
+        })
         .map(|last| last + 1);
     other
         .or(after_last_task)
@@ -302,9 +372,10 @@ pub fn with_naming(mut rows: Vec<PaneRow>) -> Vec<PaneRow> {
 /// `rows` with the line a new todo is typed on, where `body::add_todos_at`
 /// will write it: after the last run of the phase — the last heading of that
 /// name, ignoring case, as the writer matches it — after the tasks that belong
-/// to no phase, or at the end of the list, over "add a todo". A phase the list
+/// to no phase, or at the end of the list's last run. A phase the list
 /// does not have yet is drawn where the writer will open it, empty, over the
-/// line: it is written with its first todo.
+/// line: it is written with its first todo. A run ends at its fold, since
+/// the new todo is open and is drawn with the open ones, above it.
 pub fn with_adding(mut rows: Vec<PaneRow>, place: &TodoPlace) -> Vec<PaneRow> {
     let Some(add) = rows.iter().position(|row| *row == PaneRow::AddTodo) else {
         return rows;
@@ -328,14 +399,23 @@ pub fn with_adding(mut rows: Vec<PaneRow>, place: &TodoPlace) -> Vec<PaneRow> {
             return rows;
         }
     }
-    // The next heading after `from`, or "add a todo": where a run ends.
+    // The next heading, fold or "add a todo" after `from`: where a run's
+    // open todos end.
     let run_end = |from: usize| {
         rows.iter()
             .enumerate()
             .skip(from)
-            .find(|(_, row)| matches!(row, PaneRow::Phase { .. } | PaneRow::AddTodo))
+            .find(|(_, row)| {
+                matches!(
+                    row,
+                    PaneRow::Phase { .. } | PaneRow::Fold { .. } | PaneRow::AddTodo
+                )
+            })
             .map_or(add, |(index, _)| index)
     };
+    let rule = rows
+        .iter()
+        .position(|row| *row == PaneRow::Rule(PaneSection::Todo));
     let at = match place {
         TodoPlace::Phase(wanted) => {
             let wanted = wanted.to_lowercase();
@@ -343,11 +423,13 @@ pub fn with_adding(mut rows: Vec<PaneRow>, place: &TodoPlace) -> Vec<PaneRow> {
                 .rposition(|row| matches!(row, PaneRow::Phase { name, .. } if name.to_lowercase() == wanted))
                 .map_or(add, |heading| run_end(heading + 1))
         }
-        TodoPlace::Loose => rows
+        TodoPlace::Loose => rule.map_or(add, |rule| run_end(rule + 1)),
+        // The last run: after the last heading, or the whole list.
+        TodoPlace::End => rows
             .iter()
-            .position(|row| *row == PaneRow::Rule(PaneSection::Todo))
-            .map_or(add, |rule| run_end(rule + 1)),
-        TodoPlace::End => add,
+            .rposition(|row| matches!(row, PaneRow::Phase { .. }))
+            .or(rule)
+            .map_or(add, |start| run_end(start + 1)),
     };
     rows.insert(at, PaneRow::Adding);
     rows
@@ -476,6 +558,19 @@ pub enum PaneRow {
         text: String,
         phased: bool,
     },
+    /// A run's done todos, folded into one row under its open ones:
+    /// `✓ 6 done`, counting the rows it holds. Enter shows the project's
+    /// done todos under every fold, dim, in file order, and hides them
+    /// again; `+` adds to its run. `group` is its run in
+    /// `body::todo_groups`, and `tasks` the run's ordinals, so a todo that
+    /// went into the fold finds it.
+    Fold {
+        group: usize,
+        tasks: Range<usize>,
+        done: usize,
+        phased: bool,
+        shown: bool,
+    },
     /// The line a new todo is being typed on, where it will land (`with_adding`).
     Adding,
     /// The row under the last todo that adds one.
@@ -500,6 +595,7 @@ impl PaneRow {
                 | PaneRow::Note { .. }
                 | PaneRow::AddNote
                 | PaneRow::Todo { .. }
+                | PaneRow::Fold { .. }
                 | PaneRow::Adding
                 | PaneRow::AddTodo
                 | PaneRow::AddPhase
@@ -527,6 +623,7 @@ impl PaneRow {
 /// (`wrap_columns`): the first row is the one the cursor rests on and Enter
 /// edits, and every further row is its own under it, up to `NOTE_LINES_SHOWN`
 /// rows, then `… n more lines`. A todo wraps the same way into `TodoLine`s.
+/// Each run's done todos fold under its open ones (`todo_rows`, by `fold`).
 /// The cursor is an index into the rows and the scroll counts rows, so a row
 /// that drew two lines would put everything under it off by one. A `width` of
 /// zero wraps nothing. The latest `NOTES_SHOWN` notes are shown, under
@@ -540,6 +637,7 @@ pub fn pane_rows(
     project: &Project,
     detail: Option<&ProjectDetail>,
     glance: &Glance,
+    fold: &TodoFold,
     width: usize,
 ) -> Vec<PaneRow> {
     let mut rows = header_rows(project, detail, width);
@@ -556,7 +654,7 @@ pub fn pane_rows(
         rows.push(PaneRow::Warning(error.clone()));
     }
 
-    rows.extend(todo_rows(detail, width));
+    rows.extend(todo_rows(detail, fold, width));
     rows.extend(note_rows(detail, width));
     rows.extend(glance_rows(detail, glance));
     rows.extend(variable_rows(detail));
@@ -676,78 +774,106 @@ fn trailer_width(owner: Option<&str>, when: Option<&str>) -> usize {
     }
 }
 
-fn todo_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
+/// The todo list, run by run as `body::todo_groups` reads it: each label
+/// where the file has it — an empty one too, since a todo added to its
+/// phase goes there — with how much of the run is done; then the run's open
+/// todos, and its done ones folded into one row under them, drawn under it
+/// only while `fold.shown`. A held todo stays where it was toggled (`fold.held`).
+fn todo_rows(detail: &ProjectDetail, fold: &TodoFold, width: usize) -> Vec<PaneRow> {
     let mut rows = Vec::new();
     rows.push(PaneRow::Rule(PaneSection::Todo));
-    // Each label is drawn where the file has it, over the run of tasks up to
-    // the next one, with how much of the run is done — a label with nothing
-    // under it too, since that is where a todo added to its phase will go.
     let labels = labels_of(detail);
-    let push_labels = |rows: &mut Vec<PaneRow>, at: usize| {
-        for (index, label) in labels.iter().enumerate().filter(|(_, l)| l.before == at) {
-            let end = labels
-                .get(index + 1)
-                .map_or(detail.todos.len(), |next| next.before);
-            let run = detail.todos.get(at..end).unwrap_or_default();
+    let groups = crate::core::body::todo_groups(&detail.todos, &labels);
+    for (group, run) in groups.into_iter().enumerate() {
+        let phased = run.phase.is_some();
+        if let Some(name) = run.phase {
             rows.push(PaneRow::Phase {
-                name: label.name.clone(),
-                done: run.iter().filter(|t| t.done).count(),
-                total: run.len(),
+                name,
+                done: run.done.len(),
+                total: run.tasks.len(),
             });
         }
-    };
-    for (ordinal, todo) in detail.todos.iter().enumerate() {
-        push_labels(&mut rows, ordinal);
-        let phased = todo.phase.is_some();
-        let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
-        let owner = todo.owner.clone();
-        let when = if todo.done {
-            todo.done_day().or_else(|| todo.added_day())
-        } else {
-            todo.added_day()
-        }
-        .map(str::to_string);
-        // The first row keeps room for what sits at its right, so a long
-        // text wraps before it rather than under it; the rows after it have
-        // the whole width again. `wrap_columns` keeps every character but
-        // the spaces it breaks on, so its first line is a prefix of the text
-        // and the rest of the text starts where that line ends.
-        let aside = trailer_width(owner.as_deref(), when.as_deref());
-        let full = width.saturating_sub(indent);
-        let (first, rest) = if aside > 0 {
-            let head = wrap_columns(&todo.text, full.saturating_sub(aside).max(1))
-                .into_iter()
-                .next()
-                .unwrap_or_default();
-            let remainder = todo.text[head.len()..].trim_start_matches(' ');
-            let rest = if remainder.is_empty() {
-                Vec::new()
-            } else {
-                wrap_columns(remainder, full)
-            };
-            (head, rest)
-        } else {
-            let mut lines = wrap_columns(&todo.text, full).into_iter();
-            (lines.next().unwrap_or_default(), lines.collect())
+        let in_open_run = |ordinal: &usize| match fold.held.get(ordinal) {
+            Some(at) => *at == HeldAt::OpenRun,
+            None => !detail.todos[*ordinal].done,
         };
-        rows.push(PaneRow::Todo {
-            ordinal,
-            done: todo.done,
-            text: first,
+        let (open, under): (Vec<usize>, Vec<usize>) = run.tasks.clone().partition(in_open_run);
+        for ordinal in open {
+            push_todo(&mut rows, ordinal, &detail.todos[ordinal], phased, width);
+        }
+        if under.is_empty() {
+            continue;
+        }
+        rows.push(PaneRow::Fold {
+            group,
+            tasks: run.tasks,
+            done: under.len(),
             phased,
-            owner,
-            when,
+            shown: fold.shown,
         });
-        rows.extend(rest.into_iter().map(|text| PaneRow::TodoLine {
-            done: todo.done,
-            text,
-            phased,
-        }));
+        if fold.shown {
+            for ordinal in under {
+                push_todo(&mut rows, ordinal, &detail.todos[ordinal], phased, width);
+            }
+        }
     }
-    push_labels(&mut rows, detail.todos.len());
     rows.push(PaneRow::AddTodo);
     rows.push(PaneRow::AddPhase);
     rows
+}
+
+/// One todo's rows: its first, then the rest of a text too wide for one.
+fn push_todo(
+    rows: &mut Vec<PaneRow>,
+    ordinal: usize,
+    todo: &crate::core::body::Todo,
+    phased: bool,
+    width: usize,
+) {
+    let indent = TODO_INDENT + if phased { PHASE_INDENT } else { 0 };
+    let owner = todo.owner.clone();
+    let when = if todo.done {
+        todo.done_day().or_else(|| todo.added_day())
+    } else {
+        todo.added_day()
+    }
+    .map(str::to_string);
+    // The first row keeps room for what sits at its right, so a long
+    // text wraps before it rather than under it; the rows after it have
+    // the whole width again. `wrap_columns` keeps every character but
+    // the spaces it breaks on, so its first line is a prefix of the text
+    // and the rest of the text starts where that line ends.
+    let aside = trailer_width(owner.as_deref(), when.as_deref());
+    let full = width.saturating_sub(indent);
+    let (first, rest) = if aside > 0 {
+        let head = wrap_columns(&todo.text, full.saturating_sub(aside).max(1))
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let remainder = todo.text[head.len()..].trim_start_matches(' ');
+        let rest = if remainder.is_empty() {
+            Vec::new()
+        } else {
+            wrap_columns(remainder, full)
+        };
+        (head, rest)
+    } else {
+        let mut lines = wrap_columns(&todo.text, full).into_iter();
+        (lines.next().unwrap_or_default(), lines.collect())
+    };
+    rows.push(PaneRow::Todo {
+        ordinal,
+        done: todo.done,
+        text: first,
+        phased,
+        owner,
+        when,
+    });
+    rows.extend(rest.into_iter().map(|text| PaneRow::TodoLine {
+        done: todo.done,
+        text,
+        phased,
+    }));
 }
 
 fn note_rows(detail: &ProjectDetail, width: usize) -> Vec<PaneRow> {
@@ -1027,8 +1153,12 @@ pub enum PaneTarget {
     EarlierNotes,
     /// A note by its ordinal; gone (removed), the row that adds one.
     Note(usize),
-    /// A todo by its ordinal; gone, the row that adds one.
+    /// A todo by its ordinal; folded away, its run's fold; gone, the row
+    /// that adds one.
     Todo(usize),
+    /// A run's fold by its run (`PaneRow::Fold::group`); gone, the row
+    /// that adds a todo.
+    Fold(usize),
     /// The line a new todo is being typed on.
     Adding,
     AddNote,
@@ -1049,6 +1179,7 @@ pub fn target_at(rows: &[PaneRow], at: usize) -> Option<PaneTarget> {
         PaneRow::Note { ordinal, .. } => PaneTarget::Note(*ordinal),
         PaneRow::AddNote => PaneTarget::AddNote,
         PaneRow::Todo { ordinal, .. } => PaneTarget::Todo(*ordinal),
+        PaneRow::Fold { group, .. } => PaneTarget::Fold(*group),
         PaneRow::Adding => PaneTarget::Adding,
         PaneRow::AddTodo => PaneTarget::AddTodo,
         PaneRow::AddPhase => PaneTarget::AddPhase,
@@ -1156,8 +1287,17 @@ pub fn find_row(rows: &[PaneRow], target: &PaneTarget) -> Option<usize> {
             find(&|row| matches!(row, PaneRow::Note { ordinal: o, .. } if o == ordinal))
                 .or_else(|| find(&|row| matches!(row, PaneRow::AddNote)))
         }
-        PaneTarget::Todo(ordinal) => {
-            find(&|row| matches!(row, PaneRow::Todo { ordinal: o, .. } if o == ordinal))
+        // A todo ticked elsewhere goes into its run's fold, and the
+        // cursor goes with it rather than to the end of the list.
+        PaneTarget::Todo(ordinal) => find(
+            &|row| matches!(row, PaneRow::Todo { ordinal: o, .. } if o == ordinal),
+        )
+        .or_else(|| {
+            find(&|row| matches!(row, PaneRow::Fold { tasks, .. } if tasks.contains(ordinal)))
+        })
+        .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo))),
+        PaneTarget::Fold(group) => {
+            find(&|row| matches!(row, PaneRow::Fold { group: g, .. } if g == group))
                 .or_else(|| find(&|row| matches!(row, PaneRow::AddTodo)))
         }
         PaneTarget::Name => find(&|row| matches!(row, PaneRow::Name(_))),

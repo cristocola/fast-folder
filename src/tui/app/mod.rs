@@ -17,6 +17,7 @@ pub mod background;
 pub mod bases;
 pub mod data;
 pub mod desk;
+pub mod in_use;
 pub mod jobs;
 pub mod library;
 pub mod modal;
@@ -41,7 +42,7 @@ mod run;
 mod status;
 mod templates_tab;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ratatui::crossterm::event::KeyCode;
@@ -270,6 +271,17 @@ pub struct App {
     /// The section `<` or `>` left the pane's cursor in, to land in again
     /// on the next project once its rows are there.
     pane_seek: Option<pane::PaneSection>,
+    /// The projects whose done todos the pane shows under their folds, this
+    /// session; never written to `state.toml`.
+    done_shown: HashSet<PathBuf>,
+    /// The todos toggled on this visit to `pane_for`, by ordinal, each with
+    /// where its row was and the texts it may read — the one it was toggled
+    /// with, and any the pane's own F2 gave it since: a tick keeps its row,
+    /// so Enter again is the undo. Cleared when the selection leaves the
+    /// project; a hold whose ordinal reads none of its texts when a re-read
+    /// lands is dropped (`on_detail`), and hiding the done todos drops the
+    /// holds under the folds.
+    pane_held: BTreeMap<usize, (pane::HeldAt, Vec<String>)>,
     pub focus: Focus,
     pub screen: Screen,
     /// The desk tab's rows, cursor, group filter and order.
@@ -306,6 +318,12 @@ pub struct App {
     /// Jobs — moves, copies, deletes, reconciles in processes of their own —
     /// and which one the progress dialog follows.
     pub background: background::Background,
+    /// What a move, a delete or a rename is waiting to hear about the
+    /// folders it takes away (`in_use`), while it waits.
+    pub in_use: Option<in_use::Checking>,
+    /// The number of the last `Effect::CheckInUse`; an answer carrying
+    /// another is an older question's.
+    pub in_use_request: u64,
     /// A batch job over the marked projects, while one is running.
     pub job: Option<jobs::Job>,
     pub status: Status,
@@ -419,6 +437,8 @@ impl App {
             pane_anchor: None,
             pane_for: None,
             pane_seek: None,
+            done_shown: HashSet::new(),
+            pane_held: BTreeMap::new(),
             focus: Focus::Projects,
             screen: Screen::Library,
             desk: desk::DeskState::default(),
@@ -434,6 +454,8 @@ impl App {
             busy: None,
             busy_id: None,
             background: background::Background::default(),
+            in_use: None,
+            in_use_request: 0,
             job: None,
             status: Status::default(),
             log: std::collections::VecDeque::new(),

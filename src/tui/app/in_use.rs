@@ -1,0 +1,303 @@
+//! The app's side of what uses a folder: a move, a delete or a rename asks
+//! before it starts (`Effect::CheckInUse`, answered by a numbered
+//! `Msg::InUse`), and a folder something uses gets a picker — go anyway,
+//! go with the others, or cancel — before `StartJob` or the rename's `Run`.
+//!
+//! The job's own look, under the data lock, is the authority; this one is
+//! the courtesy of asking while the person is still here to answer.
+
+use std::path::PathBuf;
+
+use super::App;
+use crate::core::holders::{Holders, Verb};
+use crate::core::jobs::JobKind;
+use crate::core::library::Project;
+use crate::tui::app::actions::Targets;
+use crate::tui::app::modal::{Modal, PickItem, PickState, Then};
+use crate::tui::effect::{Action, Effect};
+
+/// What a question about what uses some folders is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum After {
+    /// Move them to this base.
+    Move(PathBuf),
+    Delete,
+    /// Rename the one project to this name.
+    Rename(String),
+}
+
+impl After {
+    fn verb(&self) -> Verb {
+        match self {
+            After::Move(_) => Verb::Move,
+            After::Delete => Verb::Delete,
+            After::Rename(_) => Verb::Rename,
+        }
+    }
+
+    /// Whether the verb is a job, whose progress dialog the question puts
+    /// up as its start would. A rename has no dialog, so a job started
+    /// while it is asked about owns the dialog and its Ctrl-C.
+    fn starts_a_job(&self) -> bool {
+        !matches!(self, After::Rename(_))
+    }
+}
+
+/// A question on its way: its number, the projects it is about and what it
+/// is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checking {
+    pub request: u64,
+    pub targets: Targets,
+    pub after: After,
+    /// Whether the progress dialog was hidden before a move's or a delete's
+    /// question put it up. The answer leaves it as it found it, so a job
+    /// hidden with Esc is not drawn over the in-use picker.
+    pub hidden: bool,
+}
+
+/// What the in-use picker was opened about: which projects something uses,
+/// which nothing does, and what the verb was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InUseChoice {
+    pub busy: Vec<PathBuf>,
+    pub free: Vec<PathBuf>,
+    pub batch: bool,
+    pub after: After,
+}
+
+/// The picker's values.
+pub const ANYWAY: &str = "anyway";
+pub const OTHERS: &str = "others";
+pub const CANCEL: &str = "cancel";
+
+/// What the status line says while a rename's question is out; the answer
+/// takes it away, unless something newer has replaced it.
+const CHECKING: &str = "checking what uses it…";
+
+/// Lines of each busy project's detail, before `and k more`: the picker's
+/// detail is a few wrapped rows.
+const DETAIL_LINES: usize = 4;
+
+impl App {
+    /// Ask what uses `projects`' folders before `after` takes them away. A
+    /// move and a delete show the progress dialog at once, as their start
+    /// does; a rename says so on the status line and leaves the dialog to
+    /// whatever job has it. A second question while one is out is refused,
+    /// and so is any while a job is starting.
+    pub(super) fn ask_what_uses(
+        &mut self,
+        projects: Vec<Project>,
+        batch: bool,
+        after: After,
+    ) -> Vec<Effect> {
+        if self.in_use.is_some() {
+            self.warn("still checking what uses the last folders asked about");
+            return Vec::new();
+        }
+        if let Some(starting) = self.background.starting {
+            self.warn(format!("still {starting}"));
+            return Vec::new();
+        }
+        self.in_use_request += 1;
+        let request = self.in_use_request;
+        let hidden = self.background.hidden;
+        match after {
+            After::Move(_) => self.background.starting = Some("moving…"),
+            After::Delete => self.background.starting = Some("deleting…"),
+            After::Rename(_) => self.info(CHECKING),
+        }
+        if after.starts_a_job() {
+            self.background.hidden = false;
+        }
+        let folders = projects
+            .iter()
+            .map(|project| (project.path.clone(), project.id.clone()))
+            .collect();
+        self.in_use = Some(Checking {
+            request,
+            targets: Targets {
+                paths: projects.into_iter().map(|project| project.path).collect(),
+                batch,
+            },
+            after,
+            hidden,
+        });
+        vec![Effect::CheckInUse { request, folders }]
+    }
+
+    /// The answer: go on with what nothing uses, or ask.
+    ///
+    /// A move's or a delete's answer gives the dialog back as the question
+    /// found it and takes the Ctrl-C pressed on it meanwhile, which only
+    /// this question can have earned: no job starts while it is out. A
+    /// rename's leaves both alone, since they belong to any job started
+    /// while it was asked about.
+    pub(super) fn on_in_use(
+        &mut self,
+        request: u64,
+        found: Vec<(PathBuf, Holders)>,
+    ) -> Vec<Effect> {
+        let Some(checking) = self.in_use.take_if(|checking| checking.request == request) else {
+            return Vec::new();
+        };
+        let verb = checking.after.verb();
+        if checking.after.starts_a_job() {
+            self.background.starting = None;
+            self.background.hidden = checking.hidden;
+            if std::mem::take(&mut self.background.cancel_when_started) {
+                self.info(format!("Cancelled — nothing was {}.", verb.past()));
+                return Vec::new();
+            }
+        } else if self.status.text == CHECKING {
+            self.status = super::Status::default();
+        }
+        let projects = self.still_here(&checking.targets);
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        let holders = |path: &PathBuf| {
+            found
+                .iter()
+                .find(|(asked, _)| asked == path)
+                .map(|(_, holders)| holders)
+        };
+        let (busy, free): (Vec<&Project>, Vec<&Project>) = projects
+            .iter()
+            .partition(|project| holders(&project.path).is_some_and(|found| found.in_use(verb)));
+        if busy.is_empty() {
+            let paths = free.iter().map(|project| project.path.clone()).collect();
+            return self.go_ahead(paths, checking.targets.batch, &checking.after, false);
+        }
+        let physical = busy
+            .iter()
+            .any(|project| holders(&project.path).is_some_and(|found| found.physical(verb)));
+        let title = if checking.targets.batch {
+            format!(
+                "{} of {} project{} {} in use",
+                busy.len(),
+                projects.len(),
+                crate::util::plural::s(projects.len()),
+                crate::util::plural::of(busy.len(), "is", "are")
+            )
+        } else {
+            format!("{} is in use", busy[0].id)
+        };
+        let mut detail: Vec<String> = busy
+            .iter()
+            .filter_map(|project| {
+                let said = holders(&project.path)?.sentence(verb, DETAIL_LINES);
+                Some(if checking.targets.batch {
+                    format!("{}: {said}", project.id)
+                } else {
+                    said
+                })
+            })
+            .collect();
+        let uses: usize = busy
+            .iter()
+            .filter_map(|project| holders(&project.path))
+            .map(|found| found.refusing(verb, false).len())
+            .sum();
+        let them = crate::util::plural::of(uses, "it", "them");
+        detail.push(match (verb, physical) {
+            (_, true) => format!("Nothing goes past {them}."),
+            (Verb::Move, _) => format!("Moving anyway leaves {them} with the old folder."),
+            (Verb::Rename, _) => format!("Renaming anyway leaves {them} with the old name."),
+            (Verb::Delete, _) => format!("Deleting anyway takes the folder from under {them}."),
+        });
+        let detail = detail.join(". ");
+        let word = match verb {
+            Verb::Move => "Move",
+            Verb::Rename => "Rename",
+            Verb::Delete => "Delete",
+        };
+        let item = |label: String, value: &str| PickItem {
+            label,
+            detail: detail.clone(),
+            value: value.to_string(),
+        };
+        let mut items = Vec::new();
+        if !physical {
+            items.push(item(format!("{word} anyway"), ANYWAY));
+        }
+        if checking.targets.batch && !free.is_empty() && verb != Verb::Rename {
+            items.push(item(
+                format!(
+                    "{word} the {} other{}",
+                    free.len(),
+                    crate::util::plural::s(free.len())
+                ),
+                OTHERS,
+            ));
+        }
+        // The cursor rests on Cancel, the command line's default no: going
+        // past a use takes a move of the cursor, never one Enter or keys
+        // meant for something else that land in the filter.
+        let cancel = items.len();
+        items.push(item("Cancel".to_string(), CANCEL));
+        let choice = InUseChoice {
+            busy: busy.iter().map(|project| project.path.clone()).collect(),
+            free: free.iter().map(|project| project.path.clone()).collect(),
+            batch: checking.targets.batch,
+            after: checking.after,
+        };
+        self.modals.push(Modal::Pick(
+            PickState::new(title, items, Then::InUse(Box::new(choice)))
+                .wide()
+                .resting_on(cancel),
+        ));
+        Vec::new()
+    }
+
+    /// The in-use picker's answer.
+    pub(super) fn on_in_use_choice(&mut self, choice: InUseChoice, value: &str) -> Vec<Effect> {
+        match value {
+            ANYWAY => {
+                let paths = choice.busy.into_iter().chain(choice.free).collect();
+                self.go_ahead(paths, choice.batch, &choice.after, true)
+            }
+            OTHERS => self.go_ahead(choice.free, choice.batch, &choice.after, false),
+            _ => self.nothing_went(&choice.after),
+        }
+    }
+
+    /// Esc, or Cancel, on the in-use picker.
+    pub(super) fn nothing_went(&mut self, after: &After) -> Vec<Effect> {
+        self.info(format!("Cancelled — nothing was {}.", after.verb().past()));
+        Vec::new()
+    }
+
+    /// Start the verb over what is left of `paths`.
+    fn go_ahead(
+        &mut self,
+        paths: Vec<PathBuf>,
+        batch: bool,
+        after: &After,
+        force: bool,
+    ) -> Vec<Effect> {
+        let projects = self.still_here(&Targets { paths, batch });
+        if projects.is_empty() {
+            return self.gone_from_the_library();
+        }
+        match after {
+            After::Move(target) => {
+                self.start_background(JobKind::Move, projects, Some(target.clone()), force)
+            }
+            After::Delete => self.start_background(JobKind::Delete, projects, None, force),
+            After::Rename(name) => {
+                let Some(project) = projects.into_iter().next() else {
+                    return Vec::new();
+                };
+                self.run_action(
+                    "renaming…",
+                    Action::Rename {
+                        project: Box::new(project),
+                        name: name.clone(),
+                        force,
+                    },
+                )
+            }
+        }
+    }
+}

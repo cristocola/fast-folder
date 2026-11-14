@@ -28,6 +28,7 @@ pub fn reconcile_unlocked_with(cfg: &Config, ticker: Ticker) -> ReconcileReport 
         ticker,
         live: crate::core::jobs::live_workers(),
         deferred: None,
+        asking: crate::core::holders::asking_chain(),
     };
     let report = reconcile_pass(cfg, &mut pass);
     keep_verdicts(&report);
@@ -43,12 +44,14 @@ fn keep_verdicts(report: &ReconcileReport) {
 }
 
 /// What one pass carries: its progress, the live jobs whose records it leaves
-/// alone, and — when it is to hand removals on until its lock is released —
-/// where it puts them.
+/// alone, — when it is to hand removals on until its lock is released —
+/// where it puts them, and who asked for it, which a paused move's look at
+/// what uses its folder leaves out (`core::holders::Guard::asking`).
 pub(super) struct Pass<'a> {
     pub(super) ticker: Ticker<'a>,
     pub(super) live: crate::core::jobs::Live,
     pub(super) deferred: Option<Vec<Deferred>>,
+    pub(super) asking: Vec<crate::core::holders::Asking>,
 }
 
 impl Pass<'_> {
@@ -206,12 +209,16 @@ fn reconcile_pass(cfg: &Config, pass: &mut Pass) -> ReconcileReport {
 /// configuration beneath it: which bases get walked is the whole question, and
 /// a snapshot taken before the lock could already be stale.
 pub fn reconcile_locked() -> ReconcileReport {
-    reconcile_locked_with(Ticker::none())
+    reconcile_locked_with(Ticker::none(), &crate::core::holders::asking_chain())
 }
 
 /// [`reconcile_locked`], saying how far it has got; see
-/// [`reconcile_unlocked_with`].
-pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
+/// [`reconcile_unlocked_with`]. `asking` is who asked for it — a job's
+/// starter — and is left out of what uses a paused move's folder.
+pub fn reconcile_locked_with(
+    ticker: Ticker,
+    asking: &[crate::core::holders::Asking],
+) -> ReconcileReport {
     let mut report = ReconcileReport::default();
     ticker.subject("reconcile".to_string());
     let data_lock = crate::util::lockfile::DataLock::acquire_then(|| {
@@ -240,6 +247,7 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
         ticker,
         live: crate::core::jobs::live_workers(),
         deferred: Some(Vec::new()),
+        asking: asking.to_vec(),
     };
     let mut report = reconcile_pass(&config, &mut pass);
     // Each removal deferred past the lock is this job's own from here: a
@@ -272,8 +280,15 @@ pub fn reconcile_locked_with(ticker: Ticker) -> ReconcileReport {
     report
 }
 
-/// Run a deferred removal and report it as the pass would have.
+/// Run a deferred removal and report it as the pass would have, its
+/// verdicts its operation's (`ReconcileReport::kept_by`).
 fn finish_deferred(deferred: Deferred, ticker: Ticker, report: &mut ReconcileReport) {
+    let (kept, operation) = (report.verdicts.len(), deferred.housekeeping.operation());
+    finish_deferred_removal(deferred, ticker, report);
+    report.kept_by(kept, &operation);
+}
+
+fn finish_deferred_removal(deferred: Deferred, ticker: Ticker, report: &mut ReconcileReport) {
     match deferred.housekeeping {
         move_cleanup::Housekeeping::Deleted(path) => {
             let fate = move_cleanup::Housekeeping::Deleted(path.clone()).run(ticker);

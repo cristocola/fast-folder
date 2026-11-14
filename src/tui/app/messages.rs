@@ -107,6 +107,7 @@ impl App {
             }
             Msg::Details(read) => self.on_details(read),
             Msg::Working { asked, active } => self.on_working(asked, active),
+            Msg::InUse { request, found } => self.on_in_use(request, found),
             Msg::MetaLoaded(loaded) => {
                 self.library.absorb_meta(loaded);
                 self.recompute();
@@ -314,6 +315,9 @@ impl App {
             }
         }
         let selected = self.library.selected().is_some_and(|p| p.path == path);
+        if self.pane_for.as_ref() == Some(&path) {
+            self.release_moved_holds(&detail);
+        }
         self.details.insert(path, *detail);
         if selected {
             // A landed write settles on its row and pulses there;
@@ -533,6 +537,7 @@ impl App {
             self.adds_landed(todo_ordinal);
             todo_ordinal.map(pane::PaneTarget::Todo)
         } else {
+            self.hold_through_a_reword();
             self.pane_edit
                 .take_if(|edit| edit.pending())
                 .map(|edit| edit.target())

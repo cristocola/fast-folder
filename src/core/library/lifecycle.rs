@@ -2,8 +2,10 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::config::Config;
+use crate::core::holders::{self, Folder, Guard, Verb};
 use crate::core::project_info;
 
 use super::cache::*;
@@ -75,27 +77,54 @@ pub fn delete_project_unlocked(project: &Project) -> Result<()> {
 
 /// Application entry point for deletion with configured-base and identity
 /// validation performed under the mutation lock. The folder's removal runs
-/// after the lock is released.
+/// after the lock is released. **It asks nothing about what uses the
+/// folder** (`Guard::off`), like the library's other compatibility entry
+/// points: the tests drive it, and the surfaces delete through a job
+/// ([`delete_project_in_parts`]) or `operations::delete`.
 pub fn delete_project_configured(project: &Project) -> Result<()> {
-    let housekeeping = delete_project_in_parts(project)?;
+    delete_project_guarded(project, &Guard::off()).map(drop)
+}
+
+/// [`delete_project_configured`], asking what uses the folder first, as
+/// `guard` says; answers what the delete went past.
+pub fn delete_project_guarded(project: &Project, guard: &Guard) -> Result<Vec<String>> {
+    let cancel = AtomicBool::new(false);
+    let (housekeeping, notes) = delete_project_in_parts(project, guard, &cancel)?;
     finish_delete(
         &project.name,
         housekeeping,
         crate::core::progress::Ticker::none(),
     );
-    Ok(())
+    Ok(notes)
 }
 
 /// Delete up to the moment the project is out of the library — one rename
 /// under the data lock — and hand back the removal of its hidden folder,
-/// which needs no lock and can take minutes on a cloud mount.
+/// which needs no lock and can take minutes on a cloud mount, with what the
+/// delete went past (`core::holders`).
+///
+/// **`cancel` is honoured until the folder leaves the library**, and read
+/// once what uses it has been asked: nothing before that changes anything,
+/// and nothing after it can be taken back.
 pub fn delete_project_in_parts(
     project: &Project,
-) -> Result<crate::core::move_cleanup::Housekeeping> {
+    guard: &Guard,
+    cancel: &AtomicBool,
+) -> Result<(crate::core::move_cleanup::Housekeeping, Vec<String>)> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
-    delete_project_inner(&project)
+    let asked = asked_about(&config, &project, guard);
+    delete_checked(&project, &asked, guard, cancel)
+}
+
+/// The folder a verb asks about: both spellings when it looks at all.
+fn asked_about(config: &Config, project: &Project, guard: &Guard) -> Folder {
+    if guard.look {
+        Folder::of(config, project)
+    } else {
+        Folder::at(&project.path, &project.id)
+    }
 }
 
 /// Remove a deleted project's hidden folder, and say so if any of it stays.
@@ -136,6 +165,17 @@ pub fn finish_delete(
 pub(crate) fn delete_project_inner(
     project: &Project,
 ) -> Result<crate::core::move_cleanup::Housekeeping> {
+    let asked = Folder::at(&project.path, &project.id);
+    delete_checked(project, &asked, &Guard::off(), &AtomicBool::new(false))
+        .map(|(housekeeping, _)| housekeeping)
+}
+
+fn delete_checked(
+    project: &Project,
+    asked: &Folder,
+    guard: &Guard,
+    cancel: &AtomicBool,
+) -> Result<(crate::core::move_cleanup::Housekeeping, Vec<String>)> {
     let path =
         crate::util::paths::canonical(&project.path).unwrap_or_else(|_| project.path.clone());
     let base =
@@ -164,10 +204,20 @@ pub(crate) fn delete_project_inner(
         );
     }
     refuse_mounts_inside(&path)?;
+    // What uses the folder, before it leaves the library either way.
+    let notes = holders::check(asked, Verb::Delete, guard)?.notes(Verb::Delete);
+    // A cancel that came while that look ran stops it here: the next step
+    // takes the project out of the library, which no cancel undoes.
+    if cancel.load(Ordering::Relaxed) {
+        anyhow::bail!(
+            "the delete of '{}' was cancelled; nothing was removed",
+            project.name
+        );
+    }
     if crate::core::transactions::RetireStrategy::for_base(&base)
         == crate::core::transactions::RetireStrategy::InPlace
     {
-        return delete_in_place(project, &path, &base);
+        return delete_in_place(project, &path, &base).map(|housekeeping| (housekeeping, notes));
     }
     // **Out of the library in one rename, then removed** — the same reason as
     // a move's source (`core::move_cleanup`): a removal that stops part of the
@@ -195,7 +245,10 @@ pub(crate) fn delete_project_inner(
         }
     }
     remove_from_base_cache(project);
-    Ok(crate::core::move_cleanup::Housekeeping::Deleted(retired))
+    Ok((
+        crate::core::move_cleanup::Housekeeping::Deleted(retired),
+        notes,
+    ))
 }
 
 /// Refuse a project with another filesystem mounted inside it: the removal
@@ -299,20 +352,34 @@ fn delete_in_place(
 /// [`Project`].
 ///
 /// **Mutates without holding [`crate::util::lockfile::DataLock`]**, which the
-/// name is there to admit. Applications call [`rename_project_configured`].
+/// name is there to admit, and asks nothing about what uses the folder.
+/// Applications call [`rename_project_configured`].
 #[doc(hidden)]
 pub fn rename_project_unlocked(project: &Project, new_folder: &str) -> Result<Project> {
     let project = revalidate_recorded_project(project)?;
     rename_project_inner(&project, new_folder)
 }
 
+/// A renamed project, and what the rename went past (`core::holders`).
+#[derive(Debug, Clone)]
+pub struct Renamed {
+    pub project: Project,
+    pub notes: Vec<String>,
+}
+
 /// Application entry point for rename with configured-base and identity
-/// validation performed under the mutation lock.
-pub fn rename_project_configured(project: &Project, new_folder: &str) -> Result<Project> {
+/// validation performed under the mutation lock, asking what uses the
+/// folder first, as `guard` says.
+pub fn rename_project_configured(
+    project: &Project,
+    new_folder: &str,
+    guard: &Guard,
+) -> Result<Renamed> {
     let _data_lock = crate::util::lockfile::DataLock::acquire()?;
     let config = Config::load()?;
     let project = revalidate_project(&config, project)?;
-    rename_project_inner(&project, new_folder)
+    let asked = asked_about(&config, &project, guard);
+    rename_checked(&project, new_folder, &asked, guard)
 }
 
 /// The suffix on the folder a case-only rename passes through.
@@ -359,10 +426,7 @@ pub(crate) fn case_staging_target(name: &str) -> Option<&str> {
 /// Windows refuses a folder with anything in it open and says only "access
 /// is denied", which is no permission problem to explain.
 fn held_or(error: std::io::Error, folder: &Path) -> anyhow::Error {
-    let held = cfg!(windows)
-        .then(|| crate::core::holders::in_tree(folder).refusal())
-        .flatten();
-    match held {
+    match holders::held_on_windows(folder) {
         Some(held) => anyhow::anyhow!("{held}"),
         None => anyhow::Error::new(error),
     }
@@ -383,6 +447,16 @@ pub(crate) fn stranded_rename_message(context: &str, staging: &Path, rollback: &
 }
 
 pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Result<Project> {
+    let asked = Folder::at(&project.path, &project.id);
+    rename_checked(project, new_folder, &asked, &Guard::off()).map(|renamed| renamed.project)
+}
+
+fn rename_checked(
+    project: &Project,
+    new_folder: &str,
+    asked: &Folder,
+    guard: &Guard,
+) -> Result<Renamed> {
     let sanitized = crate::core::validated::ProjectFolderName::parse(new_folder)?.into_string();
     if sanitized == project.name {
         anyhow::bail!("'{}' is already the folder's name", sanitized);
@@ -410,7 +484,12 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
     // that NTFS thinks is distinct merely takes the staging path and arrives
     // correctly anyway; only the reverse would refuse the rename.
     let case_only_change = sanitized.to_lowercase() == project.name.to_lowercase();
+    // What uses the folder, before the first rename: a program working in
+    // it follows the rename, but whatever names the path does not.
+    let ask = || holders::check(asked, Verb::Rename, guard);
+    let in_use;
     if case_only_change {
+        in_use = ask()?;
         let mut attempt = 0;
         let mut staging = base.join(case_staging_name(&sanitized, attempt));
         while assets::entry_exists(&staging)? {
@@ -448,6 +527,7 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
                 crate::util::paths::display_path(&new_path)
             );
         }
+        in_use = ask()?;
         crate::util::fs_retry::rename_dir(&project.path, &new_path)
             .map_err(|error| held_or(error, &project.path))?;
     }
@@ -473,7 +553,10 @@ pub(crate) fn rename_project_inner(project: &Project, new_folder: &str) -> Resul
 
     remove_from_base_cache(project);
     cache_upsert(&base, &renamed);
-    Ok(renamed)
+    Ok(Renamed {
+        project: renamed,
+        notes: in_use.notes(Verb::Rename),
+    })
 }
 
 /// Drop a project's entry from its base cache, best-effort (mirrors the

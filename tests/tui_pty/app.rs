@@ -278,6 +278,182 @@ fn a_second_ctrl_c_restores_the_cursor() {
     );
 }
 
+/// When the second of two signals lands, measured from launch: well after
+/// the first frame, and the second close enough behind the first that the
+/// app's once-a-second idle wake has rarely seen the first by then.
+const FIRST_SIGNAL: Duration = Duration::from_millis(1500);
+const SECOND_SIGNAL: Duration = Duration::from_millis(1530);
+
+/// What a shell needs back after `kill -INT` twice from another terminal:
+/// the app's screen undone and the terminal cooked — lines, echo, the
+/// signal keys — whichever way the app left, the handler's or `main`'s. The
+/// first look proves the app had the terminal raw.
+///
+/// A guard: the hazard it is for (an exit started inside an exit) is a
+/// matter of where the signal lands, which no test can choose.
+#[test]
+fn a_second_signal_gives_the_app_s_terminal_back_cooked() {
+    let sb = Sandbox::new();
+    let run = pty::run_signalled(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &[],
+        &[(FIRST_SIGNAL, libc::SIGINT), (SECOND_SIGNAL, libc::SIGINT)],
+        DEADLINE,
+    );
+    let out = &run.transcript;
+
+    assert!(
+        run.modes_before.is_some_and(|modes| !pty::cooked(modes)),
+        "the app should have had the terminal raw when the signal came:\n{out}"
+    );
+    assert!(
+        out.contains("\x1b[?1049h"),
+        "the app opened its screen:\n{out}"
+    );
+    assert_eq!(run.code, 130, "two interrupts exit 130:\n{out}");
+    assert!(
+        pty::cooked(run.modes_after),
+        "the shell must get its terminal back cooked, not raw:\n{out}"
+    );
+    assert!(
+        out.contains("\x1b[?1049l") && out.contains("\x1b[?25h"),
+        "the screen must be left and the cursor shown:\n{out}"
+    );
+}
+
+/// The same for a hang-up and then a terminate — a window closed while a
+/// supervisor stops the process — and the code says which signal ended it:
+/// 143, the terminate's, when the handler did. Should the app have seen
+/// the hang-up first and left by `main`, it said `aborted.` and exited 130.
+#[test]
+fn a_hang_up_then_a_terminate_give_the_app_s_terminal_back_cooked() {
+    let sb = Sandbox::new();
+    let run = pty::run_signalled(
+        common::FASTF,
+        &[],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &[],
+        &[(FIRST_SIGNAL, libc::SIGHUP), (SECOND_SIGNAL, libc::SIGTERM)],
+        DEADLINE,
+    );
+    let out = &run.transcript;
+
+    assert!(
+        run.modes_before.is_some_and(|modes| !pty::cooked(modes)),
+        "the app should have had the terminal raw when the signal came:\n{out}"
+    );
+    assert!(
+        run.code == 143 || (run.code == 130 && pty::plain(out).contains("aborted.")),
+        "a terminate after a hang-up exits 143 (it exited {}):\n{out}",
+        run.code
+    );
+    assert!(
+        pty::cooked(run.modes_after),
+        "the shell must get its terminal back cooked, not raw:\n{out}"
+    );
+    assert!(
+        out.contains("\x1b[?1049l") && out.contains("\x1b[?25h"),
+        "the screen must be left and the cursor shown:\n{out}"
+    );
+}
+
+/// An inline prompt on the command line is raw too, and gives its rows and
+/// the terminal back on a second interrupt the same way.
+#[test]
+fn a_second_signal_gives_an_inline_picker_s_terminal_back_cooked() {
+    let sb = Sandbox::new();
+    sb.plant_project(&sb.base, "shared_one", "ID0011");
+    sb.plant_project(&sb.base, "shared_two", "ID0012");
+    let run = pty::run_signalled(
+        common::FASTF,
+        &["path", "shared"],
+        &[
+            ("FASTF_INSTALL_DIR", sb.install.as_path()),
+            ("HOME", sb.tmp.path()),
+        ],
+        &[],
+        &[(FIRST_SIGNAL, libc::SIGINT), (SECOND_SIGNAL, libc::SIGINT)],
+        DEADLINE,
+    );
+    let out = &run.transcript;
+
+    assert!(
+        pty::plain(out).contains("shared_two"),
+        "the picker should have been drawn:\n{out}"
+    );
+    assert!(
+        run.modes_before.is_some_and(|modes| !pty::cooked(modes)),
+        "the picker should have had the terminal raw when the signal came:\n{out}"
+    );
+    assert_eq!(run.code, 130, "two interrupts exit 130:\n{out}");
+    assert!(
+        pty::cooked(run.modes_after),
+        "the shell must get its terminal back cooked, not raw:\n{out}"
+    );
+    assert!(
+        out.contains("\x1b[?25h"),
+        "the cursor must be shown:\n{out}"
+    );
+}
+
+/// A second signal exits with its own number, as a shell reports a process
+/// a signal ended: 143 when it is a terminate, 129 a hang-up. fastf is held
+/// in a post-create command, cooked, so the second signal always finds the
+/// first already taken and the handler is what exits.
+#[test]
+fn a_second_hang_up_or_terminate_exits_with_its_own_signal() {
+    let sb = Sandbox::new();
+    let dir = sb.install.join("templates").join("slow");
+    fs::create_dir_all(dir.join("files")).unwrap();
+    fs::write(
+        dir.join("template.yaml"),
+        "name: Slow\nslug: slow\nnaming_pattern: \"{id}_{name}\"\n\
+         id:\n  prefix: S\n  digits: 4\n\
+         variables:\n  - slug: name\n    label: Name\n    type: text\n\
+         \x20   required: true\n    transform: none\n\
+         post_create:\n  commands:\n    - \"sleep 5\"\n",
+    )
+    .unwrap();
+
+    for (first, second, expected) in [
+        (libc::SIGHUP, libc::SIGTERM, 143),
+        (libc::SIGTERM, libc::SIGHUP, 129),
+    ] {
+        let run = pty::run_signalled(
+            common::FASTF,
+            &["new", "slow", &format!("--name=Slow{expected}"), "--yes"],
+            &[
+                ("FASTF_INSTALL_DIR", sb.install.as_path()),
+                ("HOME", sb.tmp.path()),
+            ],
+            &[],
+            &[
+                (Duration::from_millis(1200), first),
+                (Duration::from_millis(1600), second),
+            ],
+            DEADLINE,
+        );
+        assert_eq!(
+            run.code, expected,
+            "signal {second} after {first} should exit {expected}:\n{}",
+            run.transcript
+        );
+        assert!(
+            pty::cooked(run.modes_after),
+            "the terminal stays cooked:\n{}",
+            run.transcript
+        );
+    }
+}
+
 /// Removing a base while another process rewrites the list. The screen edits
 /// the list as text and writes it whole, under the lock — so what it writes is
 /// what was on screen, and the rule this pins is that the *write* is atomic and

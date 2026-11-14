@@ -5,12 +5,16 @@
 //! gets the picker), asks its question the way the app asks it — a name to
 //! type, a yes/no, the word `delete` — and takes `--yes` for a script. The
 //! engine underneath is `core::operations`, the same calls the app makes.
+//! Rename and delete ask what uses the folder first (`cli::in_use`), and
+//! take `--force` to go past it.
 
 use anyhow::Result;
 use colored::Colorize;
 
+use crate::cli::in_use::{Go, shell_word};
 use crate::cli::target::{self, Target};
 use crate::core::config::Config;
+use crate::core::holders::{Guard, Verb};
 use crate::core::library::Project;
 use crate::core::operations;
 use crate::tui::prompt;
@@ -33,7 +37,7 @@ fn one(query: &str, verb: &str, prompt: &str, nothing: &str) -> Result<Option<Pr
 
 /// `fastf rename <query> [name]`: the folder's new name, asked for when it is
 /// not given, checked the way the app checks it.
-pub fn rename(query: &str, name: Option<String>, yes: bool) -> Result<()> {
+pub fn rename(query: &str, name: Option<String>, yes: bool, force: bool) -> Result<()> {
     let Some(project) = one(
         query,
         "rename",
@@ -75,17 +79,50 @@ pub fn rename(query: &str, name: Option<String>, yes: bool) -> Result<()> {
         println!("{}", "Already called that — nothing to do.".dimmed());
         return Ok(());
     }
-    if !yes && !confirm(&format!("Rename '{}' to '{name}'?", project.name))? {
-        prompt::report_cancelled("nothing was renamed");
-        return Ok(());
-    }
-    let renamed = operations::rename(&project, &name)?;
+    let again = format!(
+        "fastf rename {} {} --yes --force",
+        shell_word(&project.id),
+        shell_word(&name)
+    );
+    let cfg = Config::load()?;
+    let force = match crate::cli::in_use::before(
+        &cfg,
+        &project,
+        Verb::Rename,
+        yes,
+        force,
+        &again,
+        || {},
+    )? {
+        Go::Cancelled => return Ok(()),
+        Go::Ahead { asked: true, force } => force,
+        Go::Ahead { force, .. } => {
+            if !yes && !confirm(&format!("Rename '{}' to '{name}'?", project.name))? {
+                prompt::report_cancelled("nothing was renamed");
+                return Ok(());
+            }
+            force
+        }
+    };
+    let renamed = operations::rename(&project, &name, &Guard::here(force)).map_err(|error| {
+        if crate::core::holders::is_in_use(&error) {
+            anyhow::anyhow!(
+                "{error:#}\nhint: {}",
+                crate::cli::in_use::hint(Verb::Rename, &again)
+            )
+        } else {
+            error
+        }
+    })?;
     println!(
         "{} Renamed {} to {}",
         "✓".green(),
         project.id,
-        display_path(&renamed.path)
+        display_path(&renamed.project.path)
     );
+    for note in &renamed.notes {
+        eprintln!("{} {note}", "note:".cyan().bold());
+    }
     Ok(())
 }
 
@@ -119,8 +156,9 @@ pub fn unregister(query: &str, yes: bool) -> Result<()> {
 }
 
 /// `fastf delete <query>`: the folder and everything inside it, after the
-/// word `delete` — the same confirmation the app asks for.
-pub fn delete(query: &str, yes: bool, detach: bool) -> Result<()> {
+/// word `delete` — the same confirmation the app asks for, asked after
+/// `Delete anyway?` too.
+pub fn delete(query: &str, yes: bool, force: bool, detach: bool) -> Result<()> {
     let Some(project) = one(
         query,
         "delete",
@@ -129,6 +167,20 @@ pub fn delete(query: &str, yes: bool, detach: bool) -> Result<()> {
     )?
     else {
         return Ok(());
+    };
+    let again = format!("fastf delete {} --yes --force", shell_word(&project.id));
+    let cfg = Config::load()?;
+    let force = match crate::cli::in_use::before(
+        &cfg,
+        &project,
+        Verb::Delete,
+        yes,
+        force,
+        &again,
+        || {},
+    )? {
+        Go::Cancelled => return Ok(()),
+        Go::Ahead { force, .. } => force,
     };
     if !yes {
         crate::util::tty::require_tty("confirm", "pass --yes to delete without confirming")?;
@@ -152,8 +204,15 @@ pub fn delete(query: &str, yes: bool, detach: bool) -> Result<()> {
     // A job of its own: removing a large folder on a cloud mount takes
     // minutes, and the project leaves the library in one step before it.
     let item = crate::core::jobs::JobItem::of(&project, None)?;
-    match crate::cli::jobs::start(crate::core::jobs::JobKind::Delete, vec![item], detach)? {
-        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+    match crate::cli::jobs::start(
+        crate::core::jobs::JobKind::Delete,
+        vec![item],
+        force,
+        detach,
+    )? {
+        crate::cli::jobs::Followed::Ended(state) => {
+            crate::cli::jobs::finish(&state, Some((Verb::Delete, &again)))
+        }
         _ => Ok(()),
     }
 }

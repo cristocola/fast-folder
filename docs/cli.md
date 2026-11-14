@@ -151,6 +151,25 @@ only the program's, and only when your shell's `PATH` has a folder fastf's
 lacks. A shell that answers nothing leaves things as they were. Not on Windows,
 where a program from the Start menu gets the same `PATH` as one from a console.
 
+#### Ctrl-C, hang-ups and exit codes
+
+Ctrl-C asks fastf to stop where it safely can: a create in progress rolls its
+folder back, and the command says `aborted.` and exits **130**. A closed
+terminal window (SIGHUP) and a terminate (SIGTERM) ask the same way. A move, a
+copy, a delete and a reconcile are jobs of their own, and [Jobs](#jobs) says
+what each of these does to one.
+
+A second Ctrl-C, hang-up or terminate ends fastf at once, after giving the
+terminal back — the prompt's rows cleared, the app's screen left, the cursor
+shown, the terminal cooked — and exits with the code a shell reports for that
+signal: **130** when the second was a Ctrl-C (SIGINT), **129** a hang-up,
+**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130, and a
+console closed after a Ctrl-C exits 129. A console closed first asks the way
+Ctrl-C does: Windows ends a program five seconds after its console closes, and
+fastf rolls back and exits inside them; whatever is still working then is
+ended by Windows. Any other failure exits 1 with an `error:` line, and a
+command line fastf cannot read exits 2.
+
 ## Browsing projects
 
 `fastf recent` and `fastf search` open the [guided app](app.md) on a
@@ -380,19 +399,21 @@ folder, the same fixed-width stamp as `created`, so the two compare as text —
 or `null` where neither could be read; see [the project
 model](projects.md#description-and-touched) for what it does and does not see.
 `fastf show` adds what only the file knows — `last_note`, the timestamp of the
-newest dated note or `null`; `variables`; `notes`; and `todos` with the `phase`
-each one sits under, its `owner` and its `added` and `done_at` stamps, each
-`null` where the line does not say:
+newest dated note or `null`; `variables`; `notes`; and `todos` in file order,
+each with its `number` (the one `fastf todo` takes: its place in the file,
+from one), the `phase` it sits under, its `owner` and its `added` and
+`done_at` stamps, each `null` where the line does not say:
 
 ```json
 {
   "id": "ID0047",
   "name": "2026-04-20_Lullaby_ID0047",
   "todos": [
-    { "done": true,  "text": "read the order",       "phase": null,
-      "owner": null, "added": null, "done_at": null },
-    { "done": false, "text": "cut the first minute", "phase": "Main Edit",
-      "owner": "claude", "added": "2026-05-02T18:41:00Z", "done_at": null }
+    { "number": 1, "done": true,  "text": "read the order",
+      "phase": null, "owner": null, "added": null, "done_at": null },
+    { "number": 2, "done": false, "text": "cut the first minute",
+      "phase": "Main Edit", "owner": "claude",
+      "added": "2026-05-02T18:41:00Z", "done_at": null }
   ]
 }
 ```
@@ -569,7 +590,10 @@ comes first, so a library that never named an owner is listed whole. Within a
 group, the project nothing has written in for the longest comes first;
 `--order recent`, `name` or `id` change that. The column after the todo is how
 long the project has been quiet, counted from `touched` (the newer of its
-`PROJECT_INFO.md` and its folder). `active: claude` means a program with that
+`PROJECT_INFO.md` and its folder). The columns are measured in the columns
+their text takes, and a row fits the terminal, or a hundred columns when the
+list is piped: a todo too long for its column is printed whole, with the age
+two spaces after it. `active: claude` means a program with that
 name has its working folder inside the project right now. On Linux this is
 read from the process table; on other systems the column is absent. The desk
 has no due dates: it shows how long a todo has waited, and your calendar holds
@@ -676,9 +700,29 @@ fastf move ID0047                    # pick the target base interactively
 fastf move ID0047 archive            # target by base label
 fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
+fastf move ID0047 archive --yes --force   # even while something uses it
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. Changes made to the project while it moves are kept. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. What changes in the project while it copies is copied too. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+
+**A project something is using is not moved until you say so** — a program
+working in it or holding a file open, a container or sandbox mounting part of
+it, another filesystem mounted inside it, a systemd unit that names it.
+`fastf move` asks before its confirmation, on Linux: on a terminal it lists
+what uses the folder and asks `Move anyway?` (no by default) instead of `Move
+this project?`; with `--yes` alone it refuses, exits 1 and starts nothing:
+
+```
+error: node (pid 4242) is working in src, so ID0047 was not moved; stop it, then move it again
+hint: --force moves it anyway, and the result names what used it: `fastf move ID0047 archive --yes --force`
+```
+
+`--force` moves it anyway; what it went past is a `note:` in the result and a
+line in `fastf.log`. A shell whose prompt is in the folder is only a note, and
+the shell or agent that ran the command never counts.
+[A project something is using](projects.md#a-project-something-is-using) has
+what counts and what does not. On Windows, Windows itself refuses to move a
+folder with anything in it open, and `--force` changes nothing there.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
 nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
@@ -797,6 +841,7 @@ fastf rename lullaby                 # the current name, offered to edit
 fastf unregister ID0047              # remove PROJECT_INFO.md; the files stay
 fastf delete ID0047                  # names the folder, asks you to type `delete`
 fastf delete ID0047 --yes            # for scripts
+fastf delete ID0047 --yes --force    # even while something uses it
 ```
 
 The three verbs the guided app's action menu has (`r`, `u`, `D`), for the
@@ -807,6 +852,13 @@ the folder and takes the word `delete` and nothing else. `--yes` answers for a
 script; without it and without a terminal to ask on, every one of them refuses
 rather than guessing. Unregister leaves the folder untouched, so `fastf
 register` brings the project straight back; delete is permanent.
+
+Rename and delete ask what uses the folder first, as `move` does: on a
+terminal, the list and `Rename anyway?` or `Delete anyway?` — a delete then
+still asks for the word — and under `--yes` a refusal naming
+`--yes --force`, which goes ahead and says what it went past. `fastf register
+--rename` asks too, leaving out the shell that typed it, and a refusal there is
+the rename's own: the registration stands.
 
 Delete takes the project out of the library in one rename, to a hidden
 `.fastf-deleted-…` folder beside it, and then removes that — so a removal that
@@ -826,7 +878,8 @@ fastf reconcile --resolve <path> keep-moved   # settle one item that needs you
 
 `--list` sorts what is unfinished by who finishes it: **fastf** (a reconcile
 does — the app starts one by itself), **waiting** (for a base that is not
-mounted or does not answer), or **needs you**, each with its reason and the
+mounted or does not answer, or a paused move for what uses its folder to
+stop), or **needs you**, each with its reason and the
 exact commands that settle it. Only a few things need you: an old copy holding
 something that differs from the moved copy (`keep-moved` or `take-old`), an
 old copy whose project fastf cannot find (`put-back` or `discard`), a move
@@ -887,8 +940,11 @@ any other fastf can follow it (`fastf jobs watch`, `L` in the app) or cancel
 it. `move`, `copy-to`, `delete` and `reconcile` all take `--detach`.
 
 A cancel undoes a move or a copy until it publishes its `PROJECT_INFO.md`;
-after that it is too late, and `fastf jobs cancel` says so. A reconcile stops
-between items. A job whose process was killed shows as `stopped`;
+after that it is too late, and `fastf jobs cancel` says so. A move on one
+drive, which is a rename, is never half done: a cancel that comes while it
+checks what uses the folder moves nothing. A delete stops the same way until
+its folder leaves the library, and a Ctrl-C while the command line itself
+checks starts no job at all. A reconcile stops between items. A job whose process was killed shows as `stopped`;
 `fastf reconcile` finishes what it left, whole.
 
 **A job waits out a filesystem that stops answering.** When nothing has moved
@@ -898,10 +954,13 @@ while it restarts is asked again, and a mount that drops is waited for, up to
 two minutes at a time. A move whose mount is still gone after that, before its
 copy is published, is `paused`: what it copied is kept, and it goes on from
 there when you move the project again, or with `fastf reconcile` once the mount
-is back. Only what fastf cannot fix stops a job — no permission, a program
-writing a file in the project, a full or read-only drive, a name the drive will
-not take — and then the first thing it says is what kind of problem it is and
-what to do.
+is back. Only what fastf cannot fix stops a job — no permission, something
+using the project (unless the job was started with `--force`), a full or
+read-only drive, a name the drive will not take — and then the first thing it
+says is what kind of problem it is and what to do. A job asks what uses each
+folder again under the library's lock, leaving out whoever started it: its
+request records that process, every one above it and what the command is
+piped to or from.
 
 While a move copies it holds the library's lock, so a change made elsewhere
 meanwhile — a tag, a note — waits, and says which job it waits for. Removing
@@ -939,8 +998,9 @@ Ctrl-C. See [config.md](config.md) for where both files live.
 ## Todos
 
 ```bash
-fastf todo list ID0047                            # the list, numbered
-fastf todo list ID0047 --open                     # only what is left
+fastf todo list ID0047                            # what is open, numbered; done ones counted
+fastf todo list ID0047 --open                     # only what is open, no counts
+fastf todo list ID0047 --all                      # every task, in file order
 fastf todo add ID0047 "colour grade"              # at the end
 fastf todo add ID0047 "cut" --phase "Main Edit"   # under a phase label
 fastf todo add ID0047 "cut @claude"               # owner: @claude
@@ -978,7 +1038,10 @@ for the hat (`fastf hat`). A todo without any of these has no owner. `owner`
 prints a todo's owner, changes it, or removes it with `--none`. An owner is one word, by
 the rule a tag keeps. `list` shows the owner and the day (added, or done once
 it is) in two columns after the text, and leaves both out of a list that has
-neither.
+neither. The columns are measured over the tasks the list shows and never
+make a line wider than the terminal, or a hundred columns when the list is
+piped; a task too long for its column is printed whole, with its owner and
+day two spaces after it.
 
 **The owner is read from the end of the line only.** fastf takes the run of
 `@name`, `added:` and `done:` tokens at the end of the line as the todo's
@@ -1014,13 +1077,37 @@ opens the label when the list has none by that name: above an `### Other` if
 there is one, since that is where a list keeps what belongs to no phase, and at
 the end otherwise.
 
-**The numbers are the ones `list` prints**, counted from one over the tasks
-alone, so a label takes no number and adding a phase renumbers nothing. A
-number of 0, or one past the end of the list, is refused with the way to see
-the list. `done`, `edit` and `remove` read the list first and refuse if that
-task's text changed meanwhile — edited by hand, or by the app — rather than
-touch the wrong line; ticking what is already ticked, or rewording a task to
-the text it already has, says so and writes nothing.
+**`list` shows what is open first.** Each phase is its label, its open
+tasks, and one `✓ n done` line for the tasks ticked off, in the order the
+file has them; an empty label is shown too, since it is where `--phase`
+puts a task. The file itself never changes order.
+
+```
+  → ID0047 2026-04-20_Lullaby_ID0047
+
+     ✓ 1 done
+  Main Edit
+  2. [ ] cut the first minute  @claude  2026-05-02
+  3. [ ] colour grade                   2026-05-02
+  Other
+
+  1/3 done
+```
+
+`--open` leaves out the `✓` lines and any phase with nothing open; `--all`
+prints every task, done ones dimmed, in file order. The two cannot be
+combined.
+
+**A task's number is its place in the file**, counted from one over the
+tasks alone, so a label takes no number, adding a phase renumbers nothing,
+and folding the done ones renumbers nothing either: `list` prints the open
+ones' numbers and `list --all` every number. A number of 0, or one past the
+end of the list, is refused with the way to see every number.
+`fastf show --json` carries each todo's `number` too. `done`, `edit` and
+`remove` read the list first and refuse if that task's text changed
+meanwhile — edited by hand, or by the app — rather than touch the wrong
+line; ticking what is already ticked, or rewording a task to the text it
+already has, says so and writes nothing.
 
 `edit` rewrites the text after the brackets and nothing else: the indent, the
 `-` or `*`, the tick and the line ending stay as they were, and the task keeps

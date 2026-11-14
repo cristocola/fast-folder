@@ -188,7 +188,8 @@ pub fn looks_like_a_date(value: &str) -> bool {
         (None, _) => true,
         (Some(month), None) => digits(month, 2),
         (Some(month), Some(day)) => {
-            digits(month, 2) && (digits(day, 2) || day.len() > 2 && digits(&day[..2], 2))
+            digits(month, 2)
+                && (digits(day, 2) || day.len() > 2 && day.get(..2).is_some_and(|d| digits(d, 2)))
         }
     }
 }
@@ -325,6 +326,19 @@ mod tests {
         assert!(diagnose("template=").unwrap().contains("needs a value"));
         assert!(diagnose("=x").unwrap().contains("needs a field"));
         assert!(diagnose(">2026").unwrap().contains("needs a field"));
+    }
+
+    /// The search bar asks this on every keystroke, so a day that is a digit
+    /// and then a character wider than a byte is a message, not a crash.
+    #[test]
+    fn a_day_cut_by_a_wide_character_is_named_not_a_panic() {
+        assert!(
+            diagnose("created>2026-01-1€")
+                .unwrap()
+                .contains("needs a date like 2026-01-01")
+        );
+        assert!(!looks_like_a_date("2026-05-0…"));
+        assert!(looks_like_a_date("2026-05-01T10:00:00Z"));
     }
 
     use super::*;

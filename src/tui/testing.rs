@@ -342,6 +342,8 @@ pub fn job_view(
                 })
                 .collect(),
             auto: false,
+            force: false,
+            asking: Vec::new(),
         }),
         state: Some(JobState {
             version: 1,

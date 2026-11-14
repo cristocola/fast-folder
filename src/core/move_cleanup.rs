@@ -827,9 +827,7 @@ pub(crate) fn retire(source: &Path, retired: &Path) -> Retire {
             (Presence::Present(_), Presence::Absent) => {
                 // Windows keeps a folder with anything in it open, and says
                 // only "access is denied": say who, when it can be told.
-                let held = cfg!(windows)
-                    .then(|| crate::core::holders::in_tree(source).refusal())
-                    .flatten();
+                let held = crate::core::holders::held_on_windows(source);
                 Retire::KeptWhole(match held {
                     Some(held) => held,
                     None => crate::util::fs_retry::describe_rename_error(&error),

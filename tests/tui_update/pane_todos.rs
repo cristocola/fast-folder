@@ -110,6 +110,9 @@ fn f2_rewords_a_todo_on_its_line_and_emptied_removes_it() {
     done_ok(&mut app, "Todo reworded.");
     assert!(app.pane_edit.is_none(), "a landed edit closes");
 
+    // The done one is under its fold: shown, it is reworded the same way.
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    press(&mut app, Key::plain(KeyCode::Enter));
     go_to(&mut app, |row| {
         matches!(row, PaneRow::Todo { ordinal: 0, .. })
     });
@@ -173,7 +176,7 @@ fn plus_adds_into_the_cursors_phase_and_keeps_the_line_open_for_the_next() {
         ],
     );
     go_to(&mut app, |row| {
-        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
     });
     press(&mut app, Key::ch('+'));
     let rows = app.pane_rows();
@@ -183,8 +186,8 @@ fn plus_adds_into_the_cursors_phase_and_keeps_the_line_open_for_the_next() {
         .expect("the add line");
     assert!(
         matches!(rows[adding - 1], PaneRow::Todo { ordinal: 1, .. })
-            && matches!(rows[adding + 1], PaneRow::Phase { .. }),
-        "at the end of the Setup phase: {rows:?}"
+            && matches!(rows[adding + 1], PaneRow::Fold { .. }),
+        "at the end of the Setup phase's open todos, over its fold: {rows:?}"
     );
     assert_eq!(app.pane_cursor, adding, "the cursor is where the typing is");
 
@@ -920,4 +923,478 @@ fn o_on_a_todo_picks_its_owner_and_sends_it_as_the_todos_edit() {
         sent(&effects),
         Some(Action::SetTodoOwner { ordinal: 1, owner: Some(owner), .. }) if owner == "acme"
     ));
+}
+
+/// The bar's pairs, as `key what`.
+fn bar(app: &App) -> Vec<String> {
+    fastf::tui::command::hints(app.context(), app, 200)
+        .into_iter()
+        .map(|(key, what)| format!("{key} {what}"))
+        .collect()
+}
+
+/// The todo section's rows in short: `## name`, `[ ] n` / `[x] n` by
+/// ordinal, `fold n` (`+ shown`), `adding`, `add`.
+fn shape(app: &App) -> Vec<String> {
+    app.pane_rows()
+        .iter()
+        .skip_while(|r| !matches!(r, PaneRow::Rule(fastf::tui::app::pane::PaneSection::Todo)))
+        .skip(1)
+        .take_while(|r| !matches!(r, PaneRow::Rule(_)))
+        .map(|row| match row {
+            PaneRow::Phase { name, .. } => format!("## {name}"),
+            PaneRow::Todo { ordinal, done, .. } => {
+                format!("[{}] {ordinal}", if *done { 'x' } else { ' ' })
+            }
+            PaneRow::Fold { done, shown, .. } => {
+                format!("fold {done}{}", if *shown { " shown" } else { "" })
+            }
+            PaneRow::Adding => "adding".to_string(),
+            _ => "add".to_string(),
+        })
+        .collect()
+}
+
+/// The row the cursor is on, in `shape`'s words.
+fn on(app: &App) -> String {
+    let rows = app.pane_rows();
+    match &rows[app.pane_cursor] {
+        PaneRow::Todo { ordinal, done, .. } => {
+            format!("[{}] {ordinal}", if *done { 'x' } else { ' ' })
+        }
+        PaneRow::Fold { done, shown, .. } => {
+            format!("fold {done}{}", if *shown { " shown" } else { "" })
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+/// A re-read of the selected project landing with these todos.
+fn reread(app: &mut App, todos: &[(bool, &str)]) {
+    with_todos(
+        app,
+        &todos
+            .iter()
+            .map(|(done, text)| (*done, *text, None))
+            .collect::<Vec<_>>(),
+    );
+}
+
+/// **Enter on a fold shows the done todos where they are, and hides them
+/// again.** The done ones follow the fold, dim, in file order; the cursor
+/// stays on the fold throughout, and the bar says which Enter will do. A
+/// fold has no text to edit and no owner, so F2 and `O` are not offered;
+/// `+` still adds.
+#[test]
+fn enter_on_a_fold_shows_the_done_todos_in_place_and_again_hides_them() {
+    let mut app = editing_fixture();
+    assert_eq!(shape(&app), ["[ ] 1", "fold 1", "add", "add"]);
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    let hints = bar(&app);
+    assert!(hints.iter().any(|h| h == "Enter show"), "{hints:?}");
+    assert!(hints.iter().any(|h| h == "+ add"), "{hints:?}");
+    assert!(
+        !hints
+            .iter()
+            .any(|h| h.starts_with("F2 ") || h.starts_with("O ")),
+        "{hints:?}"
+    );
+
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(sent(&effects).is_none(), "showing writes nothing");
+    assert_eq!(
+        shape(&app),
+        ["[ ] 1", "fold 1 shown", "[x] 0", "add", "add"]
+    );
+    assert_eq!(on(&app), "fold 1 shown", "the cursor stays on the fold");
+    assert!(
+        bar(&app).iter().any(|h| h == "Enter hide"),
+        "{:?}",
+        bar(&app)
+    );
+
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(shape(&app), ["[ ] 1", "fold 1", "add", "add"]);
+    assert_eq!(on(&app), "fold 1");
+}
+
+/// **The done todos shown are the project's, for the session**: walking to
+/// another project and back finds them still shown, and the project walked
+/// to shows its own folded.
+#[test]
+fn the_shown_fold_is_the_projects_for_the_session() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    press(&mut app, Key::plain(KeyCode::Enter));
+
+    press(&mut app, Key::ch('>'));
+    reread(&mut app, &[(true, "shoot"), (false, "cut")]);
+    assert_eq!(
+        shape(&app),
+        ["[ ] 1", "fold 1", "add", "add"],
+        "another project starts folded"
+    );
+    press(&mut app, Key::ch('<'));
+    assert_eq!(
+        shape(&app),
+        ["[ ] 1", "fold 1 shown", "[x] 0", "add", "add"],
+        "and the first is still shown"
+    );
+}
+
+/// **A todo ticked here keeps its row until the selection leaves**: the
+/// re-read after the tick finds it ticked in the open run with the cursor
+/// on it, and Enter again unticks the same todo. Back from another
+/// project, it is a done todo like any other, in the fold.
+#[test]
+fn a_todo_ticked_on_this_visit_stays_in_its_row_until_the_selection_leaves() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let at = app.pane_cursor;
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "delivered the video")],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "fold 1", "add", "add"]);
+    assert_eq!(app.pane_cursor, at, "the cursor never moved");
+    assert_eq!(on(&app), "[x] 1");
+
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::ToggleTodo { ordinal: 1, was, .. }) if was == "delivered the video"
+        ),
+        "Enter again is the undo: {effects:?}"
+    );
+    done_ok(&mut app, "Reopened.");
+    reread(
+        &mut app,
+        &[
+            (true, "ingested the videos"),
+            (false, "delivered the video"),
+        ],
+    );
+    assert_eq!(on(&app), "[ ] 1");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "delivered the video")],
+    );
+
+    press(&mut app, Key::ch('>'));
+    press(&mut app, Key::ch('<'));
+    assert_eq!(
+        shape(&app),
+        ["fold 2", "add", "add"],
+        "a new visit folds what was ticked on the last"
+    );
+}
+
+/// **A hold is on an ordinal, so it lasts only while that ordinal reads the
+/// todo it was made for.** An add or a removal above it renumbers the list
+/// — by this pane or anybody — and the ticked todo joins its fold, with
+/// the cursor; an add below it moves nothing.
+#[test]
+fn an_add_or_a_removal_lets_the_ticked_ones_join_the_fold() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[
+            (true, "ingested the videos"),
+            (true, "delivered the video"),
+            (false, "invoice"),
+        ],
+    );
+    assert_eq!(
+        shape(&app),
+        ["[x] 1", "[ ] 2", "fold 1", "add", "add"],
+        "added below: the tick keeps its row"
+    );
+
+    reread(
+        &mut app,
+        &[
+            (false, "call the label"),
+            (true, "ingested the videos"),
+            (true, "delivered the video"),
+            (false, "invoice"),
+        ],
+    );
+    assert_eq!(
+        shape(&app),
+        ["[ ] 0", "[ ] 3", "fold 2", "add", "add"],
+        "added above: ordinal 1 is another todo now, and the tick is folded"
+    );
+    assert_eq!(on(&app), "fold 2", "the cursor went with it");
+
+    // A removal above does the same.
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(&mut app, &[(true, "delivered the video")]);
+    assert_eq!(shape(&app), ["fold 1", "add", "add"]);
+}
+
+/// **A tick sent before the re-read of an add has landed is held all the
+/// same.** The add's write is answered first and its re-read is still on
+/// its way when Enter ticks a todo from the list on screen; that re-read
+/// lands with one more todo, and the ticked one keeps its row.
+#[test]
+fn a_tick_made_while_an_adds_re_read_is_on_its_way_keeps_its_row() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::AddTodo));
+    press(&mut app, Key::ch('+'));
+    type_text(&mut app, "invoice");
+    press(&mut app, Key::plain(KeyCode::Enter));
+    added(&mut app, 2);
+    press(&mut app, Key::plain(KeyCode::Esc));
+    assert!(app.pane_edit.is_none());
+
+    // The list on screen is still the one before the add.
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let at = app.pane_cursor;
+    press(&mut app, Key::plain(KeyCode::Enter));
+    // The add's re-read lands, then the tick's answer and its own.
+    reread(
+        &mut app,
+        &[
+            (true, "ingested the videos"),
+            (false, "delivered the video"),
+            (false, "invoice"),
+        ],
+    );
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[
+            (true, "ingested the videos"),
+            (true, "delivered the video"),
+            (false, "invoice"),
+        ],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "[ ] 2", "fold 1", "add", "add"]);
+    assert_eq!(app.pane_cursor, at, "the cursor never moved");
+}
+
+/// **An untick under a shown fold stays there**, so Enter again re-ticks
+/// it where it is; hiding the done todos lets it join the open ones.
+#[test]
+fn unticking_under_an_open_fold_keeps_it_there_until_the_fold_is_hidden() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+    });
+    let at = app.pane_cursor;
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Reopened.");
+    reread(
+        &mut app,
+        &[
+            (false, "ingested the videos"),
+            (false, "delivered the video"),
+        ],
+    );
+    assert_eq!(
+        shape(&app),
+        ["[ ] 1", "fold 1 shown", "[ ] 0", "add", "add"],
+        "the fold counts the rows it holds"
+    );
+    assert_eq!(app.pane_cursor, at);
+
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        shape(&app),
+        ["[ ] 0", "[ ] 1", "add", "add"],
+        "hidden, the open one is with the open ones"
+    );
+    assert_eq!(
+        on(&app),
+        "[ ] 1",
+        "the fold is gone, so the cursor is on its run's last todo"
+    );
+
+    // Among several phases the cursor stays in the run whose fold went,
+    // not on the add line at the end of the last one.
+    let mut app = editing_fixture();
+    let phased = |shoot_done: bool| {
+        [
+            (shoot_done, "shoot the band", Some("Shoot")),
+            (false, "shoot the crowd", Some("Shoot")),
+            (false, "cut", Some("Edit")),
+            (true, "grade", Some("Edit")),
+            (false, "deliver", Some("Deliver")),
+            (false, "invoice", Some("Deliver")),
+        ]
+    };
+    with_todos(&mut app, &phased(true));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Fold { group: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Reopened.");
+    with_todos(&mut app, &phased(false));
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Fold { group: 0, .. })
+    });
+    press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        shape(&app),
+        [
+            "## Shoot",
+            "[ ] 0",
+            "[ ] 1",
+            "## Edit",
+            "[ ] 2",
+            "fold 1",
+            "## Deliver",
+            "[ ] 4",
+            "[ ] 5",
+            "add",
+            "add"
+        ]
+    );
+    assert_eq!(on(&app), "[ ] 1", "the cursor stays in the Shoot run");
+}
+
+/// **F2 rewording a todo ticked on this visit keeps its row.** The hold
+/// takes the new words once the pane's own write has landed — as the
+/// reader returns them, an owner typed after them taken off — so the
+/// re-read finds the todo ticked where it was, the cursor on it, and Enter
+/// again unticks it.
+#[test]
+fn a_todo_ticked_then_reworded_keeps_its_row() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    let at = app.pane_cursor;
+    press(&mut app, Key::plain(KeyCode::Enter));
+    done_ok(&mut app, "Done.");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "delivered the video")],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "fold 1", "add", "add"]);
+
+    press(&mut app, Key::plain(KeyCode::F(2)));
+    press(&mut app, Key::ctrl('u'));
+    type_text(&mut app, "deliver the masters @editor");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(matches!(
+        sent(&effects),
+        Some(Action::ReplaceTodo { ordinal: 1, .. })
+    ));
+    done_ok(&mut app, "Todo reworded.");
+    assert_eq!(on(&app), "[x] 1", "held while the re-read is on its way");
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "deliver the masters")],
+    );
+    assert_eq!(shape(&app), ["[x] 1", "fold 1", "add", "add"]);
+    assert_eq!(on(&app), "[x] 1", "the reworded tick keeps its row");
+    assert_eq!(app.pane_cursor, at, "and the cursor never moved");
+
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(
+            sent(&effects),
+            Some(Action::ToggleTodo { ordinal: 1, was, .. }) if was == "deliver the masters"
+        ),
+        "Enter again is the undo: {effects:?}"
+    );
+}
+
+/// **`+` on a fold adds into its run**, a finished phase's too: the line
+/// opens at the end of the run's open todos, just above the fold, which is
+/// where the new open todo will be drawn.
+#[test]
+fn plus_on_a_fold_adds_into_its_phase_above_the_fold() {
+    let mut app = editing_fixture();
+    with_todos(
+        &mut app,
+        &[
+            (true, "shoot the band", Some("Shoot")),
+            (true, "shoot the crowd", Some("Shoot")),
+            (false, "cut", Some("Edit")),
+        ],
+    );
+    assert_eq!(
+        shape(&app),
+        ["## Shoot", "fold 2", "## Edit", "[ ] 2", "add", "add"]
+    );
+    go_to(&mut app, |row| matches!(row, PaneRow::Fold { .. }));
+    press(&mut app, Key::ch('+'));
+    assert_eq!(
+        shape(&app),
+        [
+            "## Shoot", "adding", "fold 2", "## Edit", "[ ] 2", "add", "add"
+        ]
+    );
+    type_text(&mut app, "shoot the encore");
+    let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert!(
+        matches!(sent(&effects), Some(Action::AddTodos { place, .. })
+            if *place == fastf::core::body::TodoPlace::Phase("Shoot".to_string())),
+        "{effects:?}"
+    );
+}
+
+/// **A todo ticked elsewhere goes into its fold, and the cursor with it**,
+/// rather than to the end of the list.
+#[test]
+fn a_todo_ticked_elsewhere_leaves_the_cursor_on_its_fold() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    reread(
+        &mut app,
+        &[(true, "ingested the videos"), (true, "delivered the video")],
+    );
+    assert_eq!(shape(&app), ["fold 2", "add", "add"]);
+    assert_eq!(on(&app), "fold 2");
+}
+
+/// **`<` and `>` land on work**: in a project whose first phase is
+/// finished, the cursor goes to the first open todo, over that phase's
+/// fold.
+#[test]
+fn a_walk_lands_on_the_first_open_todo_past_a_finished_phase() {
+    let mut app = editing_fixture();
+    go_to(&mut app, |row| {
+        matches!(row, PaneRow::Todo { ordinal: 1, .. })
+    });
+    press(&mut app, Key::ch('>'));
+    with_todos(
+        &mut app,
+        &[
+            (true, "shoot the band", Some("Shoot")),
+            (true, "shoot the crowd", Some("Shoot")),
+            (false, "cut", Some("Edit")),
+        ],
+    );
+    assert_eq!(on(&app), "[ ] 2", "{:?}", shape(&app));
 }

@@ -124,11 +124,15 @@ pub fn run(detach: bool) -> Result<()> {
     // A job of its own, like a move: its removals on a cloud mount can take
     // minutes, and closing this terminal must not stop one part of the way.
     Config::load()?;
-    let state =
-        match crate::cli::jobs::start(crate::core::jobs::JobKind::Reconcile, Vec::new(), detach)? {
-            crate::cli::jobs::Followed::Ended(state) => state,
-            _ => return Ok(()),
-        };
+    let state = match crate::cli::jobs::start(
+        crate::core::jobs::JobKind::Reconcile,
+        Vec::new(),
+        false,
+        detach,
+    )? {
+        crate::cli::jobs::Followed::Ended(state) => state,
+        _ => return Ok(()),
+    };
     let Some(report) = state.reconcile.clone() else {
         anyhow::bail!("{}", state.summary);
     };
@@ -293,6 +297,25 @@ fn print_what_is_still_open(report: &crate::core::provisioning::ReconcileReport)
             "     {}",
             "fastf changed nothing about these and finishes them once the base answers \
              again: mount it, or wait for the connection to come back."
+                .dimmed()
+        );
+    }
+    if !report.in_use.is_empty() {
+        println!(
+            "   {} {} item{} waiting for what uses {} folder{}:",
+            "in use".cyan().bold(),
+            report.in_use.len(),
+            crate::util::plural::s(report.in_use.len()),
+            crate::util::plural::of(report.in_use.len(), "its", "their"),
+            crate::util::plural::s(report.in_use.len())
+        );
+        for item in &report.in_use {
+            println!("     - {}", item.cyan());
+        }
+        println!(
+            "     {}",
+            "fastf changed nothing about these and goes on with each once nothing uses its \
+             folder: stop what uses it, or move it again with --force."
                 .dimmed()
         );
     }

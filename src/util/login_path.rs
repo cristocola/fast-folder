@@ -323,16 +323,17 @@ mod unix {
             .env(ASKING_VAR, "1")
             // oh-my-zsh checks for its own updates on start; not inside the wait.
             .env("DISABLE_AUTO_UPDATE", "true");
-        // SAFETY: `setsid` is async-signal-safe and touches nothing of the
-        // parent's; it is the one call made between fork and exec.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        let lead_a_session = || -> std::io::Result<()> {
+            // SAFETY: `setsid` is async-signal-safe and touches nothing of
+            // the parent's.
+            if unsafe { libc::setsid() } == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        };
+        // SAFETY: the closure runs between fork and exec, where it makes one
+        // async-signal-safe call and reads `errno`, and nothing else.
+        unsafe { command.pre_exec(lead_a_session) };
         let Ok(mut child) = command.spawn() else {
             return Asked::Silent;
         };
@@ -366,10 +367,16 @@ mod unix {
             }
         }
         // The shell leads a session and a process group of its own, so the
-        // group is everything its rc started that did not leave it.
+        // group is everything its rc started that did not leave it. Given up
+        // on before it has made that group, the shell is killed by its pid:
+        // it has started nothing yet.
         // SAFETY: `kill` sends a signal; the group is the unreaped child's.
         unsafe {
             libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+        }
+        // SAFETY: as above, to the unreaped child itself.
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, libc::SIGKILL);
         }
         reap(child);
         Asked::GaveUp
@@ -498,6 +505,29 @@ mod tests {
         path.into_os_string()
     }
 
+    /// What `ask` reads of the process, held still for a test: it starts the
+    /// shell in `HOME`, which other tests point at folders they then remove,
+    /// and stops waiting at the interrupt flag, which other tests raise. The
+    /// environment's lock first, then the flag's — the documented order.
+    struct Still {
+        _flag: std::sync::MutexGuard<'static, ()>,
+        _env: crate::util::test_env::EnvGuard,
+        _home: tempfile::TempDir,
+    }
+
+    fn flag_down() -> Still {
+        let (env, home) = crate::util::test_env::EnvGuard::sandbox();
+        let flag = crate::util::interrupt::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::util::interrupt::reset();
+        Still {
+            _flag: flag,
+            _env: env,
+            _home: home,
+        }
+    }
+
     /// Runs the line fastf hands it — its last argument — the way a shell
     /// would, after whatever `rc` does.
     fn answering_shell(dir: &std::path::Path, rc: &str) -> OsString {
@@ -615,6 +645,7 @@ mod tests {
 
     #[test]
     fn a_shell_says_the_path_its_rc_builds() {
+        let _flag = flag_down();
         let dir = tempfile::tempdir().unwrap();
         let shell = answering_shell(
             dir.path(),
@@ -633,6 +664,7 @@ mod tests {
     /// shell, and without the terminal: it could not give that back.
     #[test]
     fn the_shell_is_asked_interactive_and_without_a_terminal() {
+        let _flag = flag_down();
         let dir = tempfile::tempdir().unwrap();
         let shell = answering_shell(
             dir.path(),
@@ -655,6 +687,7 @@ mod tests {
     /// before it ends.
     #[test]
     fn a_job_the_rc_leaves_running_does_not_hold_the_answer() {
+        let _flag = flag_down();
         let dir = tempfile::tempdir().unwrap();
         let shell = answering_shell(dir.path(), "sleep 5 &");
         let started = Instant::now();
@@ -673,6 +706,7 @@ mod tests {
     /// everything it started goes with it.
     #[test]
     fn a_shell_that_does_not_answer_is_given_up_on_whole() {
+        let _flag = flag_down();
         let dir = tempfile::tempdir().unwrap();
         let late = dir.path().join("late");
         let shell = shell_script(
@@ -696,6 +730,7 @@ mod tests {
 
     #[test]
     fn a_shell_that_prints_no_markers_is_silent() {
+        let _flag = flag_down();
         let dir = tempfile::tempdir().unwrap();
         let shell = shell_script(dir.path(), "odd-shell", "echo 'unknown option -i'; exit 2");
         assert_eq!(ask(&shell, Duration::from_secs(5)), Asked::Silent);

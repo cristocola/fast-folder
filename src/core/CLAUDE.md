@@ -265,10 +265,12 @@ anything else of it is removed, and the rest only through the merge, entry by
 entry.**
 
 `library::move_project` is the compatibility shape (lock, revalidate);
-applications use `operations::move_project` →
-`move_project_configured_with_outcome`, which also revalidates the target against
-freshly loaded configuration. Targets are **configured bases only**, so a moved
-project stays discoverable.
+applications move through a job (`move_project_in_parts`) or
+`operations::move_project` → `move_project_with_outcome`, each with a `Guard`
+saying how what uses the folder is weighed, and each revalidating the target
+against freshly loaded configuration. `move_project_configured_with_outcome` is
+the same shape asking nothing (`Guard::off`), for the tests and library callers.
+Targets are **configured bases only**, so a moved project stays discoverable.
 
 A same-filesystem move is a plain `fs::rename` with no journal. The staged path is
 taken **only** for Unix `EXDEV` or Windows `ERROR_NOT_SAME_DEVICE`; every other
@@ -382,7 +384,7 @@ for a cancel** (the merge
 walks the moved copy on `ticker.uncancellable()`), because a check stopped part
 of the way reads as one that failed; the removal after it stops when its ticker
 honours one, leaving a redundant leftover. The public entry
-points (`move_project_configured_with_outcome`, `copy_project_configured`,
+points (`move_project_with_outcome`, `copy_project_configured`,
 `operations::reconcile_with`) end the progress through
 `core::progress::settle`: `Done`, `Cancelled` when the flag stopped it, `Failed`
 with the reason. `Ticker::none()` is what every caller with nobody to tell
@@ -542,24 +544,108 @@ record, `JobStatus::Paused`): the copy is kept, and moving the project again
 time, which only a finished copy has — and copying the rest
 (`transactions::adopt_staging`). Only a cancel rolls a copy back.
 
-**A program writing in the project stops the move before anything is copied**
-(`core::holders`, asked after the scan — `in_manifest` — and before the
-probe; Linux: `/proc/*/fd` with `fdinfo` flags and `cwd`, this user's
-processes, fastf's own left out): its later writes would land in the old
-copy. A program only working in the folder is a note in the result
-(`MoveOutcome.notes`). **On Windows a program holding anything stops it**
-(`Holders.blocking`, `busy_folders`), because Windows will not rename a folder
-while anything under it is open — a file whatever its sharing, a folder a
-console works in; only a handle on the folder itself that allows delete (a
-watcher) does not stop it. Measured in the VM, and why the retire could never
-happen otherwise. The Restart Manager (`rstrtmgr`, declared by hand, a
-thousand files a session, halved until each held file is named) says who
-holds files; opening each folder for `DELETE` answers a sharing violation
-while a console works there, which the Restart Manager cannot see — every
-folder on a local disk, only the project folder across a network, where each
-open is a round trip. A refused rename names the holder instead of "access is
-denied" (the move's rename, the retire's `KeptWhole`, `fastf rename`), and the
-sentence is the error, so no class explanation calls it a permission problem.
+**Something using the folder stops a move, a rename and a delete before
+anything changes** (`core::holders`): whatever used it keeps the old path — a
+container makes it again at its next start, a dev server writes into the old
+copy, a unit fails at the next boot. **One generic question, from what the
+operating system reports, never per tool** (a decision): on Linux every
+process's `cwd`, `exe`, `fd` with `fdinfo` flags, `maps` and arguments (this
+user's), every process's `mountinfo` (anyone's — a root container's binds
+too), host binds, mounts inside, and systemd unit files that name the folder
+or link into it (`units.rs`: the user's and system's unit folders and the
+generators', read as the manager loads them — the folders in its own order,
+a unit's own file from the first folder holding one and each drop-in name
+from the first folder holding it, every file checked against every folder
+asked about; every file, and a `<unit>.d` that is a link, read under one
+deadline on a thread of its own (`paths::answer_within`), since a unit
+file may be a link onto a mount that stopped answering, and one that does
+not answer is a note (`How::UnitSilent`) — then `systemctl show` once per
+manager, killed at two seconds, no answer counting). **`Use::weight` is the
+one table** — physical, advisory, note — and `Holders::refusal`/`notes` the
+one wording. Asked as `holders::check(&Folder, Verb, &Guard)`:
+
+- **under the data lock**: the move in `move_project_unlocked_in_parts`
+  before `paused_move` and the same-filesystem rename, as the named step
+  `JobPhase::Asking`, its answer carried into the staged path (`Asked`) and
+  a resume; the rename before its first `rename_dir`; the delete after
+  `refuse_mounts_inside`. A paused move is asked **before** its copy is
+  adopted (`ask_before_resuming`), never inside `copy_and_publish`: a refusal
+  there is a failure before the publish, which removes the paused copy. **A
+  cancel that came during the look is read right after it**, before anything
+  changes — the move's rename and the delete's rename aside cannot be taken
+  back — and the look itself runs to its end, as every check does;
+- **the folder in both spellings**: `Folder::of` rebuilds the configured one
+  from the configured base whose canonical form is the folder's parent, since
+  under the lock the project is canonical and a unit or an argument may spell
+  it through a link. Every `Folder` is resolved under a base's deadline
+  (`paths::canonical_in_time`, the path as given when it does not answer),
+  so the app's question about a folder on a base that stopped answering
+  still comes back;
+- **never counted**: fastf (by its exe link's text, never a stat through it),
+  and `Guard::asking` — whoever asked, every process above them, and the
+  processes the asker's own stdio pipes join it to (`judge::pipeline`; a pipe
+  an ancestor also holds is the session's output and joins nothing), by pid
+  and start time; a job carries its starter's chain in `JobRequest::asking`;
+- **only a note** (a decision): a shell whose only tie is its working folder
+  — its prompt; what it started is judged itself; the terminal hosting a
+  shell (`How::Terminal`: no shell itself, a shell among its children
+  wherever that works — `Pass::shell_parents`, the parent of every shell the
+  pass read — and tied only by its working folder and the folder itself
+  among its arguments: an emulator `t` opened, a tmux server, `npm run`'s
+  npm, while the dev server under its `sh -c` still advises); a process
+  whose only tie is the folder itself among its arguments (`How::OpenedOn`:
+  a file manager or a viewer opened on it, Reveal's own `xdg-open` among
+  them, which would otherwise refuse the folder's move for as long as its
+  window lives) — but not another user's, whose working folder and files
+  cannot be read (`Seen::opaque`); a unit disabled, stopped and started by
+  nothing; and whatever did not answer. An argument naming a path *inside*
+  the folder advises, and so does the folder named beside any other tie
+  (`judge::process_uses`). No program is recognised by name but a shell,
+  from `/etc/shells`;
+- **a namespace's mount counts only when this machine's table lacks its
+  (dev, root)**: a namespace starts as a copy, and an inherited mount is no
+  choice of its own; a foreign process's paths are translated through its own
+  table (`fs_kind::covering`, `host_paths`);
+- **nothing waits on a process**: the pass reads on eight workers of its own
+  under one deadline (`linux::within`, five seconds), since reading `cmdline`
+  or `maps` takes the process's memory lock, and starts another beside each
+  worker on one process for a quarter of a second (64 more at most), so a few
+  stuck reads never leave the rest unread; one that does not answer is a
+  note, and is not asked again by a later pass until its read comes back
+  (`GIVEN_UP`); one no worker reached by the deadline advises
+  (`How::Unasked`) — nothing was learned of it, and the verb does not go
+  ahead without having looked.
+
+A refusal that forcing goes past is `holders::InUse`; a physical one is a
+plain error. `Guard::force` turns advisory uses into notes plus one
+`util::log` line. `Guard::off` asks nothing: the library's compatibility
+entry points (`library::move_project`, `move_project_configured_with_outcome`,
+`delete_project_configured`, `rename_project_unlocked`) take it, and no
+surface reaches them — production reaches the engine through jobs and
+`operations::rename`, which ask. Reconcile files a paused move whose folder
+something uses under `ReconcileReport.in_use` — never `waiting`, whose advice
+is to mount a base — and touches nothing; `attention` lists it as `Waiting`,
+named `attention::A_IN_USE` so the surfaces count it apart. **Both ask
+`ask_before_resuming` about `Folder::of`/`Folder::configured`**, the job's
+question in both spellings, so what `!` calls waiting is exactly what a resume
+refuses — on Windows, what holds the folder — and the app never starts a
+reconcile every minute that would only be refused.
+
+**On Windows nothing is asked before the rename** (`BEFORE_THE_RENAME`):
+Windows refuses it itself while anything under the folder is open — a file
+whatever its sharing, a folder a console works in; only a handle on the
+folder itself that allows delete (a watcher) does not stop it — so those
+holds are physical, asked after a staged move's scan (`check_scanned`) and
+where a rename refused (`held_on_windows`). Measured in the VM, and why the
+retire could never happen otherwise. The Restart Manager (`rstrtmgr`,
+declared by hand, a thousand files a session, halved until each held file is
+named) says who holds files; opening each folder for `DELETE` answers a
+sharing violation while a console works there, which the Restart Manager
+cannot see — every folder on a local disk, only the project folder across a
+network, where each open is a round trip. A refused rename names the holder
+instead of "access is denied" (the move's rename, the retire's `KeptWhole`,
+`fastf rename`), and the sentence is the error, so no class explanation calls
+it a permission problem.
 A job's worker works in its own folder, and `jobs::start` steps out of any
 project the job is about, since a working folder holds a folder on Windows. **A stall is said, never a freeze**: a job's
 worker sets `Progress.stalled_ms` when nothing has moved for
@@ -616,10 +702,12 @@ through, its size the bytes that arrived — and then **the copy is settled**
 (`transactions::settle_copy`): the original is walked again and compared
 `Whole`, and what changed, appeared or went since it was copied is brought
 across, up to `SETTLE_ROUNDS` times, until a look finds nothing the copy does
-not hold. An original that never holds still — a dev server appends to its log
-every tenth of a second — does not stop the move: after the last round the
-copy is published as the last round left it, consistent with its record, and
-the merge after the retire carries what changed since. That walk is the move's
+not hold. A move reaches the copy only when nothing used the original or the
+move was forced past it, and an original that still never holds still — a
+forced move past a dev server appending to its log every tenth of a second, a
+file somebody saves — does not stop it: after the last round the copy is
+published as the last round left it, consistent with its record, and the
+merge after the retire carries what changed since. That walk is the move's
 second and last look at the original; `verify_source_unchanged` is only
 recovery's. Reconcile clears a probe
 a killed move left, and only the names a probe holds.
@@ -672,15 +760,25 @@ watcher thread, turns a `cancel` file into the engine's flag, waits patiently
 for the data lock (`lockfile::wait_patiently`), and logs every line to
 `jobs/<id>/log`. Surfaces follow the state file; none owns the job.
 
+**The request says how the job weighs what uses a folder**: `force`, and
+`asking` — the starter's own chain, recorded by `jobs::create`, since the
+worker's parents are the service manager and the shell that asked would
+otherwise count against its own move (`core::holders`). The worker builds
+its `Guard` from them for every item and for reconcile's paused moves, and an
+item it refuses for something forcing would go past says `in_use` in its
+report, so the command line can offer `--force` for what appeared after its
+own look.
+
 **The move is done when the original is set aside.**
 `move_engine::move_project_in_parts` runs under the data lock up to
 `move_cleanup::set_aside` and hands back a `Housekeeping` (the old copy's
 removal, owned, so it outlives the lock); `finish_housekeeping` runs it after
 the lock is released. `delete_project_in_parts` does the same for a delete, and
 `reconcile_locked_with` defers its removals (`Deferred`, `finish_deferred`)
-until its lock is dropped. The combined entry points (`move_project_configured_
-with_outcome`, `delete_project_configured`, `reconcile_unlocked`) run both halves
-in-process, so library callers and tests keep their meaning.
+until its lock is dropped. The combined entry points (`move_project_with_outcome`
+and its guard-off `move_project_configured_with_outcome`,
+`delete_project_guarded`, `reconcile_unlocked`) run both halves in-process, so
+library callers and tests keep their meaning.
 `SourceOutcome::SetAside` is what a move says before its housekeeping has run.
 
 **A live job's records are its own.** An operation id carries the pid of the
@@ -816,7 +914,13 @@ what a reconcile could not settle, kept as **verdicts** by the folder they are
 about (`ReconcileReport.verdicts` → the data dir's `attention.json`, written
 by every complete pass): a merge's conflicts (`KeepMoved`, `TakeOld`), an old
 copy that may be the only one or whose project is gone (`PutBack`,
-`Discard`), plus moves another machine began and unreadable records.
+`Discard`), plus moves another machine began and unreadable records. **A
+verdict kept while finishing a record names its operation**
+(`ReconcileReport::kept_by`), and a move's item takes only its own or one
+that names none (a file an older fastf wrote): an in-place old copy keeps
+the project's folder name, so a later move of a project in that folder has
+the same old copy. A verdict whose folder `presence` calls `Absent` is
+dropped as the file is written; `Unknown` keeps it.
 `attention::resolve` carries a choice out under the data lock
 (`operations::resolve_attention`), re-reading what is on disk first: `TakeOld`
 writes each file new at its place (never renamed, as the merge), `PutBack`
@@ -1011,6 +1115,16 @@ at once: a name written as `### Grade:` reads back as `Grade`, and would open a
 new label on every add. `phase_labels_in` reads every label with the tasks above
 it, empty ones included, for a reader that must draw where the writer will put
 a task.
+
+**`body::todo_groups` is the one rule a list is shown by**: the runs in file
+order — the loose tasks when there are any, then one per label, empty ones
+included — each with its open tasks apart from its done ones. `fastf todo
+list` prints each run's open tasks and folds its done ones into `✓ n done`,
+and the pane draws the same fold. **The file never changes order for it**: a
+todo's number is its place in the file, counted over tasks, so an agent that
+read `list --all` yesterday addresses the same todo today, and showing the
+open ones first renumbers nothing. The desk's next todo is still the first
+open one in file order (`core::desk`).
 
 **A todo's trailer is read from the end of its line and written in one order.**
 `split_trailer` takes the maximal run of trailer tokens at the end of the text

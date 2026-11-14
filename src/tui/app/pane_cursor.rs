@@ -2,8 +2,19 @@
 //! found again by what it was on.
 
 use super::App;
+use super::data::ProjectDetail;
 use super::pane::*;
 use crate::tui::effect::Effect;
+
+/// Whether a hold made on the todo at `ordinal`, which may read any of
+/// `texts`, is still about that todo: an ordinal names whatever todo sits
+/// there now.
+fn still_reads(detail: &ProjectDetail, ordinal: usize, texts: &[String]) -> bool {
+    detail
+        .todos
+        .get(ordinal)
+        .is_some_and(|todo| texts.contains(&todo.text))
+}
 
 impl App {
     /// The pane's rows for the selected project — `pane_rows` over what
@@ -33,7 +44,22 @@ impl App {
                 }),
             working: self.working.get(&project.path).cloned(),
         };
-        let rows = pane_rows(project, self.details.get(&project.path), &glance, width);
+        let detail = self.details.get(&project.path);
+        let fold = TodoFold {
+            shown: self.done_shown.contains(&project.path),
+            // The holds are this visit's, and each only while its ordinal
+            // still reads the text it was toggled with.
+            held: match detail {
+                Some(detail) if self.pane_for.as_ref() == Some(&project.path) => self
+                    .pane_held
+                    .iter()
+                    .filter(|(ordinal, (_, texts))| still_reads(detail, **ordinal, texts))
+                    .map(|(ordinal, (at, _))| (*ordinal, *at))
+                    .collect(),
+                _ => Default::default(),
+            },
+        };
+        let rows = pane_rows(project, detail, &glance, &fold, width);
         match &self.pane_edit {
             Some(PaneEdit::Line {
                 target: EditTarget::NewTodo { place, .. },
@@ -45,6 +71,89 @@ impl App {
             }) => with_naming(rows),
             _ => rows,
         }
+    }
+
+    /// Enter on a fold: show the selected project's done todos under every
+    /// fold, or hide them, for the rest of the session. The cursor stays on
+    /// the fold. Hiding drops the holds under the folds — an untick held
+    /// there would otherwise vanish with them — and the pulses go, since
+    /// they are kept by row and the rows below have moved.
+    ///
+    /// A fold whose rows were all unticked under it is gone once they join
+    /// the open ones, and the cursor goes to its run's last todo, the row
+    /// just above where the fold was: drawn open, since nothing of the run
+    /// is under a fold any more. Left to find the fold, it would land on
+    /// the add line at the end of the last run, maybe out of view.
+    pub(super) fn toggle_done_shown(&mut self, group: usize) {
+        let Some(path) = self.library.selected().map(|p| p.path.clone()) else {
+            return;
+        };
+        let run = self.pane_rows().into_iter().find_map(|row| match row {
+            PaneRow::Fold {
+                group: g, tasks, ..
+            } if g == group => Some(tasks),
+            _ => None,
+        });
+        if !self.done_shown.remove(&path) {
+            self.done_shown.insert(path);
+        } else {
+            self.pane_held.retain(|_, (at, _)| *at == HeldAt::OpenRun);
+        }
+        self.pane_pulses.clear();
+        let fold_drawn = self
+            .pane_rows()
+            .iter()
+            .any(|row| matches!(row, PaneRow::Fold { group: g, .. } if *g == group));
+        self.pane_anchor = Some(match run.and_then(|mut tasks| tasks.next_back()) {
+            Some(last) if !fold_drawn => PaneTarget::Todo(last),
+            _ => PaneTarget::Fold(group),
+        });
+        self.refind_pane();
+    }
+
+    /// Remember where the todo at `ordinal` was drawn when it was toggled
+    /// from row `at`, with the text it read: its row stays there until the
+    /// selection leaves the project.
+    pub(super) fn hold_todo(&mut self, rows: &[PaneRow], at: usize, ordinal: usize, text: String) {
+        self.pane_held
+            .entry(ordinal)
+            .or_insert_with(|| (held_at(rows, at), vec![text]));
+    }
+
+    /// The pane's own F2 on a held todo has landed: the hold takes the new
+    /// words too, as the reader will return them — an owner typed after
+    /// them taken off — so the re-read still finds it about that todo. The
+    /// old words stay, since the detail on screen reads them until the
+    /// re-read lands; an emptied todo was removed, and the re-read lets its
+    /// hold go. Called before the landed edit is taken.
+    pub(super) fn hold_through_a_reword(&mut self) {
+        let Some(PaneEdit::Line {
+            target: EditTarget::Todo { ordinal, .. },
+            input,
+            pending: true,
+            ..
+        }) = &self.pane_edit
+        else {
+            return;
+        };
+        let text = crate::core::body::NewTodo::typed(input.text().trim()).text;
+        if text.is_empty() {
+            return;
+        }
+        if let Some((_, texts)) = self.pane_held.get_mut(ordinal)
+            && !texts.contains(&text)
+        {
+            texts.push(text);
+        }
+    }
+
+    /// A re-read of the pane's project has landed: drop every hold whose
+    /// ordinal reads none of its texts — an add or a removal renumbered the
+    /// list, by this pane or anybody, or somebody else reworded it — since a
+    /// hold on an ordinal pins whatever todo is there now.
+    pub(super) fn release_moved_holds(&mut self, detail: &ProjectDetail) {
+        self.pane_held
+            .retain(|ordinal, (_, texts)| still_reads(detail, *ordinal, texts));
     }
 
     /// How many rows the pane shows at once: the height of its text.

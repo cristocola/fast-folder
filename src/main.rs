@@ -1,5 +1,11 @@
 use fastf::{bootstrap, cli, tui};
 
+/// The static musl build allocates through mimalloc; why is beside the
+/// dependency in `Cargo.toml`.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -279,12 +285,15 @@ enum Commands {
             Only the operating system's cross-device error enables the copy fallback.\n\
             It uses a private target-base transaction, copies every regular file and\n\
             empty directory, verifies exact paths/types/byte lengths plus unchanged\n\
-            source metadata, publishes atomically, and only then removes the source.\n\
-            Keep the project untouched while this copy is running.",
+            source metadata, publishes atomically, and only then removes the source.\n\n\
+            A project something is using is not moved: a program working in it or\n\
+            holding a file open, a container or sandbox mounting part of it, a service\n\
+            that names it. The refusal names each one; --force moves it anyway.",
         after_help = "Examples:\n  \
             fastf move ID0047 /mnt/projects/archive   # by full base path\n  \
             fastf move ID0047 01_PROJECTS             # by base folder name\n  \
-            fastf move lullaby                        # interactive base picker (TTY)"
+            fastf move lullaby                        # interactive base picker (TTY)\n  \
+            fastf move ID0047 archive --yes --force   # even while something uses it"
     )]
     Move {
         /// Project ID (e.g. ID0047), ID prefix, or name substring
@@ -297,6 +306,12 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
 
+        /// Move it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
+
         /// Start the move and return at once; `fastf jobs` follows it
         #[arg(long)]
         detach: bool,
@@ -305,7 +320,8 @@ enum Commands {
     /// Rename a project's folder on disk
     #[command(
         after_help = "The folder is renamed in place and the library's index updated; the project's\n\
-        ID and metadata do not change. Without a name, the current one is offered to edit.\n\n\
+        ID and metadata do not change. Without a name, the current one is offered to edit.\n\
+        A folder something is using is not renamed; --force renames it anyway.\n\n\
         Examples:\n  \
             fastf rename ID0047 2026-07-16_Spring_Campaign_v2_ID0047\n  \
             fastf rename lullaby                    # edit the current name in a prompt\n  \
@@ -321,6 +337,12 @@ enum Commands {
         /// Skip the confirmation prompt (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Rename it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Forget a project: remove its PROJECT_INFO.md and leave the files
@@ -343,7 +365,8 @@ enum Commands {
     /// Delete a project's folder and everything inside it
     #[command(
         after_help = "Permanent: there is no trash. Without --yes it names the folder and asks you\n\
-        to type the word `delete`, exactly as the guided app does.\n\n\
+        to type the word `delete`, exactly as the guided app does. A folder something is\n\
+        using is not deleted; --force deletes it anyway.\n\n\
         Examples:\n  \
             fastf delete ID0047\n  \
             fastf delete ID0047 --yes               # no confirmation (for scripts)"
@@ -355,6 +378,12 @@ enum Commands {
         /// Skip the confirmation (for scripts).
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// Delete it even when something is using the folder — a program working in it or
+        /// holding a file open, a container or sandbox mounting part of it, a service that
+        /// names it. What used it is named in the result.
+        #[arg(long)]
+        force: bool,
 
         /// Start the delete and return at once; `fastf jobs` follows it
         #[arg(long)]
@@ -664,8 +693,11 @@ enum Commands {
     /// A project's task list
     #[command(
         name = "todo",
-        after_help = "The numbers are the ones `list` prints, counted from one over the\n\
+        after_help = "A task's number is its place in the file, counted from one over the\n\
             tasks alone — a `###` phase label is not a task and takes no number.\n\
+            `list` shows each phase's open tasks with their numbers and folds the\n\
+            done ones into one line, `✓ 2 done`; their numbers do not change, and\n\
+            `list --all` prints every task with its number, in file order.\n\
             `done`, `edit` and `remove` read the list first and refuse a task\n\
             whose text changed meanwhile, rather than touch the wrong line.\n\n\
             A todo's line carries its owner and its dates, as\n\
@@ -675,6 +707,7 @@ enum Commands {
             is a todo with no owner and no dates, and nothing fills them in.\n\n\
             Examples:\n  \
             fastf todo list ID0047\n  \
+            fastf todo list ID0047 --all\n  \
             fastf todo add ID0047 \"colour grade\"\n  \
             fastf todo add ID0047 \"cut the first minute\" --phase \"Main Edit\"\n  \
             fastf todo add ID0047 \"cut the first minute @claude\"\n  \
@@ -1025,13 +1058,16 @@ enum NoteAction {
 
 #[derive(Subcommand)]
 enum TodoAction {
-    /// Show the task list, numbered, grouped by phase
+    /// Show the task list by phase: the open tasks, numbered, and how many are done
     List {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// Leave out the tasks already done
-        #[arg(long)]
+        /// Only the open tasks, without the count of done ones
+        #[arg(long, conflicts_with = "all")]
         open: bool,
+        /// Every task, done ones too, in file order
+        #[arg(long)]
+        all: bool,
     },
     /// Add an open task: one line, dated, with an owner or without
     Add {
@@ -1053,7 +1089,7 @@ enum TodoAction {
     Owner {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// The new owner, with or without its `@`
         #[arg(conflicts_with_all = ["none", "mine"])]
@@ -1069,7 +1105,7 @@ enum TodoAction {
     Done {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// Mark it open again instead
         #[arg(long)]
@@ -1079,7 +1115,7 @@ enum TodoAction {
     Edit {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
         /// The new text
         text: String,
@@ -1089,7 +1125,7 @@ enum TodoAction {
     Remove {
         /// Project ID, ID prefix, or name substring
         query: String,
-        /// The number `fastf todo list` printed
+        /// The task's number: its place in the file, as `fastf todo list --all` prints it
         number: usize,
     },
 }
@@ -1168,6 +1204,8 @@ fn main() {
     // instead of panicking — restore the default SIGPIPE disposition that the
     // Rust runtime masks on startup.
     #[cfg(unix)]
+    // SAFETY: the default disposition installs no handler, and nothing else
+    // runs yet to be racing a change of it.
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
@@ -1206,7 +1244,7 @@ fn main() {
         }
         let rendered = format!("{e:#}");
         eprintln!("{} {}", colored::Colorize::red("error:"), rendered);
-        if is_config_parse_failure(&rendered) {
+        if is_config_parse_failure(e) {
             // The only command that could repair the file also refuses to run
             // until it is repaired, so say what actually gets the user moving.
             eprintln!("  hint: fix the file, or delete it to start over with defaults");
@@ -1269,14 +1307,15 @@ fn pause_before_the_window_closes() {
 #[cfg(not(unix))]
 fn pause_before_the_window_closes() {}
 
-/// Does this error chain say that the configuration file itself is unreadable?
-///
-/// `Config::load` wraps the TOML failure with `parsing <path>`, so both halves
-/// are present in the rendered chain. Keyed on the pair rather than on either
-/// alone: fastf parses templates and metadata too, and offering to delete one
-/// of those would be terrible advice.
-fn is_config_parse_failure(rendered: &str) -> bool {
-    rendered.contains("parsing") && rendered.contains("config.toml")
+/// Does this error chain say that the configuration file itself does not
+/// parse? Asked of the chain by type (`ConfigUnreadable`), wherever a
+/// `.context()` put it, never of the text: fastf parses templates, metadata
+/// and journals too, any of which may sit under a folder whose name holds
+/// `config.toml`, and offering to delete one of those would be terrible
+/// advice.
+fn is_config_parse_failure(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|cause| cause.is::<fastf::core::config::ConfigUnreadable>())
 }
 
 /// Take `--relaunched` off the command line, recording it, before clap sees it.
@@ -1399,18 +1438,28 @@ fn run() -> Result<()> {
             query,
             base,
             yes,
+            force,
             detach,
         }) => cli::move_project::run(cli::move_project::MoveArgs {
             query,
             base,
             yes,
+            force,
             detach,
         }),
-        Some(Commands::Rename { query, name, yes }) => cli::folder_verbs::rename(&query, name, yes),
+        Some(Commands::Rename {
+            query,
+            name,
+            yes,
+            force,
+        }) => cli::folder_verbs::rename(&query, name, yes, force),
         Some(Commands::Unregister { query, yes }) => cli::folder_verbs::unregister(&query, yes),
-        Some(Commands::Delete { query, yes, detach }) => {
-            cli::folder_verbs::delete(&query, yes, detach)
-        }
+        Some(Commands::Delete {
+            query,
+            yes,
+            force,
+            detach,
+        }) => cli::folder_verbs::delete(&query, yes, force, detach),
 
         Some(Commands::Reindex) => cli::reindex::run(),
         Some(Commands::Reconcile {
@@ -1722,7 +1771,14 @@ fn run_note(action: NoteAction) -> Result<()> {
 
 fn run_todo(action: TodoAction) -> Result<()> {
     match action {
-        TodoAction::List { query, open } => cli::todo::list(cli::todo::ListArgs { query, open }),
+        TodoAction::List { query, open, all } => cli::todo::list(cli::todo::ListArgs {
+            query,
+            show: match (open, all) {
+                (true, _) => cli::todo::ListShow::Open,
+                (false, true) => cli::todo::ListShow::All,
+                (false, false) => cli::todo::ListShow::Folded,
+            },
+        }),
         TodoAction::Add {
             query,
             text,
@@ -1883,23 +1939,43 @@ mod tests {
     }
 
     /// The whole point of the hint: a config that exists but does not parse
-    /// stops every command, and no command can repair it.
+    /// stops every command, and no command can repair it — wherever a
+    /// caller's `.context()` put the failure in the chain.
     #[test]
     fn a_config_parse_failure_earns_the_hint() {
-        assert!(is_config_parse_failure(
-            "parsing /home/u/.config/fastf/config.toml: TOML parse error at line 9, column 1"
-        ));
+        let unreadable = fastf::core::config::Config::parse(
+            std::path::Path::new("/home/user/.config/fastf/config.toml"),
+            "this is = not [valid toml\n",
+        )
+        .unwrap_err();
+        assert!(is_config_parse_failure(&anyhow::Error::from(unreadable)));
+        let unreadable = fastf::core::config::Config::parse(
+            std::path::Path::new("/home/user/.config/fastf/config.toml"),
+            "[[[",
+        )
+        .unwrap_err();
+        let wrapped = anyhow::Error::from(unreadable).context("loading the configuration");
+        assert!(is_config_parse_failure(&wrapped));
     }
 
     /// "Delete it to start over with defaults" would be ruinous advice about a
     /// template or a project's metadata.
     #[test]
     fn other_parse_failures_do_not() {
-        assert!(!is_config_parse_failure(
-            "parsing /home/u/.config/fastf/templates/general/template.yaml: mapping values are not allowed"
-        ));
-        assert!(!is_config_parse_failure(
-            "reading /home/u/.config/fastf/config.toml: permission denied"
-        ));
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "parsing /home/user/.config/fastf/templates/general/template.yaml: mapping values are not allowed"
+        )));
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "reading /home/user/.config/fastf/config.toml: permission denied"
+        )));
+    }
+
+    /// A create journal in a folder whose path happens to hold `config.toml`
+    /// is no configuration file.
+    #[test]
+    fn a_journal_under_a_folder_named_like_the_config_does_not() {
+        assert!(!is_config_parse_failure(&anyhow::anyhow!(
+            "parsing /base/deploy config.toml notes/.fastf-create-v2.json: expected value"
+        )));
     }
 }

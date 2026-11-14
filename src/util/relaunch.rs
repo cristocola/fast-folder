@@ -190,9 +190,11 @@ fn has_display() -> bool {
 /// open file, which `File::metadata` would answer only by taking ownership of a
 /// descriptor we do not own.
 fn stream_has_no_reader(fd: i32) -> bool {
-    // SAFETY: `fstat` writes into a caller-provided `stat` and reads nothing
-    // else; a bad fd is reported as -1/EBADF rather than being dereferenced.
+    // SAFETY: `stat` is a plain C struct of integers, for which all zeroes
+    // is a valid value.
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `fstat` writes into the caller's `stat` and reads nothing
+    // else; a bad fd is reported as -1/EBADF rather than being dereferenced.
     if unsafe { libc::fstat(fd, &mut st) } != 0 {
         // EBADF: nothing is open there at all, so nothing can be reading it.
         return std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF);
@@ -495,14 +497,15 @@ mod tests {
     #[test]
     fn only_a_stream_nobody_can_read_counts_as_headless() {
         let mut fds = [0i32; 2];
+        // SAFETY: `pipe` writes two descriptors into an array of two.
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         assert!(
             !stream_has_no_reader(fds[0]) && !stream_has_no_reader(fds[1]),
             "a pipe is somebody reading — cron and every `| grep` depend on it"
         );
-        unsafe {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
+        for fd in fds {
+            // SAFETY: closing a descriptor the `pipe` above opened, once.
+            unsafe { libc::close(fd) };
         }
 
         let file = tempfile::NamedTempFile::new().unwrap();

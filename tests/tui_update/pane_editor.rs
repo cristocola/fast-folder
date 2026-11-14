@@ -788,7 +788,8 @@ fn a_todo_too_wide_for_the_pane_wraps_and_toggles_by_its_whole_text() {
 /// Enter on a todo writes the toggle at once — there is nothing to type
 /// — with no edit open, and the answer lands on that row: the cursor
 /// stays there and the row pulses, as an edit's does. Nothing on the
-/// list lights up, because nothing on the list changed.
+/// list lights up, because nothing on the list changed. Ticked, the todo
+/// keeps its row in the open run rather than going into the fold.
 #[test]
 fn enter_on_a_todo_toggles_it_and_the_answer_lands_on_its_row() {
     let mut app = editing_fixture();
@@ -1055,6 +1056,10 @@ fn the_hint_bar_reads_the_pane_and_the_edit() {
         (
             Box::new(|row: &PaneRow| matches!(row, PaneRow::Note { .. })),
             "Enter edit",
+        ),
+        (
+            Box::new(|row: &PaneRow| matches!(row, PaneRow::Fold { .. })),
+            "Enter show",
         ),
     ] {
         go_to(&mut app, wanted);

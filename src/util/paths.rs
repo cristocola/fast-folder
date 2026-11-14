@@ -425,21 +425,18 @@ fn verbatim_text(text: &str) -> String {
 /// tree fastf thinks it is working in. There is exactly one definition of this
 /// in the crate so a second write path cannot end up with a weaker one.
 pub(crate) fn is_link_like(metadata: &std::fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
 
         const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        metadata.file_type().is_symlink()
+            || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
 
     #[cfg(not(windows))]
     {
-        false
+        metadata.file_type().is_symlink()
     }
 }
 

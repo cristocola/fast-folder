@@ -429,10 +429,16 @@ fn registration_follow_ups(
         apply_error: None,
     };
     if let Some(desired) = desired_rename {
-        match rename(&outcome.project, &desired) {
-            Ok(project) => {
+        // Asked as this process, so the shell that typed the command is not
+        // what keeps its folder from being renamed.
+        match rename(
+            &outcome.project,
+            &desired,
+            &crate::core::holders::Guard::here(false),
+        ) {
+            Ok(renamed) => {
                 outcome.renamed_to = Some(desired);
-                outcome.project = project;
+                outcome.project = renamed.project;
             }
             Err(error) => outcome.rename_error = Some(format!("{error:#}")),
         }
@@ -933,25 +939,35 @@ pub fn add_todos_at(project: &Project, texts: &[String], place: &body::TodoPlace
     body::add_todos_at(&project_info::pinfo_path(&project.path), texts, place)
 }
 
-pub fn rename(project: &Project, folder: &str) -> Result<Project> {
-    library::rename_project_configured(project, folder)
+/// Rename a project's folder, asking first what uses it, as `guard` says
+/// (`core::holders`).
+pub fn rename(
+    project: &Project,
+    folder: &str,
+    guard: &crate::core::holders::Guard,
+) -> Result<library::Renamed> {
+    library::rename_project_configured(project, folder, guard)
 }
 
 pub fn unregister(project: &Project) -> Result<()> {
     library::unregister_project_configured(project)
 }
 
-pub fn delete(project: &Project) -> Result<()> {
-    library::delete_project_configured(project)
+/// Delete a project, asking first what uses it, as `guard` says; answers
+/// what the delete went past.
+pub fn delete(project: &Project, guard: &crate::core::holders::Guard) -> Result<Vec<String>> {
+    library::delete_project_guarded(project, guard)
 }
 
+/// Move a project, asking first what uses it, as `guard` says.
 pub fn move_project(
     project: &Project,
     target: &Path,
+    guard: &crate::core::holders::Guard,
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<MoveOutcome> {
-    library::move_project_configured_with_outcome(project, target, progress, cancel)
+    crate::core::move_engine::move_project_with_outcome(project, target, guard, progress, cancel)
 }
 
 /// Copy a project to a folder outside the library, keeping its id.
@@ -993,15 +1009,19 @@ pub fn resolve_attention(
 
 /// [`reconcile`], saying how far it has got and stopping between items, or
 /// inside a removal, when `cancel` is set. A cancelled pass still returns its
-/// report — what it finished is finished — with `cancelled` set.
+/// report — what it finished is finished — with `cancelled` set. A paused
+/// move it would resume is asked about what uses its folder first, leaving
+/// out `asking` — whoever asked for the reconcile.
 pub fn reconcile_with(
+    asking: &[crate::core::holders::Asking],
     progress: &Mutex<Progress>,
     cancel: &AtomicBool,
 ) -> Result<crate::core::provisioning::ReconcileReport> {
     let result = Config::load().map(|_| {
-        crate::core::provisioning::reconcile_locked_with(crate::core::progress::Ticker::new(
-            progress, cancel,
-        ))
+        crate::core::provisioning::reconcile_locked_with(
+            crate::core::progress::Ticker::new(progress, cancel),
+            asking,
+        )
     });
     crate::core::progress::settle(progress, cancel, &result);
     if let Ok(report) = &result

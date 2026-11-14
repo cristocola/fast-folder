@@ -27,6 +27,13 @@ pub struct ReconcileReport {
     /// is not mounted or does not answer, a path it could not look at. Nothing
     /// was changed, and nothing about it needs a person yet.
     pub waiting: Vec<String>,
+    /// Paused moves held back because something uses their folder: the base
+    /// answers, and fastf goes on with each once nothing uses it, or when it
+    /// is moved again past what uses it. Nothing was changed. Kept apart from
+    /// [`Self::waiting`], whose advice — mount it, wait for the connection —
+    /// would never settle these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub in_use: Vec<String>,
     /// The pass stopped for a cancel before it had looked at everything;
     /// what it did not reach is as it was, and the next pass takes it up.
     pub cancelled: bool,
@@ -48,7 +55,22 @@ impl ReconcileReport {
             path: path.to_path_buf(),
             kind,
             reason: reason.to_string(),
+            operation: None,
         });
+    }
+
+    /// The verdicts kept from `since` on were kept finishing `operation`'s
+    /// record: say so on each, so the next look matches each to its own
+    /// move and never to a later one whose old copy has the same path.
+    pub(crate) fn kept_by(&mut self, since: usize, operation: &str) {
+        if operation.is_empty() {
+            return;
+        }
+        for verdict in self.verdicts.iter_mut().skip(since) {
+            verdict
+                .operation
+                .get_or_insert_with(|| operation.to_string());
+        }
     }
 }
 
@@ -65,6 +87,7 @@ impl ReconcileReport {
             && self.unrecoverable.is_empty()
             && self.obsolete.is_empty()
             && self.waiting.is_empty()
+            && self.in_use.is_empty()
             && !self.cancelled
     }
 
@@ -81,7 +104,7 @@ impl ReconcileReport {
             "Nothing to reconcile — every project is fully provisioned.".to_string()
         } else {
             format!(
-                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}{}",
+                "Reconciled: {} resumed, {} finished, {} rolled back, {} restored, {} cleared{}{}{}",
                 self.resumed,
                 self.completed,
                 self.rolled_back,
@@ -90,6 +113,11 @@ impl ReconcileReport {
                 match self.waiting.len() {
                     0 => String::new(),
                     n => format!("; {n} waiting for a base to answer"),
+                },
+                match self.in_use.len() {
+                    0 => String::new(),
+                    1 => "; 1 waiting for what uses its folder".to_string(),
+                    n => format!("; {n} waiting for what uses their folders"),
                 },
                 match self.unrecoverable.len() + self.leftovers.len() {
                     0 => String::new(),

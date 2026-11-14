@@ -132,16 +132,14 @@ pub fn pseudo_console() -> bool {
     }
     const PSEUDO: &str = "PseudoConsoleWindow";
     let mut name = [0u16; 64];
-    // SAFETY: `GetConsoleWindow` takes nothing and may answer null, which is
-    // checked; `GetClassNameW` writes at most `capacity` units into `name`,
-    // which is that long, and answers how many it wrote.
-    let written = unsafe {
-        let window = GetConsoleWindow();
-        if window.is_null() {
-            return false;
-        }
-        GetClassNameW(window, name.as_mut_ptr(), name.len() as i32)
-    };
+    // SAFETY: takes nothing, and may answer null, which is checked.
+    let window = unsafe { GetConsoleWindow() };
+    if window.is_null() {
+        return false;
+    }
+    // SAFETY: writes at most `capacity` units into `name`, which is that
+    // long, and answers how many it wrote.
+    let written = unsafe { GetClassNameW(window, name.as_mut_ptr(), name.len() as i32) };
     usize::try_from(written).is_ok_and(|len| String::from_utf16_lossy(&name[..len]) == PSEUDO)
 }
 

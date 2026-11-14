@@ -124,12 +124,14 @@ pub fn step_of(job: &JobView) -> String {
 
 impl App {
     /// Start a job over `projects` — a move or a copy to `target`, a delete —
-    /// or, with no projects, a reconcile.
+    /// or, with no projects, a reconcile. `force` goes past what uses a
+    /// folder (`in_use`).
     pub(super) fn start_background(
         &mut self,
         kind: JobKind,
         projects: Vec<Project>,
         target: Option<PathBuf>,
+        force: bool,
     ) -> Vec<Effect> {
         if let Some(starting) = self.background.starting {
             self.warn(format!("still {starting}"));
@@ -152,7 +154,7 @@ impl App {
             JobKind::Reconcile => "reconciling…",
         });
         self.background.hidden = false;
-        vec![Effect::StartJob { kind, items }]
+        vec![Effect::StartJob { kind, items, force }]
     }
 
     pub(super) fn on_job_started(&mut self, started: Result<String, String>) -> Vec<Effect> {
@@ -496,6 +498,16 @@ pub(crate) fn reconcile_notes(report: &crate::core::provisioning::ReconcileRepor
             report.waiting.join("\n")
         ));
     }
+    if !report.in_use.is_empty() {
+        let n = report.in_use.len();
+        notes.push(format!(
+            "{n} waiting for what uses {} — fastf goes on with {} once nothing does; stop what \
+             uses it, or move it again and pick Move anyway:\n{}",
+            crate::util::plural::of(n, "its folder", "their folders"),
+            crate::util::plural::of(n, "it", "them"),
+            report.in_use.join("\n")
+        ));
+    }
     if !report.obsolete.is_empty() {
         notes.push(format!(
             "{} obsolete v1 marker{} left alone for manual inspection: {}",
@@ -548,5 +560,33 @@ mod tests {
         ] {
             assert!(said.contains(sentence), "{sentence:?} in:\n{said}");
         }
+    }
+
+    /// A paused move held back by what uses its folder is a paragraph of its
+    /// own, saying what to do, and never sends anyone to wait for a base.
+    #[test]
+    fn a_folder_in_use_is_not_a_base_that_does_not_answer() {
+        let one = ReconcileReport {
+            in_use: vec!["ID0001: sleep (pid 7) is working in the project folder".to_string()],
+            ..ReconcileReport::default()
+        };
+        let said = reconcile_notes(&one).join("\n");
+        assert!(
+            said.contains("1 waiting for what uses its folder")
+                && said.contains("stop what uses it, or move it again and pick Move anyway")
+                && said.contains("sleep (pid 7)"),
+            "{said}"
+        );
+        assert!(!said.contains("base"), "{said}");
+
+        let two = ReconcileReport {
+            in_use: vec!["a".to_string(), "b".to_string()],
+            ..ReconcileReport::default()
+        };
+        let said = reconcile_notes(&two).join("\n");
+        assert!(
+            said.contains("2 waiting for what uses their folders"),
+            "{said}"
+        );
     }
 }

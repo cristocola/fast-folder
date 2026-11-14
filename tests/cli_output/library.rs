@@ -518,6 +518,10 @@ fn json_output_is_an_array_and_show_is_one_project_whole() {
     assert_eq!(one["id"], "ID0001");
     assert_eq!(one["todos"][0]["text"], "cut the first minute");
     assert_eq!(
+        one["todos"][0]["number"], 1,
+        "a todo carries the number `fastf todo` takes: {shown}"
+    );
+    assert_eq!(
         one["todos"][0]["phase"], "Main Edit",
         "a todo carries its phase into the JSON: {shown}"
     );

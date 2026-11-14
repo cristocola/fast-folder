@@ -182,11 +182,7 @@ fn should_prompt_open(args: &NewArgs, tmpl: &Template, config: &Config) -> bool 
         return false;
     }
     // If reveal will already run as a post-create action, don't double-open.
-    let resolved = project::resolve_post_create(tmpl, config);
-    if resolved.reveal {
-        return false;
-    }
-    true
+    !project::resolve_post_create(tmpl, config).reveal
 }
 
 fn resolve_template(slug: Option<&str>, config: &Config) -> Result<Option<Template>> {

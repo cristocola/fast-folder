@@ -104,6 +104,16 @@ pub struct JobRequest {
     /// end is reported quietly (`tui::app::attention`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto: bool,
+    /// Go ahead past what uses a folder, as far as that can be overridden
+    /// (`core::holders::Guard::force`). The worker still looks, so the
+    /// result can say what it went past.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+    /// The process that started the job and every process above it, which
+    /// never count as using a folder: the worker's own parents are the
+    /// service manager, so the starter's are recorded here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asking: Vec<crate::core::holders::Asking>,
 }
 
 /// What became of one item, in the words both surfaces print.
@@ -118,6 +128,9 @@ pub struct ItemReport {
     pub warning: Option<String>,
     /// Why it failed, when it did.
     pub error: Option<String>,
+    /// It failed because something uses its folder, which forcing it would
+    /// go past: the surfaces offer that.
+    pub in_use: bool,
     /// The item is finished, housekeeping included.
     pub done: bool,
 }
@@ -275,19 +288,19 @@ pub fn dir(id: &str) -> Result<PathBuf> {
 }
 
 /// Write a new job's request. Its worker is not started yet.
-pub fn create(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
-    create_as(kind, items, false)
+pub fn create(kind: JobKind, items: Vec<JobItem>, force: bool) -> Result<String> {
+    create_as(kind, items, false, force)
 }
 
 /// Start the app's own reconcile ([`JobRequest::auto`]).
 pub fn start_auto() -> Result<String> {
     prune();
-    let id = create_as(JobKind::Reconcile, Vec::new(), true)?;
+    let id = create_as(JobKind::Reconcile, Vec::new(), true, false)?;
     spawn_worker(&id)?;
     Ok(id)
 }
 
-fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
+fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool, force: bool) -> Result<String> {
     let root = root_or_error()?;
     std::fs::create_dir_all(&root)
         .with_context(|| format!("creating {}", crate::util::paths::display_path(&root)))?;
@@ -301,6 +314,8 @@ fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
                     kind,
                     items,
                     auto,
+                    force,
+                    asking: crate::core::holders::asking_chain(),
                 };
                 let text = serde_json::to_string_pretty(&request)?;
                 std::fs::write(dir.join("request.json"), text).with_context(|| {
@@ -324,8 +339,9 @@ fn create_as(kind: JobKind, items: Vec<JobItem>, auto: bool) -> Result<String> {
 
 /// Start a job: write its request, start its worker, and wait until the
 /// worker says it is running. A worker that never does is an error naming
-/// where its log is.
-pub fn start(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
+/// where its log is. `force` goes past what uses a folder
+/// ([`JobRequest::force`]).
+pub fn start(kind: JobKind, items: Vec<JobItem>, force: bool) -> Result<String> {
     prune();
     // A process working in a folder holds it: Windows will not rename a
     // folder any process works in, fastf's own included, and the worker
@@ -338,7 +354,7 @@ pub fn start(kind: JobKind, items: Vec<JobItem>) -> Result<String> {
             let _ = std::env::set_current_dir(&item.base);
         }
     }
-    let id = create(kind, items)?;
+    let id = create(kind, items, force)?;
     spawn_worker(&id)?;
     let started = Instant::now();
     loop {
@@ -382,14 +398,15 @@ fn spawn_worker(id: &str) -> Result<()> {
     let child = {
         use std::os::unix::process::CommandExt;
         let detached = |mut command: Command| {
-            // SAFETY: `setsid` is async-signal-safe and touches nothing of
-            // the parent's; it is the one call made between fork and exec.
-            unsafe {
-                command.pre_exec(|| {
-                    libc::setsid();
-                    Ok(())
-                });
-            }
+            let lead_a_session = || -> std::io::Result<()> {
+                // SAFETY: `setsid` is async-signal-safe and touches nothing
+                // of the parent's.
+                unsafe { libc::setsid() };
+                Ok(())
+            };
+            // SAFETY: the closure runs between fork and exec, where it makes
+            // one async-signal-safe call and nothing else.
+            unsafe { command.pre_exec(lead_a_session) };
             command.spawn()
         };
         match in_a_scope_of_its_own(&exe, id, &install) {
@@ -523,20 +540,21 @@ impl StdHandlesNotInherited {
         const WHICH: [u32; 3] = [-10i32 as u32, -11i32 as u32, -12i32 as u32];
         let mut changed = Vec::new();
         for which in WHICH {
-            // SAFETY: plain Win32 calls on this process's own standard
-            // handles; a null or invalid one is skipped.
-            unsafe {
-                let handle = GetStdHandle(which);
-                if handle.is_null() || handle as isize == -1 {
-                    continue;
-                }
-                let mut flags = 0u32;
-                if GetHandleInformation(handle, &mut flags) != 0
-                    && flags & Self::HANDLE_FLAG_INHERIT != 0
-                    && SetHandleInformation(handle, Self::HANDLE_FLAG_INHERIT, 0) != 0
-                {
-                    changed.push((handle, flags));
-                }
+            // SAFETY: asks for one of this process's own standard handles.
+            let handle = unsafe { GetStdHandle(which) };
+            if handle.is_null() || handle as isize == -1 {
+                continue;
+            }
+            let mut flags = 0u32;
+            // SAFETY: a handle of this process's own, and a word it writes.
+            let read = unsafe { GetHandleInformation(handle, &mut flags) } != 0;
+            if !read || flags & Self::HANDLE_FLAG_INHERIT == 0 {
+                continue;
+            }
+            // SAFETY: clears the inherit flag of the same handle; `drop`
+            // sets it again.
+            if unsafe { SetHandleInformation(handle, Self::HANDLE_FLAG_INHERIT, 0) } != 0 {
+                changed.push((handle, flags));
             }
         }
         Self(changed)
@@ -883,6 +901,8 @@ mod tests {
                 kind,
                 items,
                 auto: false,
+                force: false,
+                asking: Vec::new(),
             }),
             state: None,
             alive: false,

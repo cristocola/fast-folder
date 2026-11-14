@@ -91,28 +91,79 @@ pub fn from_type_name(name: &str) -> FsKind {
     }
 }
 
-/// The mount `path` is on, from `mountinfo`'s text: the longest mount point
-/// that contains it, and that mount's type.
-pub fn mount_of<'a>(mountinfo: &'a str, path: &Path) -> Option<(PathBuf, &'a str)> {
-    let mut best: Option<(PathBuf, &str)> = None;
-    for line in mountinfo.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        let Some(dash) = fields.iter().position(|field| *field == "-") else {
-            continue;
-        };
-        let (Some(point), Some(kind)) = (fields.get(4), fields.get(dash + 1)) else {
-            continue;
-        };
-        let point = PathBuf::from(unescape(point));
-        if path.starts_with(&point)
-            && best
-                .as_ref()
-                .is_none_or(|(longest, _)| point.as_os_str().len() >= longest.as_os_str().len())
+/// One line of `mountinfo`: a folder of a filesystem (`root`, as that
+/// filesystem spells it), the device it is on, where it is mounted, and the
+/// filesystem's type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountLine {
+    /// `major:minor`: one filesystem, however many places show it.
+    pub dev: String,
+    /// The folder of that filesystem this mount shows: `/` for the whole of
+    /// it, `/@home/user/Projects/X/data` for a bind or a subvolume.
+    pub root: PathBuf,
+    pub point: PathBuf,
+    pub fstype: String,
+}
+
+/// Every line of `mountinfo`'s text, in its order: a later line is a later
+/// mount, which hides an earlier one at the same point.
+pub fn mount_lines(mountinfo: &str) -> Vec<MountLine> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let dash = fields.iter().position(|field| *field == "-")?;
+            Some(MountLine {
+                dev: fields.get(2)?.to_string(),
+                root: PathBuf::from(unescape(fields.get(3)?)),
+                point: PathBuf::from(unescape(fields.get(4)?)),
+                fstype: fields.get(dash + 1)?.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// The mount in `table` that holds `path`, and the rest of `path` below its
+/// point: the longest point that contains it, the later mount where two
+/// points are the same, since the later one hides the earlier.
+pub fn covering<'a>(table: &'a [MountLine], path: &Path) -> Option<(&'a MountLine, PathBuf)> {
+    let mut best: Option<&MountLine> = None;
+    for line in table {
+        if path.starts_with(&line.point)
+            && best.is_none_or(|longest| {
+                line.point.as_os_str().len() >= longest.point.as_os_str().len()
+            })
         {
-            best = Some((point, kind));
+            best = Some(line);
         }
     }
-    best
+    let line = best?;
+    let rest = path.strip_prefix(&line.point).ok()?.to_path_buf();
+    Some((line, rest))
+}
+
+/// Where `in_fs`, a folder of filesystem `dev` as that filesystem spells it,
+/// can be reached through the mount table `host`: every mount of `dev` whose
+/// root holds it, joined onto that mount's point. A subvolume mounted twice
+/// has two spellings; a folder no mount here shows has none.
+pub fn host_paths(host: &[MountLine], dev: &str, in_fs: &Path) -> Vec<PathBuf> {
+    host.iter()
+        .filter(|line| line.dev == dev)
+        .filter_map(|line| {
+            let rest = in_fs.strip_prefix(&line.root).ok()?;
+            Some(if rest.as_os_str().is_empty() {
+                line.point.clone()
+            } else {
+                line.point.join(rest)
+            })
+        })
+        .collect()
+}
+
+/// The mount `path` is on, from `mountinfo`'s text: its point and its type.
+pub fn mount_of(mountinfo: &str, path: &Path) -> Option<(PathBuf, String)> {
+    let table = mount_lines(mountinfo);
+    covering(&table, path).map(|(line, _)| (line.point.clone(), line.fstype.clone()))
 }
 
 /// The mount points strictly inside `path`, where the system can say without
@@ -179,7 +230,7 @@ mod imp {
             return FsKind::Unknown;
         };
         match super::mount_of(&mountinfo, path) {
-            Some((_, kind)) => super::from_type_name(kind),
+            Some((_, kind)) => super::from_type_name(&kind),
             None => FsKind::Unknown,
         }
     }
@@ -342,14 +393,86 @@ mod tests {
 
     #[test]
     fn the_longest_mount_that_holds_the_path_decides() {
-        let kind =
-            |path: &str| mount_of(MOUNTINFO, Path::new(path)).map(|(_, kind)| from_type_name(kind));
+        let kind = |path: &str| {
+            mount_of(MOUNTINFO, Path::new(path)).map(|(_, kind)| from_type_name(&kind))
+        };
         assert_eq!(kind("/mnt/cloud/lab"), Some(FsKind::Rclone));
         assert_eq!(kind("/mnt/other machine/x"), Some(FsKind::Sshfs));
         assert_eq!(kind("/mnt/share"), Some(FsKind::Smb));
         assert_eq!(kind("/home/user/Projects"), Some(FsKind::Local));
         // A sibling whose name only starts the same is not inside the mount.
         assert_eq!(kind("/mnt/cloudy"), Some(FsKind::Local));
+    }
+
+    /// Two mounts at one point: the later hides the earlier.
+    #[test]
+    fn the_later_of_two_mounts_at_one_point_decides() {
+        let mountinfo = "22 1 0:21 / / rw - btrfs /dev/x rw\n\
+             40 22 0:40 / /mnt/a rw - ext4 /dev/y rw\n\
+             41 22 0:41 / /mnt/a rw - fuse.rclone r2: rw\n";
+        assert_eq!(
+            mount_of(mountinfo, Path::new("/mnt/a/x")),
+            Some((PathBuf::from("/mnt/a"), "fuse.rclone".to_string()))
+        );
+    }
+
+    /// A container's bind of a project folder, as its own table says it,
+    /// found again in the host's: the same device, the host's root a prefix
+    /// of the bound folder. A path the container reports is translated
+    /// through its own table first.
+    #[test]
+    fn a_bound_folder_is_found_in_the_host_table() {
+        let host = mount_lines(
+            "22 1 0:42 /@ / rw - btrfs /dev/x rw\n\
+             23 22 0:42 /@home /home rw - btrfs /dev/x rw\n\
+             24 22 0:50 / /mnt/cloud rw - fuse.rclone r: rw\n",
+        );
+        let container = mount_lines(
+            "900 800 0:60 / / rw - overlay overlay rw\n\
+             901 900 0:42 /@home/u/Projects/X/v2/addon/data /app/data rw - btrfs /dev/x rw\n",
+        );
+        let bind = &container[1];
+        assert_eq!(
+            bind.root,
+            PathBuf::from("/@home/u/Projects/X/v2/addon/data")
+        );
+        assert_eq!(
+            host_paths(&host, &bind.dev, &bind.root),
+            vec![PathBuf::from("/home/u/Projects/X/v2/addon/data")]
+        );
+        let (line, rest) = covering(&container, Path::new("/app/data/db/x.sqlite")).unwrap();
+        assert_eq!(line.point, PathBuf::from("/app/data"));
+        assert_eq!(
+            host_paths(&host, &line.dev, &line.root.join(rest)),
+            vec![PathBuf::from(
+                "/home/u/Projects/X/v2/addon/data/db/x.sqlite"
+            )]
+        );
+    }
+
+    #[test]
+    fn an_escaped_root_and_two_host_spellings() {
+        let host = mount_lines(
+            "22 1 0:42 /@home /home rw - btrfs /dev/x rw\n\
+             23 1 0:42 /@home /srv/home rw - btrfs /dev/x rw\n",
+        );
+        let lines = mount_lines("5 1 0:42 /@home/u/My\\040Work /w rw - btrfs /dev/x rw\n");
+        assert_eq!(lines[0].root, PathBuf::from("/@home/u/My Work"));
+        assert_eq!(
+            host_paths(&host, "0:42", &lines[0].root),
+            vec![
+                PathBuf::from("/home/u/My Work"),
+                PathBuf::from("/srv/home/u/My Work")
+            ]
+        );
+        assert!(
+            host_paths(&host, "0:99", Path::new("/x")).is_empty(),
+            "a filesystem mounted nowhere here has no spelling here"
+        );
+        assert!(
+            host_paths(&host, "0:42", Path::new("/@data/x")).is_empty(),
+            "a folder of it no mount here shows has none either"
+        );
     }
 
     #[test]

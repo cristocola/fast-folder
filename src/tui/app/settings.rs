@@ -818,9 +818,12 @@ impl App {
             }
             Job::SyncCounters => self.run_action(job.busy(), Action::SyncCounters),
             Job::Reindex => self.run_action(job.busy(), Action::Reindex),
-            Job::Reconcile => {
-                self.start_background(crate::core::jobs::JobKind::Reconcile, Vec::new(), None)
-            }
+            Job::Reconcile => self.start_background(
+                crate::core::jobs::JobKind::Reconcile,
+                Vec::new(),
+                None,
+                false,
+            ),
             Job::DataLocations => self.load_view(
                 "data locations".to_string(),
                 PathBuf::new(),

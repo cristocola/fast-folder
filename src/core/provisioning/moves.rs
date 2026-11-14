@@ -69,14 +69,31 @@ pub(crate) fn reconcile_one_record(
         ticker: Ticker::none(),
         live: crate::core::jobs::live_workers(),
         deferred: None,
+        asking: crate::core::holders::asking_chain(),
     };
     reconcile_record(cfg, target_base, operation_dir, &mut report, &mut pass);
     report
 }
 
 /// One transaction directory: its journal read, or — when it holds nothing a
-/// move ever gets past its first write to — removed.
+/// move ever gets past its first write to — removed. Every verdict it keeps
+/// is this operation's (`ReconcileReport::kept_by`); the folder is named by
+/// the operation id.
 pub(super) fn reconcile_record(
+    cfg: &Config,
+    target_base: &Path,
+    operation_dir: &Path,
+    report: &mut ReconcileReport,
+    pass: &mut Pass,
+) {
+    let kept = report.verdicts.len();
+    finish_record_at(cfg, target_base, operation_dir, report, pass);
+    if let Some(operation) = operation_dir.file_name().and_then(|name| name.to_str()) {
+        report.kept_by(kept, operation);
+    }
+}
+
+fn finish_record_at(
     cfg: &Config,
     target_base: &Path,
     operation_dir: &Path,
@@ -303,15 +320,7 @@ fn reconcile_transaction(
             ));
         }
         MovePhase::Copying if transaction.is_paused() => {
-            reconcile_paused(
-                &found.source_base,
-                target_base,
-                &found.final_path,
-                transaction,
-                &subject,
-                report,
-                pass,
-            );
+            reconcile_paused(cfg, &found, transaction, report, pass);
         }
         MovePhase::Copying => reconcile_copying(&found, transaction, report),
         MovePhase::ReadyToCommit if journal.in_place => {

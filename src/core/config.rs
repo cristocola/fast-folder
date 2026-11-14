@@ -7,14 +7,15 @@ use crate::util::paths;
 /// `config.toml` is there and does not parse: what `Config::load` answers,
 /// with the TOML error as its source. **Its own type, so a caller asks the
 /// error's chain and never its text** — every file fastf parses fails as
-/// "parsing <path>", a create journal in a folder whose name holds
+/// `parsing <path>`, a create journal in a folder whose name holds
 /// `config.toml` included, and the hint `main` gives for this one (fix it
 /// or delete it) is ruinous advice about any other. The message is the one
-/// `with_context` wrote, `parsing <path>`, which the suites assert.
+/// `with_context` wrote, `parsing <path>`, which the suites assert. The TOML
+/// error is boxed: it is large, and a `Result` carries its error inline.
 #[derive(Debug)]
 pub struct ConfigUnreadable {
     pub path: std::path::PathBuf,
-    source: toml::de::Error,
+    source: Box<toml::de::Error>,
 }
 
 impl std::fmt::Display for ConfigUnreadable {
@@ -25,7 +26,7 @@ impl std::fmt::Display for ConfigUnreadable {
 
 impl std::error::Error for ConfigUnreadable {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.source)
+        Some(&*self.source)
     }
 }
 
@@ -286,7 +287,7 @@ impl Config {
     pub fn parse(path: &std::path::Path, raw: &str) -> Result<Self, ConfigUnreadable> {
         toml::from_str(raw).map_err(|source| ConfigUnreadable {
             path: path.to_path_buf(),
-            source,
+            source: Box::new(source),
         })
     }
 

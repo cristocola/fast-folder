@@ -163,9 +163,12 @@ A second Ctrl-C, hang-up or terminate ends fastf at once, after giving the
 terminal back — the prompt's rows cleared, the app's screen left, the cursor
 shown, the terminal cooked — and exits with the code a shell reports for that
 signal: **130** when the second was a Ctrl-C (SIGINT), **129** a hang-up,
-**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130 and a
-second closed console 129. Any other failure exits 1 with an `error:` line,
-and a command line fastf cannot read exits 2.
+**143** a terminate. On Windows a second Ctrl-C or Ctrl+Break exits 130, and a
+console closed after a Ctrl-C exits 129. A console closed first asks the way
+Ctrl-C does: Windows ends a program five seconds after its console closes, and
+fastf rolls back and exits inside them; whatever is still working then is
+ended by Windows. Any other failure exits 1 with an `error:` line, and a
+command line fastf cannot read exits 2.
 
 ## Browsing projects
 

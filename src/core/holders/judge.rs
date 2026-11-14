@@ -401,14 +401,11 @@ pub(super) fn judge(
             });
         }
     }
-    for pid in &pass.silent {
+    if !pass.silent.is_empty() {
         for uses in answer.iter_mut() {
             uses.push(Use {
-                by: By::Process {
-                    pid: *pid,
-                    program: String::new(),
-                },
-                how: How::Silent,
+                by: By::Nobody,
+                how: How::Silent(pass.silent.clone()),
             });
         }
     }

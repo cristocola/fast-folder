@@ -280,8 +280,10 @@ pub enum How {
         state: String,
         dormant: bool,
     },
-    /// The process did not answer in time: it may use the folder.
-    Silent,
+    /// These processes did not answer in time: any of them may use the
+    /// folder. One use for all of them, so a mount that stopped answering
+    /// under many processes is one note, not one each.
+    Silent(Vec<u32>),
     /// Windows: a program holds this file.
     Held(PathBuf),
     /// Windows: a program works in this folder.
@@ -320,7 +322,7 @@ impl Use {
             How::MountedInside(_) if verb == Verb::Delete => Weight::Physical,
             How::WorkingIn { shell: true, .. } => Weight::Note,
             How::Unit { dormant: true, .. } => Weight::Note,
-            How::Silent => Weight::Note,
+            How::Silent(_) => Weight::Note,
             _ => Weight::Advisory,
         }
     }
@@ -371,7 +373,7 @@ impl Use {
                 state,
                 ..
             } => format!("{who} ({state}) is a link to {}", at(path)),
-            How::Silent => format!("{who} did not answer"),
+            How::Silent(pids) => format!("{} did not answer", pids_text(pids)),
             How::Held(path) => format!("{who} has {} open", at(path)),
             How::BusyFolder(path) => format!("a program is working in {}", at(path)),
         }
@@ -423,9 +425,11 @@ impl Use {
                     tie_text(tie)
                 ),
             },
-            How::Silent => {
-                format!("{who} did not answer, so fastf could not tell whether it used {old}")
-            }
+            How::Silent(pids) => format!(
+                "{} did not answer, so fastf could not tell whether {} {old}",
+                pids_text(pids),
+                crate::util::plural::of(pids.len(), "it used", "they used")
+            ),
             How::Held(path) | How::BusyFolder(path) => {
                 format!("{} was in use", at(path))
             }
@@ -456,6 +460,18 @@ fn at(path: &Path) -> String {
         "the project folder".to_string()
     } else {
         path.display().to_string()
+    }
+}
+
+/// `pid 777`, `pids 777 and 778`, `pids 1, 2, 3 and 9 more`.
+fn pids_text(pids: &[u32]) -> String {
+    const NAMED: usize = 3;
+    let named: Vec<String> = pids.iter().take(NAMED).map(u32::to_string).collect();
+    match (pids.len(), named.as_slice()) {
+        (1, [one]) => format!("pid {one}"),
+        (2, [one, two]) => format!("pids {one} and {two}"),
+        (n, _) if n <= NAMED => format!("pids {} and {}", named[..n - 1].join(", "), named[n - 1]),
+        (n, _) => format!("pids {} and {} more", named.join(", "), n - NAMED),
     }
 }
 

@@ -417,6 +417,27 @@ fn a_process_that_did_not_answer_is_a_note() {
         found.notes(Verb::Move),
         ["pid 777 did not answer, so fastf could not tell whether it used the old folder"]
     );
+    // Many at once — a mount that stopped answering under all of them — are
+    // one note.
+    let pass = Pass {
+        silent: (1..=40).collect(),
+        ..Pass::default()
+    };
+    assert_eq!(
+        judged(&pass, &[]).notes(Verb::Delete),
+        [
+            "pids 1, 2, 3 and 37 more did not answer, so fastf could not tell whether they \
+          used the deleted folder"
+        ]
+    );
+    let pass = Pass {
+        silent: vec![5, 6, 7],
+        ..Pass::default()
+    };
+    assert_eq!(
+        judged(&pass, &[]).uses[0].line(),
+        "pids 5, 6 and 7 did not answer"
+    );
 }
 
 /// A pid still being read when the deadline passes is named as not
@@ -646,7 +667,17 @@ fn a_program_run_from_the_folder_and_one_named_in_its_arguments() {
     std::fs::create_dir_all(root.join("bin")).unwrap();
     let sleep = crate::util::paths::find_on_path("sleep").unwrap();
     let copied = root.join("bin").join("sleeper");
-    std::fs::copy(&sleep, &copied).unwrap();
+    // Copied by a process of its own: a file this process held open for
+    // writing is inherited by a child another test thread forks at that
+    // moment, and running it fails with `ETXTBSY` until that child execs.
+    assert!(
+        std::process::Command::new("cp")
+            .arg(&sleep)
+            .arg(&copied)
+            .status()
+            .unwrap()
+            .success()
+    );
     std::fs::write(root.join("marker"), "").unwrap();
     let runner = spawn(
         std::process::Command::new(&copied)

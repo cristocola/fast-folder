@@ -77,6 +77,8 @@ pub(super) struct Pass {
     pub seen: Vec<Seen>,
     /// Processes that did not answer by the deadline.
     pub silent: Vec<u32>,
+    /// Processes never asked: the ones before them did not answer.
+    pub unasked: Vec<u32>,
     /// This process's mount table.
     pub host: Vec<MountLine>,
     /// Every other table some process has, once each.
@@ -404,7 +406,8 @@ fn push_once(uses: &mut Vec<(usize, Use)>, folder: usize, found: Use) {
 }
 
 /// Everything using each folder: the processes in pid order, then the
-/// mounts, the unit files, and the processes that did not answer.
+/// mounts, the unit files, the processes that did not answer, and those
+/// never asked.
 pub(super) fn judge(
     folders: &[Vec<PathBuf>],
     pass: &Pass,
@@ -452,11 +455,17 @@ pub(super) fn judge(
             });
         }
     }
-    if !pass.silent.is_empty() {
+    for (pids, how) in [
+        (&pass.silent, How::Silent as fn(Vec<u32>) -> How),
+        (&pass.unasked, How::Unasked),
+    ] {
+        if pids.is_empty() {
+            continue;
+        }
         for uses in answer.iter_mut() {
             uses.push(Use {
                 by: By::Nobody,
-                how: How::Silent(pass.silent.clone()),
+                how: how(pids.clone()),
             });
         }
     }

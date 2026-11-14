@@ -576,10 +576,15 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
   (dev, root)**: a namespace starts as a copy, and an inherited mount is no
   choice of its own; a foreign process's paths are translated through its own
   table (`fs_kind::covering`, `host_paths`);
-- **nothing waits on a process**: the pass reads on `util::pool` under one
-  deadline (`linux::within`, five seconds), since reading `cmdline` or `maps`
-  takes the process's memory lock; one that does not answer is a note, and is
-  not asked again by a later pass until its read comes back (`GIVEN_UP`).
+- **nothing waits on a process**: the pass reads on eight workers of its own
+  under one deadline (`linux::within`, five seconds), since reading `cmdline`
+  or `maps` takes the process's memory lock, and starts another beside each
+  worker on one process for a quarter of a second (64 more at most), so a few
+  stuck reads never leave the rest unread; one that does not answer is a
+  note, and is not asked again by a later pass until its read comes back
+  (`GIVEN_UP`); one no worker reached by the deadline advises
+  (`How::Unasked`) — nothing was learned of it, and the verb does not go
+  ahead without having looked.
 
 A refusal that forcing goes past is `holders::InUse`; a physical one is a
 plain error. `Guard::force` turns advisory uses into notes plus one

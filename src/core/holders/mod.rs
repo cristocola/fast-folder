@@ -292,6 +292,9 @@ pub enum How {
     /// folder. One use for all of them, so a mount that stopped answering
     /// under many processes is one note, not one each.
     Silent(Vec<u32>),
+    /// These processes were never asked, since every reader was on one
+    /// that did not answer: nothing is known of them.
+    Unasked(Vec<u32>),
     /// Windows: a program holds this file.
     Held(PathBuf),
     /// Windows: a program works in this folder.
@@ -323,7 +326,8 @@ impl Use {
     /// filesystem mounted inside a folder being deleted — the removal would
     /// keep it, and the hidden folder with it, for good. A shell whose only
     /// tie is its prompt, a unit nothing will start, and a process that did
-    /// not answer are notes. Everything else advises.
+    /// not answer are notes. Everything else advises — a process never
+    /// asked included, since nothing was learned of it.
     pub fn weight(&self, verb: Verb) -> Weight {
         match &self.how {
             How::Held(_) | How::BusyFolder(_) => Weight::Physical,
@@ -382,6 +386,12 @@ impl Use {
                 ..
             } => format!("{who} ({state}) is a link to {}", at(path)),
             How::Silent(pids) => format!("{} did not answer", pids_text(pids)),
+            How::Unasked(pids) => format!(
+                "{} {} not looked at: the ones before {} did not answer",
+                processes_text(pids),
+                crate::util::plural::of(pids.len(), "was", "were"),
+                crate::util::plural::of(pids.len(), "it", "them")
+            ),
             How::Held(path) => format!("{who} has {} open", at(path)),
             How::BusyFolder(path) => format!("a program is working in {}", at(path)),
         }
@@ -438,6 +448,12 @@ impl Use {
                 pids_text(pids),
                 crate::util::plural::of(pids.len(), "it used", "they used")
             ),
+            How::Unasked(pids) => format!(
+                "{} {} not looked at, so fastf could not tell whether {} {old}",
+                processes_text(pids),
+                crate::util::plural::of(pids.len(), "was", "were"),
+                crate::util::plural::of(pids.len(), "it used", "they used")
+            ),
             How::Held(path) | How::BusyFolder(path) => {
                 format!("{} was in use", at(path))
             }
@@ -481,6 +497,15 @@ fn pids_text(pids: &[u32]) -> String {
         (n, _) if n <= NAMED => format!("pids {} and {}", named[..n - 1].join(", "), named[n - 1]),
         (n, _) => format!("pids {} and {} more", named.join(", "), n - NAMED),
     }
+}
+
+/// `1 process`, `68 processes`.
+fn processes_text(pids: &[u32]) -> String {
+    format!(
+        "{} {}",
+        pids.len(),
+        crate::util::plural::of(pids.len(), "process", "processes")
+    )
 }
 
 fn tie_text(tie: &Tie) -> String {
@@ -553,6 +578,11 @@ impl Holders {
         let (word, past) = (verb.word(), verb.past());
         let label = &self.label;
         Some(match refusing.as_slice() {
+            // Nothing to stop: a look that could not be made is made again.
+            [one] if matches!(one.how, How::Unasked(_)) => format!(
+                "{}, so {label} was not {past}; {word} it again in a moment",
+                one.line()
+            ),
             [one] => {
                 let stop = if mounts_only { "unmount it" } else { "stop it" };
                 format!(

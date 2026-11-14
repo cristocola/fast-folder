@@ -512,7 +512,7 @@ fn a_read_that_does_not_come_back_is_given_up_on_and_not_asked_again() {
     const STUCK: u32 = 4_000_000_001;
     let asked = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&asked);
-    let (answers, silent) = linux::within(
+    let looked = linux::within(
         vec![STUCK - 1, STUCK, STUCK + 1],
         Duration::from_millis(300),
         move |pid| {
@@ -523,14 +523,83 @@ fn a_read_that_does_not_come_back_is_given_up_on_and_not_asked_again() {
             Some(pid)
         },
     );
-    let mut answers = answers;
+    let mut answers = looked.answers;
     answers.sort_unstable();
     assert_eq!(answers, [STUCK - 1, STUCK + 1]);
-    assert_eq!(silent, [STUCK]);
-    let (answers, silent) = linux::within(vec![STUCK], Duration::from_secs(1), Some);
-    assert!(answers.is_empty());
-    assert_eq!(silent, [STUCK], "named at once");
+    assert_eq!(looked.silent, [STUCK]);
+    let looked = linux::within(vec![STUCK], Duration::from_secs(1), Some);
+    assert!(looked.answers.is_empty());
+    assert_eq!(looked.silent, [STUCK], "named at once");
     assert_eq!(asked.load(Ordering::Relaxed), 1, "and not read again");
+}
+
+/// Reads that do not come back do not keep the rest from being read: a
+/// worker on one pid for long has another started beside it, so every quick
+/// pid answers.
+#[test]
+fn reads_that_do_not_come_back_leave_the_rest_to_be_read() {
+    const BASE: u32 = 4_000_000_100;
+    let quick: Vec<u32> = (BASE + 8..BASE + 20).collect();
+    let looked = linux::within(
+        (BASE..BASE + 20).collect(),
+        Duration::from_millis(1500),
+        move |pid| {
+            if pid < BASE + 8 {
+                std::thread::sleep(Duration::from_secs(4));
+            }
+            Some(pid)
+        },
+    );
+    let mut answers = looked.answers;
+    answers.sort_unstable();
+    assert_eq!(answers, quick, "the stuck ones: {:?}", looked.silent);
+    assert_eq!(looked.silent, (BASE..BASE + 8).collect::<Vec<_>>());
+    assert!(looked.unasked.is_empty());
+}
+
+/// More reads stuck than workers can be started beside them: the pids no
+/// worker reached are told apart from those asked, and refuse a verb, since
+/// nothing was learned of them.
+#[test]
+fn a_pid_never_asked_is_not_one_that_did_not_answer() {
+    const BASE: u32 = 4_000_000_200;
+    let every: Vec<u32> = (BASE..BASE + 200).collect();
+    let looked = linux::within(every.clone(), Duration::from_millis(600), move |pid| {
+        std::thread::sleep(Duration::from_secs(4));
+        Some(pid)
+    });
+    assert!(looked.answers.is_empty());
+    assert!(looked.silent.len() >= 8, "{:?}", looked.silent);
+    assert!(!looked.unasked.is_empty());
+    let mut both: Vec<u32> = looked
+        .silent
+        .iter()
+        .chain(&looked.unasked)
+        .copied()
+        .collect();
+    both.sort_unstable();
+    assert_eq!(both, every);
+
+    let pass = Pass {
+        silent: vec![5],
+        unasked: vec![6, 7, 8],
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    assert_eq!(
+        found.refusal(Verb::Move, false).unwrap(),
+        "3 processes were not looked at: the ones before them did not answer, so ID0047 \
+         was not moved; move it again in a moment"
+    );
+    assert!(found.refusal(Verb::Move, true).is_none(), "forced");
+    assert_eq!(
+        found.notes(Verb::Delete),
+        [
+            "pid 5 did not answer, so fastf could not tell whether it used the deleted folder",
+            "3 processes were not looked at, so fastf could not tell whether they used the \
+             deleted folder",
+        ]
+    );
 }
 
 /// A folder on a base that stopped answering is resolved under the deadline

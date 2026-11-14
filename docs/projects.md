@@ -447,7 +447,11 @@ names the path does.
 - a systemd unit file — yours or the system's, and the ones generators write,
   such as Podman's Quadlet containers — that names the folder (by its path or
   as `%h/…`), or is a link into it, whether the unit runs now or something
-  starts it later.
+  starts it later;
+- processes fastf could not look at at all, because every reader it had was
+  held up by processes that did not answer — `68 processes were not looked
+  at: the ones before them did not answer`. Rare, and fastf does not go
+  ahead without having looked; try again in a moment.
 
 **What never counts**: fastf itself, and whoever asked — the shell that typed
 the command, the agent that ran it, the app and the terminal it runs in — and

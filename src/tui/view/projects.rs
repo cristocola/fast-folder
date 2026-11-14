@@ -768,6 +768,7 @@ fn pane_line(
                 todo_rest_line(theme, *done, text, *phased, width)
             }
         }
+        PaneRow::Fold { done, phased, .. } => fold_line(theme, *done, *phased),
         // The add line: its field is drawn over it below.
         PaneRow::Adding => Line::default(),
         PaneRow::AddTodo => Line::from(Span::styled(format!("{} add a todo", g.sep), theme.dim())),
@@ -946,6 +947,19 @@ fn todo_first_line(
         Span::styled(text, style),
         Span::raw(" ".repeat(gap)),
         Span::styled(aside, theme.dim()),
+    ])
+}
+
+/// A run's done todos as one dim row, the tick where the boxes are:
+/// `✓ 6 done`. In the ASCII alphabet the tick is the box a done todo
+/// already draws, `[x] 6 done`, never the theme's `+`, which reads as the
+/// key that adds a todo just below.
+fn fold_line(theme: &Theme, done: usize, phased: bool) -> Line<'static> {
+    let g = theme.glyphs;
+    let tick = if g.is_ascii() { "[x]" } else { g.check };
+    Line::from(vec![
+        Span::raw(" ".repeat(if phased { PHASE_INDENT } else { 0 })),
+        Span::styled(format!("{tick} {done} done"), theme.dim()),
     ])
 }
 

@@ -58,6 +58,7 @@ fn rows_are_one_per_tag_then_add_tag_and_reading_until_the_detail_lands() {
         &project(&["draft", "client/Acme"], "client"),
         None,
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     assert_eq!(
@@ -110,7 +111,13 @@ fn a_new_phase_is_drawn_where_the_writer_will_open_it() {
         todos: vec![todo("read the order", None)],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&plain), &Glance::default(), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&plain),
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
 
     // The name is typed at the end of the list, where the label will go.
     assert_eq!(
@@ -136,7 +143,13 @@ fn a_new_phase_is_drawn_where_the_writer_will_open_it() {
         ],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&other), &Glance::default(), 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&other),
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
     assert_eq!(
         todo_rows(with_naming(rows.clone())),
         vec![
@@ -213,6 +226,7 @@ fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     assert_eq!(
@@ -251,6 +265,7 @@ fn an_empty_label_is_drawn_and_a_todo_for_it_lands_under_it() {
         &project(&[], "client"),
         Some(&other_first),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     assert_eq!(todo_rows(with_naming(rows))[0], PaneRow::Adding);
@@ -277,6 +292,7 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     let todo_rows: Vec<&PaneRow> = rows
@@ -288,13 +304,13 @@ fn a_phase_label_is_drawn_where_it_changes_and_the_cursor_steps_over_it() {
         todo_rows,
         vec![
             &PaneRow::Rule(PaneSection::Todo),
-            &PaneRow::Todo {
-                ordinal: 0,
-                done: true,
-                text: "read the order".to_string(),
+            // The loose run's done task is folded into its count.
+            &PaneRow::Fold {
+                group: 0,
+                tasks: 0..1,
+                done: 1,
                 phased: false,
-                owner: None,
-                when: None,
+                shown: false,
             },
             &PaneRow::Phase {
                 name: "Setup".to_string(),
@@ -370,6 +386,7 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
         &project(&["draft"], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     let selectable: Vec<&PaneRow> = rows.iter().filter(|r| r.selectable()).collect();
@@ -380,13 +397,13 @@ fn selectable_rows_skip_the_facts_the_rules_the_listing_and_a_notes_other_lines(
             &PaneRow::Description(String::new()),
             &PaneRow::Tag("draft".to_string()),
             &PaneRow::AddTag,
-            &PaneRow::Todo {
-                ordinal: 0,
-                done: true,
-                text: "ingested".to_string(),
+            // A done todo folds, and the fold is a row Enter acts on.
+            &PaneRow::Fold {
+                group: 0,
+                tasks: 0..1,
+                done: 1,
                 phased: false,
-                owner: None,
-                when: None,
+                shown: false,
             },
             &PaneRow::AddTodo,
             &PaneRow::AddPhase,
@@ -438,6 +455,7 @@ fn the_latest_notes_are_shown_under_earlier_and_a_long_note_is_cut_with_more() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     assert!(rows.contains(&PaneRow::EarlierNotes(3)));
@@ -485,6 +503,7 @@ fn variables_follow_the_template_and_a_select_offers_only_its_options() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     let variables: Vec<&PaneRow> = rows
@@ -533,6 +552,7 @@ fn a_registered_project_offers_every_variable_as_text() {
         &project(&[], "(registered)"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     let kinds: Vec<(&str, &VarKind)> = rows
@@ -547,7 +567,13 @@ fn a_registered_project_offers_every_variable_as_text() {
 
 #[test]
 fn the_cursor_walks_selectable_rows_and_stops() {
-    let rows = pane_rows(&project(&["draft"], "client"), None, &Glance::default(), 0);
+    let rows = pane_rows(
+        &project(&["draft"], "client"),
+        None,
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
     // Name(0) Description(1) Facts Figures Rule Tag(5) AddTag(6) Reading
     assert_eq!(
         step_cursor(&rows, 0, 1),
@@ -612,6 +638,7 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         31,
     );
     let at = rows
@@ -662,7 +689,13 @@ fn a_long_note_and_a_long_todo_continue_on_the_rows_under_them() {
         notes: vec![note(None, &"word ".repeat(200))],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&long), &Glance::default(), 31);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&long),
+        &Glance::default(),
+        &TodoFold::default(),
+        31,
+    );
     let lines = rows
         .iter()
         .filter(|r| matches!(r, PaneRow::NoteLine(_)))
@@ -749,7 +782,13 @@ fn a_long_name_wraps_after_its_separators() {
 #[test]
 fn facts_flow_whole_and_wrap_between_them() {
     let project = project(&[], "client-project");
-    let wide = pane_rows(&project, None, &Glance::default(), 200);
+    let wide = pane_rows(
+        &project,
+        None,
+        &Glance::default(),
+        &TodoFold::default(),
+        200,
+    );
     assert_eq!(
         wide[2],
         PaneRow::Facts(vec![Fact::Template, Fact::Base, Fact::Created]),
@@ -757,11 +796,11 @@ fn facts_flow_whole_and_wrap_between_them() {
     );
     // "client-project" (14) + gap (7) + "projects" (8) = 29; the date's 18
     // more does not fit 40, so it starts the next row.
-    let narrow = pane_rows(&project, None, &Glance::default(), 40);
+    let narrow = pane_rows(&project, None, &Glance::default(), &TodoFold::default(), 40);
     assert_eq!(narrow[2], PaneRow::Facts(vec![Fact::Template, Fact::Base]));
     assert_eq!(narrow[3], PaneRow::Facts(vec![Fact::Created]));
     // Narrower than any two: one fact to a row.
-    let tight = pane_rows(&project, None, &Glance::default(), 15);
+    let tight = pane_rows(&project, None, &Glance::default(), &TodoFold::default(), 15);
     let facts: Vec<&PaneRow> = tight
         .iter()
         .filter(|row| matches!(row, PaneRow::Facts(_)))
@@ -782,9 +821,21 @@ fn the_figures_row_count_does_not_depend_on_the_size() {
     let detail = ProjectDetail::default();
     // Size (11) + gap (7) + "no notes" (8) = 26: at 26 they share a row,
     // whatever the size turns out to read.
-    let rows = pane_rows(&project, Some(&detail), &Glance::default(), 26);
+    let rows = pane_rows(
+        &project,
+        Some(&detail),
+        &Glance::default(),
+        &TodoFold::default(),
+        26,
+    );
     assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size, Fact::Notes(0)])));
-    let rows = pane_rows(&project, Some(&detail), &Glance::default(), 25);
+    let rows = pane_rows(
+        &project,
+        Some(&detail),
+        &Glance::default(),
+        &TodoFold::default(),
+        25,
+    );
     assert!(rows.contains(&PaneRow::Facts(vec![Fact::Size])));
 }
 
@@ -805,6 +856,7 @@ fn the_living_sections_come_first() {
         &project(&["draft"], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         60,
     );
     let rules: Vec<PaneSection> = rows
@@ -876,6 +928,7 @@ fn the_add_line_opens_where_the_todo_will_land() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     let around = |place: TodoPlace| {
@@ -932,6 +985,7 @@ fn a_phase_heading_counts_its_tasks_and_indents_them() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         30,
     );
     let headings: Vec<(&str, usize, usize)> = rows
@@ -951,7 +1005,13 @@ fn a_phase_heading_counts_its_tasks_and_indents_them() {
         todos: vec![todo(false, None)],
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&flat), &Glance::default(), 30);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&flat),
+        &Glance::default(),
+        &TodoFold::default(),
+        30,
+    );
     assert!(
         rows.iter()
             .any(|row| matches!(row, PaneRow::Todo { phased: false, .. }))
@@ -968,6 +1028,7 @@ fn the_glance_shows_each_fact_once_it_is_known_and_nothing_before() {
         &project(&[], "client"),
         Some(&detail),
         &Glance::default(),
+        &TodoFold::default(),
         0,
     );
     assert!(
@@ -991,7 +1052,13 @@ fn the_glance_shows_each_fact_once_it_is_known_and_nothing_before() {
         }),
         ..Default::default()
     };
-    let rows = pane_rows(&project(&[], "client"), Some(&with_head), &glance, 0);
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&with_head),
+        &glance,
+        &TodoFold::default(),
+        0,
+    );
     let at = rows
         .iter()
         .position(|r| *r == PaneRow::Rule(PaneSection::Glance))
@@ -1019,5 +1086,347 @@ fn the_glance_shows_each_fact_once_it_is_known_and_nothing_before() {
             .position(|r| *r == PaneRow::Rule(PaneSection::Notes))
             < Some(at),
         "after the notes, before the reference: {rows:?}"
+    );
+}
+
+/// A list with work done in every run: two loose tasks, a finished Shoot,
+/// an Edit half done, an empty Other.
+fn worked_list() -> ProjectDetail {
+    let todo = |done: bool, text: &str, phase: Option<&str>| crate::core::body::Todo {
+        done,
+        text: text.to_string(),
+        phase: phase.map(str::to_string),
+        ..Default::default()
+    };
+    let label = |name: &str, before| crate::core::body::PhaseLabel {
+        name: name.to_string(),
+        before,
+    };
+    ProjectDetail {
+        todos: vec![
+            todo(true, "read the brief", None),
+            todo(false, "book the studio", None),
+            todo(true, "shoot the band", Some("Shoot")),
+            todo(true, "shoot the crowd", Some("Shoot")),
+            todo(true, "sync the audio", Some("Edit")),
+            todo(false, "cut the first minute", Some("Edit")),
+        ],
+        phases: vec![label("Shoot", 2), label("Edit", 4), label("Other", 6)],
+        ..Default::default()
+    }
+}
+
+/// The todo section's rows in short: `## name done/total`, `[ ] n` / `[x] n`
+/// for a todo by ordinal, `fold n` (`+ shown`), `adding`, `add`.
+fn todo_shape(rows: &[PaneRow]) -> Vec<String> {
+    rows.iter()
+        .skip_while(|r| **r != PaneRow::Rule(PaneSection::Todo))
+        .skip(1)
+        .take_while(|r| **r != PaneRow::Rule(PaneSection::Notes))
+        .map(|row| match row {
+            PaneRow::Phase { name, done, total } => format!("## {name} {done}/{total}"),
+            PaneRow::Todo { ordinal, done, .. } => {
+                format!("[{}] {ordinal}", if *done { 'x' } else { ' ' })
+            }
+            PaneRow::Fold { done, shown, .. } => {
+                format!("fold {done}{}", if *shown { " shown" } else { "" })
+            }
+            PaneRow::Adding => "adding".to_string(),
+            PaneRow::AddTodo | PaneRow::AddPhase => "add".to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+fn worked_rows(fold: &TodoFold) -> Vec<PaneRow> {
+    pane_rows(
+        &project(&[], "client"),
+        Some(&worked_list()),
+        &Glance::default(),
+        fold,
+        0,
+    )
+}
+
+/// Each run is its heading, its open todos, then one fold for its done
+/// ones; shown, the done ones follow the fold in file order, and the
+/// heading still counts the whole run.
+#[test]
+fn done_todos_fold_under_their_run_and_show_in_file_order_when_asked() {
+    assert_eq!(
+        todo_shape(&worked_rows(&TodoFold::default())),
+        [
+            "[ ] 1",
+            "fold 1",
+            "## Shoot 2/2",
+            "fold 2",
+            "## Edit 1/2",
+            "[ ] 5",
+            "fold 1",
+            "## Other 0/0",
+            "add",
+            "add",
+        ]
+    );
+    let shown = TodoFold {
+        shown: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        todo_shape(&worked_rows(&shown)),
+        [
+            "[ ] 1",
+            "fold 1 shown",
+            "[x] 0",
+            "## Shoot 2/2",
+            "fold 2 shown",
+            "[x] 2",
+            "[x] 3",
+            "## Edit 1/2",
+            "[ ] 5",
+            "fold 1 shown",
+            "[x] 4",
+            "## Other 0/0",
+            "add",
+            "add",
+        ]
+    );
+    let rows = worked_rows(&TodoFold::default());
+    let fold = rows
+        .iter()
+        .find(|r| matches!(r, PaneRow::Fold { group: 1, .. }))
+        .unwrap();
+    assert_eq!(
+        *fold,
+        PaneRow::Fold {
+            group: 1,
+            tasks: 2..4,
+            done: 2,
+            phased: true,
+            shown: false
+        }
+    );
+    assert!(fold.selectable());
+}
+
+/// A todo toggled on this visit stays where it was drawn: ticked in the
+/// open run, unticked under a shown fold, and the fold counts the rows it
+/// holds.
+#[test]
+fn a_held_todo_keeps_its_row() {
+    let mut list = worked_list();
+    // Ticked here: 5 is done now, and held in Edit's open run.
+    list.todos[5].done = true;
+    // Unticked under the shown fold: 2 is open now, and held there.
+    list.todos[2].done = false;
+    let fold = TodoFold {
+        shown: true,
+        held: [(5, HeldAt::OpenRun), (2, HeldAt::Fold)].into(),
+    };
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&list),
+        &Glance::default(),
+        &fold,
+        0,
+    );
+    assert_eq!(
+        todo_shape(&rows),
+        [
+            "[ ] 1",
+            "fold 1 shown",
+            "[x] 0",
+            "## Shoot 1/2",
+            "fold 2 shown",
+            "[ ] 2",
+            "[x] 3",
+            "## Edit 2/2",
+            "[x] 5",
+            "fold 1 shown",
+            "[x] 4",
+            "## Other 0/0",
+            "add",
+            "add",
+        ]
+    );
+    let at = |ordinal: usize| {
+        rows.iter()
+            .position(|r| matches!(r, PaneRow::Todo { ordinal: o, .. } if *o == ordinal))
+            .unwrap()
+    };
+    assert_eq!(held_at(&rows, at(5)), HeldAt::OpenRun);
+    assert_eq!(held_at(&rows, at(2)), HeldAt::Fold);
+    assert_eq!(held_at(&rows, at(1)), HeldAt::OpenRun);
+    assert_eq!(held_at(&rows, at(0)), HeldAt::Fold, "the loose run's fold");
+}
+
+/// `+` near a fold: a new todo is open, so its line goes at the end of the
+/// run's open todos, above the fold; `+` on a fold adds to its run, a
+/// finished phase's too; a new phase goes below the last run's fold.
+#[test]
+fn the_add_line_goes_above_a_fold_and_a_new_phase_below_it() {
+    for fold in [
+        TodoFold::default(),
+        TodoFold {
+            shown: true,
+            ..Default::default()
+        },
+    ] {
+        let rows = worked_rows(&fold);
+        let around = |place: TodoPlace| {
+            let rows = with_adding(rows.clone(), &place);
+            let at = rows.iter().position(|r| *r == PaneRow::Adding).unwrap();
+            (rows[at - 1].clone(), rows[at + 1].clone())
+        };
+        let (above, below) = around(TodoPlace::Phase("Edit".to_string()));
+        assert!(
+            matches!(above, PaneRow::Todo { ordinal: 5, .. })
+                && matches!(below, PaneRow::Fold { group: 2, .. }),
+            "{above:?} / {below:?}"
+        );
+        let (above, below) = around(TodoPlace::Phase("Shoot".to_string()));
+        assert!(
+            matches!(above, PaneRow::Phase { .. })
+                && matches!(below, PaneRow::Fold { group: 1, .. }),
+            "a finished phase: under its heading, over its fold: {above:?} / {below:?}"
+        );
+        let (above, below) = around(TodoPlace::Loose);
+        assert!(
+            matches!(above, PaneRow::Todo { ordinal: 1, .. })
+                && matches!(below, PaneRow::Fold { group: 0, .. }),
+            "{above:?} / {below:?}"
+        );
+        let (above, below) = around(TodoPlace::End);
+        assert!(
+            matches!(above, PaneRow::Phase { ref name, .. } if name == "Other")
+                && below == PaneRow::AddTodo,
+            "the last run is the empty Other: {above:?} / {below:?}"
+        );
+
+        // `+` on a fold is `+` in its run.
+        let fold_of = |group: usize| {
+            rows.iter()
+                .position(|r| matches!(r, PaneRow::Fold { group: g, .. } if *g == group))
+                .unwrap()
+        };
+        assert_eq!(place_at(&rows, fold_of(0)), TodoPlace::Loose);
+        assert_eq!(
+            place_at(&rows, fold_of(1)),
+            TodoPlace::Phase("Shoot".to_string())
+        );
+        assert_eq!(
+            place_at(&rows, fold_of(2)),
+            TodoPlace::Phase("Edit".to_string())
+        );
+    }
+
+    // With no labels the end of the list is the end of its one run: above
+    // its fold.
+    let mut flat = worked_list();
+    flat.phases.clear();
+    for todo in &mut flat.todos {
+        todo.phase = None;
+    }
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&flat),
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
+    let rows = with_adding(rows, &TodoPlace::End);
+    assert_eq!(
+        todo_shape(&rows),
+        ["[ ] 1", "[ ] 5", "adding", "fold 4", "add", "add"]
+    );
+
+    // A new phase opens under the last task's run — below Edit's fold and
+    // what it shows — and above the empty Other.
+    for (fold, before) in [
+        (TodoFold::default(), "fold 1"),
+        (
+            TodoFold {
+                shown: true,
+                ..Default::default()
+            },
+            "[x] 4",
+        ),
+    ] {
+        let mut list = worked_list();
+        list.phases.pop();
+        let rows = pane_rows(
+            &project(&[], "client"),
+            Some(&list),
+            &Glance::default(),
+            &fold,
+            0,
+        );
+        let shape = todo_shape(&with_naming(rows));
+        let at = shape.iter().position(|r| r == "adding").unwrap();
+        assert_eq!(shape[at - 1], before, "{shape:?}");
+        assert_eq!(shape[at + 1], "add", "{shape:?}");
+    }
+}
+
+/// A todo that went into its fold — ticked by somebody else while the
+/// cursor was on it — leaves the cursor on that fold, not at the end of
+/// the list; a fold that is gone leaves it on "add a todo".
+#[test]
+fn find_row_falls_back_from_a_folded_todo_to_its_fold() {
+    let rows = worked_rows(&TodoFold::default());
+    let found = |target: PaneTarget| rows.get(find_row(&rows, &target).unwrap()).cloned();
+    assert!(matches!(
+        found(PaneTarget::Todo(3)),
+        Some(PaneRow::Fold { group: 1, .. })
+    ));
+    assert!(matches!(
+        found(PaneTarget::Todo(5)),
+        Some(PaneRow::Todo { ordinal: 5, .. })
+    ));
+    assert!(matches!(
+        found(PaneTarget::Fold(2)),
+        Some(PaneRow::Fold { group: 2, .. })
+    ));
+    assert_eq!(found(PaneTarget::Fold(9)), Some(PaneRow::AddTodo));
+    assert_eq!(found(PaneTarget::Todo(9)), Some(PaneRow::AddTodo));
+    let at = rows
+        .iter()
+        .position(|r| matches!(r, PaneRow::Fold { group: 1, .. }))
+        .unwrap();
+    assert_eq!(target_at(&rows, at), Some(PaneTarget::Fold(1)));
+}
+
+/// `<` and `>` land on the first open todo, over a finished run's fold
+/// above it; a list with nothing open lands on its first fold.
+#[test]
+fn the_todos_are_entered_at_the_first_open_one() {
+    let mut list = worked_list();
+    list.todos[1].done = true;
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&list),
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
+    let first = first_in_section(&rows, PaneSection::Todo).unwrap();
+    assert!(
+        matches!(rows[first], PaneRow::Todo { ordinal: 5, .. }),
+        "{:?}",
+        rows[first]
+    );
+    list.todos[5].done = true;
+    let rows = pane_rows(
+        &project(&[], "client"),
+        Some(&list),
+        &Glance::default(),
+        &TodoFold::default(),
+        0,
+    );
+    let first = first_in_section(&rows, PaneSection::Todo).unwrap();
+    assert!(
+        matches!(rows[first], PaneRow::Fold { group: 0, .. }),
+        "{:?}",
+        rows[first]
     );
 }

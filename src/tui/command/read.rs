@@ -134,7 +134,8 @@ fn pane_verb(app: &App) -> &'static str {
             | PaneRow::AddPhase
             | PaneRow::Adding,
         ) => "add",
-        Some(PaneRow::EarlierNotes(_)) => "show",
+        Some(PaneRow::EarlierNotes(_) | PaneRow::Fold { shown: false, .. }) => "show",
+        Some(PaneRow::Fold { shown: true, .. }) => "hide",
         _ => "edit",
     }
 }

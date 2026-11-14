@@ -314,6 +314,9 @@ impl App {
             }
         }
         let selected = self.library.selected().is_some_and(|p| p.path == path);
+        if self.pane_for.as_ref() == Some(&path) {
+            self.release_moved_holds(&detail);
+        }
         self.details.insert(path, *detail);
         if selected {
             // A landed write settles on its row and pulses there;

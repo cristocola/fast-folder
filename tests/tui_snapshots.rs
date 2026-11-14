@@ -1703,28 +1703,51 @@ fn detail_pane_groups_todos_by_phase_120x40() {
         },
     );
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
-    // Down from the first todo lands on the next todo, not on the label
-    // between them.
+    // The done ones are folded under their runs. Down from the first open
+    // todo lands on its run's fold, and Down again on the next todo, not on
+    // the label between them.
     let rows = app.pane_rows();
     let first = rows
         .iter()
-        .position(|r| matches!(r, PaneRow::Todo { ordinal: 0, .. }))
+        .position(|r| matches!(r, PaneRow::Todo { ordinal: 2, .. }))
         .unwrap();
     while app.pane_cursor < first {
         let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
     }
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
     assert!(
+        matches!(app.pane_rows()[app.pane_cursor], PaneRow::Fold { .. }),
+        "the run's fold is a row the cursor rests on"
+    );
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    assert!(
         matches!(
             app.pane_rows()[app.pane_cursor],
-            PaneRow::Todo { ordinal: 1, .. }
+            PaneRow::Todo { ordinal: 3, .. }
         ),
         "the cursor steps over a phase label"
     );
-    snap(
-        "detail_pane_groups_todos_by_phase_120x40",
-        render_to_string(&app, 120, 40),
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("1 done") && !frame.contains("download the client files"),
+        "the done ones are folded: {frame}"
     );
+    snap("detail_pane_groups_todos_by_phase_120x40", frame);
+
+    // Enter on a fold shows every run's done todos under its fold.
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Up)));
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    assert!(matches!(
+        app.pane_rows()[app.pane_cursor],
+        PaneRow::Fold { shown: true, .. }
+    ));
+    let frame = render_to_string(&app, 120, 40);
+    assert!(
+        frame.contains("download the client files")
+            && frame.contains("read the order requirements"),
+        "shown, in place: {frame}"
+    );
+    snap("detail_pane_groups_todos_by_phase_shown_120x40", frame);
 }
 
 /// A todo's owner and its day sit at the right of its row, dim, and a long
@@ -1782,13 +1805,24 @@ fn detail_pane_shows_the_owner_and_the_day_120x40() {
         },
     );
     let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Right)));
-    let rows = app.pane_rows();
-    let first = rows
+    // The ticked one is under the fold: shown, it carries the day it was
+    // ticked.
+    let fold = app
+        .pane_rows()
+        .iter()
+        .position(|r| matches!(r, PaneRow::Fold { .. }))
+        .unwrap();
+    while app.pane_cursor < fold {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    }
+    let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let first = app
+        .pane_rows()
         .iter()
         .position(|r| matches!(r, PaneRow::Todo { ordinal: 1, .. }))
         .unwrap();
-    while app.pane_cursor < first {
-        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Down)));
+    while app.pane_cursor > first {
+        let _ = update(&mut app, Msg::Key(Key::plain(KeyCode::Up)));
     }
     let frame = render_to_string(&app, 120, 40);
     assert!(frame.contains("@claude 2026-10-12"), "{frame}");
@@ -1906,6 +1940,25 @@ fn dashboard_over_80x24_pane_focused() {
         "and the table's header is not under it:\n{frame}"
     );
     snap("dashboard_over_80x24_pane_focused", frame);
+}
+
+/// **The fold's tick is the done box in the ASCII alphabet**: `[x] 2 done`,
+/// under the heading where the boxes are — never the theme's `+`, which is
+/// the key that adds a todo and reads as one.
+#[test]
+fn a_fold_is_a_done_box_in_the_ascii_alphabet() {
+    use fastf::tui::theme::{Glyphs, Theme};
+    let mut app = fixture(12, 80, 24);
+    app.theme = Theme::mono().with_glyphs(Glyphs::ascii());
+    press_key(&mut app, Key::ch('j'));
+    deliver_record(&mut app);
+    press_key(&mut app, Key::plain(KeyCode::Right));
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("│   [x] 2 done "), "{frame}");
+    assert!(!frame.contains("+ 2 done"), "{frame}");
+    app.theme = Theme::mono();
+    let frame = render_to_string(&app, 80, 24);
+    assert!(frame.contains("│   ✓ 2 done "), "{frame}");
 }
 
 /// **A tall, narrow window puts the pane under the list**, full width, and the

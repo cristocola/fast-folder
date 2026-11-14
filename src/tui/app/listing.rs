@@ -206,6 +206,8 @@ impl App {
         self.pane_pending = None;
         self.pane_seek = None;
         self.pane_pulses.clear();
+        // A todo ticked on the last visit is done like any other now.
+        self.pane_held.clear();
         true
     }
 

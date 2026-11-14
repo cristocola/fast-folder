@@ -145,6 +145,61 @@ fn the_most_telling_use_names_each_process() {
     );
 }
 
+/// A program tied to the folder only by the folder itself among its
+/// arguments — a file manager or a viewer opened on it, Reveal's `xdg-open`
+/// — is a note, whatever the verb; an argument naming a path inside the
+/// folder still advises, and so does the folder named beside any other tie.
+#[test]
+fn a_program_opened_on_the_folder_is_a_note() {
+    let pass = Pass {
+        seen: vec![
+            seen(30, "dolphin", &[(Kind::Arg, "")]),
+            seen(31, "app", &[(Kind::Arg, ""), (Kind::Arg, "c.toml")]),
+            seen(
+                32,
+                "code",
+                &[(Kind::Arg, ""), (Kind::Open { writing: false }, "notes.md")],
+            ),
+            seen(33, "kitty", &[(Kind::Arg, ""), (Kind::Cwd, "")]),
+            seen(34, "podman", &[(Kind::Arg, "data")]),
+        ],
+        ..Pass::default()
+    };
+    let found = judged(&pass, &[]);
+    let weights: Vec<Weight> = found.uses.iter().map(|u| u.weight(Verb::Move)).collect();
+    assert_eq!(
+        weights,
+        [
+            Weight::Note,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory,
+            Weight::Advisory
+        ]
+    );
+    let lines: Vec<String> = found.uses.iter().map(Use::line).collect();
+    assert_eq!(
+        lines,
+        [
+            "dolphin (pid 30) was opened on the project folder",
+            "app (pid 31) was started with c.toml",
+            "code (pid 32) has notes.md open",
+            "kitty (pid 33) was started with the project folder",
+            "podman (pid 34) was started with data",
+        ]
+    );
+    let opened = holders_of(vec![found.uses[0].clone()]);
+    assert!(opened.refusal(Verb::Delete, false).is_none());
+    assert_eq!(
+        [Verb::Move, Verb::Rename, Verb::Delete].map(|verb| opened.notes(verb)),
+        [
+            ["dolphin (pid 30) was opened on the folder; it shows the old one"],
+            ["dolphin (pid 30) was opened on the folder; it shows the old name"],
+            ["dolphin (pid 30) was opened on the folder; it shows a folder that is gone"],
+        ]
+    );
+}
+
 #[test]
 fn a_refusal_lists_several_uses_and_says_how_many_more() {
     let uses: Vec<Use> = (0..9)
@@ -942,6 +997,26 @@ fn a_program_run_from_the_folder_and_one_named_in_its_arguments() {
         use_of(&found, naming),
         Some(&How::Named(PathBuf::from("marker")))
     );
+}
+
+/// A program started from the base with the project folder as its
+/// argument, holding nothing of it — how a file manager opened on the
+/// project looks — is a note.
+#[test]
+fn a_program_opened_on_the_folder_from_its_base_is_a_note() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let opened = spawn(
+        std::process::Command::new("sh")
+            .args(["-c", "sleep 30; :"])
+            .arg(&root)
+            .current_dir(temp.path()),
+    );
+    let pid = opened.0.id();
+    let found = wait_for(&root, |found| use_of(found, pid).is_some());
+    assert_eq!(use_of(&found, pid), Some(&How::OpenedOn));
+    assert!(!found.in_use(Verb::Move), "{found:?}");
 }
 
 /// A library loaded from the project: a copy of one this process has

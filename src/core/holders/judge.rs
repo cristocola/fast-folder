@@ -270,32 +270,53 @@ pub(super) fn named_paths(argv: &[String], cwd: Option<&Path>, cwd_inside: bool)
     paths
 }
 
-/// Each process's most telling fact in each folder, as a use. A shell whose
-/// fact there is its working folder is named as one: its prompt is the only
-/// tie, and whatever it started is judged itself.
+impl Fact {
+    /// An argument naming the folder itself, not a path inside it.
+    fn names_the_folder(&self) -> bool {
+        self.kind == Kind::Arg && self.path.as_os_str().is_empty()
+    }
+}
+
+/// Each process's most telling fact in each folder, as a use; among
+/// arguments, one naming a path inside the folder before the folder itself.
+/// A shell whose fact there is its working folder is named as one: its
+/// prompt is the only tie, and whatever it started is judged itself. A
+/// process whose only tie is the folder itself among its arguments was
+/// opened on it — a file manager, a viewer — and holds nothing of it.
 pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize, Use)> {
-    let mut best: Vec<(usize, &Fact)> = Vec::new();
+    let mut folders: Vec<usize> = Vec::new();
     for fact in &seen.facts {
-        match best.iter_mut().find(|(folder, _)| *folder == fact.folder) {
-            Some((_, kept)) if fact.kind.rank() < kept.kind.rank() => *kept = fact,
-            Some(_) => {}
-            None => best.push((fact.folder, fact)),
+        if !folders.contains(&fact.folder) {
+            folders.push(fact.folder);
         }
     }
-    best.into_iter()
-        .map(|(folder, fact)| {
-            let path = fact.path.clone();
-            let how = match fact.kind {
-                Kind::Cwd => How::WorkingIn {
-                    at: path,
-                    shell: shells.contains(&seen.program),
-                },
-                Kind::Exe => How::Runs(path),
-                Kind::Open { writing } => How::Open { at: path, writing },
-                Kind::Loaded => How::Loaded(path),
-                Kind::Arg => How::Named(path),
+    folders
+        .into_iter()
+        .filter_map(|folder| {
+            let facts: Vec<&Fact> = seen
+                .facts
+                .iter()
+                .filter(|fact| fact.folder == folder)
+                .collect();
+            let how = if facts.iter().all(|fact| fact.names_the_folder()) {
+                How::OpenedOn
+            } else {
+                let best = facts
+                    .iter()
+                    .min_by_key(|fact| (fact.kind.rank(), fact.names_the_folder()))?;
+                let path = best.path.clone();
+                match best.kind {
+                    Kind::Cwd => How::WorkingIn {
+                        at: path,
+                        shell: shells.contains(&seen.program),
+                    },
+                    Kind::Exe => How::Runs(path),
+                    Kind::Open { writing } => How::Open { at: path, writing },
+                    Kind::Loaded => How::Loaded(path),
+                    Kind::Arg => How::Named(path),
+                }
             };
-            (
+            Some((
                 folder,
                 Use {
                     by: By::Process {
@@ -304,7 +325,7 @@ pub(super) fn process_uses(seen: &Seen, shells: &HashSet<String>) -> Vec<(usize,
                     },
                     how,
                 },
-            )
+            ))
         })
         .collect()
 }

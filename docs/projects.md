@@ -439,7 +439,8 @@ names the path does.
 
 - a program working in the folder, holding a file in it open (for writing or
   not), running from it, with a library or another file of it loaded, or
-  started with a path in it among its arguments;
+  started with a path inside it among its arguments (`--config=…/c.toml`,
+  `-v …/data:/app/data`, a script in it);
 - a container, a sandbox or a service that mounts a folder from inside the
   project — read from its own mount table, whoever runs it — and a bind of
   one somewhere else on this machine;
@@ -463,6 +464,11 @@ look leaves it out too.
 
 - a shell whose prompt is in the folder — `bash (pid 1234) has its prompt in
   the old folder; cd to the new one`; what it started is judged on its own;
+- a program opened on the folder and holding nothing of it — a file manager
+  or a viewer whose only tie is the folder itself among its arguments, such
+  as the window fastf's own *Reveal* opens: `dolphin (pid 5981) was opened on
+  the folder; it shows the old one`. Started with the folder and also working
+  in it, holding a file of it or running from it, it counts;
 - a unit that is disabled, stopped and started by nothing;
 - a process that did not answer within five seconds — one stuck behind a
   mount that stopped answering, say: fastf names it rather than wait for it.

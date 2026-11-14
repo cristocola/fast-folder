@@ -272,6 +272,10 @@ pub enum How {
     Loaded(PathBuf),
     /// Started with a path there among its arguments.
     Named(PathBuf),
+    /// Started with the folder itself among its arguments, and tied to it
+    /// by nothing else: a file manager or a viewer opened on it, whose
+    /// window goes on showing the old path. It holds nothing of the folder.
+    OpenedOn,
     /// A folder from inside it is mounted at `at` — a container's or a
     /// sandbox's mount, or a bind on this machine.
     Mounts {
@@ -325,14 +329,15 @@ impl Use {
     /// **The one table.** Windows' holds are physical, and so is a
     /// filesystem mounted inside a folder being deleted — the removal would
     /// keep it, and the hidden folder with it, for good. A shell whose only
-    /// tie is its prompt, a unit nothing will start, and a process that did
-    /// not answer are notes. Everything else advises — a process never
-    /// asked included, since nothing was learned of it.
+    /// tie is its prompt, a program opened on the folder and holding nothing
+    /// of it, a unit nothing will start, and a process that did not answer
+    /// are notes. Everything else advises — a process never asked included,
+    /// since nothing was learned of it.
     pub fn weight(&self, verb: Verb) -> Weight {
         match &self.how {
             How::Held(_) | How::BusyFolder(_) => Weight::Physical,
             How::MountedInside(_) if verb == Verb::Delete => Weight::Physical,
-            How::WorkingIn { shell: true, .. } => Weight::Note,
+            How::WorkingIn { shell: true, .. } | How::OpenedOn => Weight::Note,
             How::Unit { dormant: true, .. } => Weight::Note,
             How::Silent(_) => Weight::Note,
             _ => Weight::Advisory,
@@ -362,6 +367,7 @@ impl Use {
             How::Runs(path) => format!("{who} runs {}", at(path)),
             How::Loaded(path) => format!("{who} has {} loaded", at(path)),
             How::Named(path) => format!("{who} was started with {}", at(path)),
+            How::OpenedOn => format!("{who} was opened on {}", at(Path::new(""))),
             How::Mounts { folder, at: point } if self.by == By::Nobody => format!(
                 "{} is mounted at {} too",
                 at(folder),
@@ -415,6 +421,14 @@ impl Use {
             How::Open { .. } | How::Runs(_) | How::Loaded(_) | How::Named(_) => {
                 format!("{who} was using {old} ({}); {again}", self.what())
             }
+            How::OpenedOn => format!(
+                "{who} was opened on the folder; it shows {}",
+                match verb {
+                    Verb::Move => "the old one",
+                    Verb::Rename => "the old name",
+                    Verb::Delete => "a folder that is gone",
+                }
+            ),
             How::Mounts { folder, at: point } if self.by == By::Nobody => format!(
                 "{} of {old} is still mounted at {}; mount it again from where it is now",
                 at(folder),

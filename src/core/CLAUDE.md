@@ -572,6 +572,13 @@ note — and `Holders::refusal`/`notes` the one wording. Asked as
   processes the asker's own stdio pipes join it to (`judge::pipeline`; a pipe
   an ancestor also holds is the session's output and joins nothing), by pid
   and start time; a job carries its starter's chain in `JobRequest::asking`;
+- **only a note** (a decision): a shell whose only tie is its working folder
+  — its prompt; what it started is judged itself — and a process whose only
+  tie is the folder itself among its arguments (`How::OpenedOn`: a file
+  manager or a viewer opened on it, Reveal's own `xdg-open` among them,
+  which would otherwise refuse the folder's move for as long as its window
+  lives). An argument naming a path *inside* the folder advises, and so does
+  the folder named beside any other tie (`judge::process_uses`);
 - **a namespace's mount counts only when this machine's table lacks its
   (dev, root)**: a namespace starts as a copy, and an inherited mount is no
   choice of its own; a foreign process's paths are translated through its own

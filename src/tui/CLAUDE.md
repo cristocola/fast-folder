@@ -635,6 +635,24 @@ batch runner (`app/jobs.rs`) is for the quick verbs only: tag, note, unregister.
 `MoveOutcome::staged` and `copied` still tell the command line whether a move
 renamed or copied.
 
+**A move, a delete and a rename first ask what uses their folders**
+(`app::in_use`; `core::holders`): `ask_what_uses` emits
+`Effect::CheckInUse`, numbered like a read-only dialog's read, and the
+runtime answers on a worker with `Msg::InUse`, whose number must match — an
+older answer is dropped. **What the dialog names is resolved before the
+question**, so a project gone from the library is the usual refusal and no
+question is asked. A move and a delete put the progress dialog up at once
+(`background.starting`), so Esc hides it and Ctrl-C sets
+`cancel_when_started`; the answer clears `starting` and `hidden` first and
+takes that flag, so a Ctrl-C during the question starts nothing and cancels
+no later job. One question at a time: a second is refused while one is out.
+Nothing in use starts the job (`StartJob { force: false }`) or the rename;
+otherwise a wide `Pick` (`Then::InUse`) offers anyway, the others (a batch
+with free projects; never a rename) and cancel, and hides anyway when a use
+is physical. Esc goes through `close_top`, which says nothing was moved. The
+runtime asks every platform the same, so `update` behaves the same
+everywhere; off Linux the answer is always empty.
+
 **The dialog draws one row per step** (`view::modals::progress_lines`) from
 `Progress.steps` and `Progress.finished`: done steps ticked with what they
 counted, the current one with its count, bar and entry, the rest dim — or the

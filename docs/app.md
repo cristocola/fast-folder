@@ -497,6 +497,18 @@ space to mark each; delete names the folder and asks you to type the word
 `delete` — a typo keeps your text and says why it was refused; `y` or `n`
 answers a yes/no without Enter.
 
+**A move, a delete and a rename first ask what is using the folder** — a
+program working in it or holding a file open, a container or sandbox mounting
+part of it, a service that names it
+([projects.md](projects.md#a-project-something-is-using)). Nothing using it,
+and the verb goes on as asked. Otherwise a picker says so — `ID0047 is in use`,
+or `2 of 5 projects are in use` over marks — with what uses each one in a
+sentence below, and offers *Move anyway*, *Move the 3 others* (over marks, when
+some are free) and *Cancel*; *Delete* and *Rename* likewise, a rename without
+the others. Esc is Cancel, and says nothing was moved. A filesystem mounted
+inside a folder being deleted is offered no *anyway*. The shell the app was
+started from, and its terminal, never count.
+
 **A move, a copy to a folder (`C`), a delete and a reconcile each run as
 a job of their own**, which the app follows but does not own. The dialog shows
 one row per step: the steps done ticked with what they counted, the current

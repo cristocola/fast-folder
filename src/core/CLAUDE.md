@@ -542,24 +542,67 @@ record, `JobStatus::Paused`): the copy is kept, and moving the project again
 time, which only a finished copy has — and copying the rest
 (`transactions::adopt_staging`). Only a cancel rolls a copy back.
 
-**A program writing in the project stops the move before anything is copied**
-(`core::holders`, asked after the scan — `in_manifest` — and before the
-probe; Linux: `/proc/*/fd` with `fdinfo` flags and `cwd`, this user's
-processes, fastf's own left out): its later writes would land in the old
-copy. A program only working in the folder is a note in the result
-(`MoveOutcome.notes`). **On Windows a program holding anything stops it**
-(`Holders.blocking`, `busy_folders`), because Windows will not rename a folder
-while anything under it is open — a file whatever its sharing, a folder a
-console works in; only a handle on the folder itself that allows delete (a
-watcher) does not stop it. Measured in the VM, and why the retire could never
-happen otherwise. The Restart Manager (`rstrtmgr`, declared by hand, a
-thousand files a session, halved until each held file is named) says who
-holds files; opening each folder for `DELETE` answers a sharing violation
-while a console works there, which the Restart Manager cannot see — every
-folder on a local disk, only the project folder across a network, where each
-open is a round trip. A refused rename names the holder instead of "access is
-denied" (the move's rename, the retire's `KeptWhole`, `fastf rename`), and the
-sentence is the error, so no class explanation calls it a permission problem.
+**Something using the folder stops a move, a rename and a delete before
+anything changes** (`core::holders`): whatever used it keeps the old path — a
+container makes it again at its next start, a dev server writes into the old
+copy, a unit fails at the next boot. **One generic question, from what the
+operating system reports, never per tool** (a decision): on Linux every
+process's `cwd`, `exe`, `fd` with `fdinfo` flags, `maps` and arguments (this
+user's), every process's `mountinfo` (anyone's — a root container's binds
+too), host binds, mounts inside, and systemd unit files that name the folder
+or link into it (`units.rs`: the user's and system's unit folders and the
+generators', `systemctl show` once per manager, killed at two seconds, no
+answer counting). **`Use::weight` is the one table** — physical, advisory,
+note — and `Holders::refusal`/`notes` the one wording. Asked as
+`holders::check(&Folder, Verb, &Guard)`:
+
+- **under the data lock**: the move in `move_project_unlocked_in_parts`
+  before `paused_move` and the same-filesystem rename, as the named step
+  `JobPhase::Asking`, its answer carried into the staged path (`Asked`) and
+  a resume; the rename before its first `rename_dir`; the delete after
+  `refuse_mounts_inside`. A paused move is asked **before** its copy is
+  adopted (`ask_before_resuming`), never inside `copy_and_publish`: a refusal
+  there is a failure before the publish, which removes the paused copy;
+- **the folder in both spellings**: `Folder::of` rebuilds the configured one
+  from the configured base whose canonical form is the folder's parent, since
+  under the lock the project is canonical and a unit or an argument may spell
+  it through a link;
+- **never counted**: fastf (by its exe link's text, never a stat through it),
+  and `Guard::asking` — whoever asked and every process above them, by pid and
+  start time; a job carries its starter's chain in `JobRequest::asking`;
+- **a namespace's mount counts only when this machine's table lacks its
+  (dev, root)**: a namespace starts as a copy, and an inherited mount is no
+  choice of its own; a foreign process's paths are translated through its own
+  table (`fs_kind::covering`, `host_paths`);
+- **nothing waits on a process**: the pass reads on `util::pool` under one
+  deadline (`linux::within`, five seconds), since reading `cmdline` or `maps`
+  takes the process's memory lock; one that does not answer is a note, and is
+  not asked again by a later pass until its read comes back (`GIVEN_UP`).
+
+A refusal that forcing goes past is `holders::InUse`; a physical one is a
+plain error. `Guard::force` turns advisory uses into notes plus one
+`util::log` line. `Guard::off` asks nothing: the library's compatibility
+entry points (`library::move_project`, `move_project_configured_with_outcome`,
+`delete_project_configured`, `rename_project_unlocked`) take it, and no
+surface reaches them — production reaches the engine through jobs and
+`operations::rename`, which ask. Reconcile files an `InUse` paused move under
+`waiting` and touches nothing; `attention` lists it as `Waiting`.
+
+**On Windows nothing is asked before the rename** (`BEFORE_THE_RENAME`):
+Windows refuses it itself while anything under the folder is open — a file
+whatever its sharing, a folder a console works in; only a handle on the
+folder itself that allows delete (a watcher) does not stop it — so those
+holds are physical, asked after a staged move's scan (`check_scanned`) and
+where a rename refused (`held_on_windows`). Measured in the VM, and why the
+retire could never happen otherwise. The Restart Manager (`rstrtmgr`,
+declared by hand, a thousand files a session, halved until each held file is
+named) says who holds files; opening each folder for `DELETE` answers a
+sharing violation while a console works there, which the Restart Manager
+cannot see — every folder on a local disk, only the project folder across a
+network, where each open is a round trip. A refused rename names the holder
+instead of "access is denied" (the move's rename, the retire's `KeptWhole`,
+`fastf rename`), and the sentence is the error, so no class explanation calls
+it a permission problem.
 A job's worker works in its own folder, and `jobs::start` steps out of any
 project the job is about, since a working folder holds a folder on Windows. **A stall is said, never a freeze**: a job's
 worker sets `Progress.stalled_ms` when nothing has moved for
@@ -616,10 +659,12 @@ through, its size the bytes that arrived — and then **the copy is settled**
 (`transactions::settle_copy`): the original is walked again and compared
 `Whole`, and what changed, appeared or went since it was copied is brought
 across, up to `SETTLE_ROUNDS` times, until a look finds nothing the copy does
-not hold. An original that never holds still — a dev server appends to its log
-every tenth of a second — does not stop the move: after the last round the
-copy is published as the last round left it, consistent with its record, and
-the merge after the retire carries what changed since. That walk is the move's
+not hold. A move reaches the copy only when nothing used the original or the
+move was forced past it, and an original that still never holds still — a
+forced move past a dev server appending to its log every tenth of a second, a
+file somebody saves — does not stop it: after the last round the copy is
+published as the last round left it, consistent with its record, and the
+merge after the retire carries what changed since. That walk is the move's
 second and last look at the original; `verify_source_unchanged` is only
 recovery's. Reconcile clears a probe
 a killed move left, and only the names a probe holds.
@@ -671,6 +716,15 @@ the OS's answer, so a reused pid cannot lie — keeps `state.json` current from 
 watcher thread, turns a `cancel` file into the engine's flag, waits patiently
 for the data lock (`lockfile::wait_patiently`), and logs every line to
 `jobs/<id>/log`. Surfaces follow the state file; none owns the job.
+
+**The request says how the job weighs what uses a folder**: `force`, and
+`asking` — the starter's own chain, recorded by `jobs::create`, since the
+worker's parents are the service manager and the shell that asked would
+otherwise count against its own move (`core::holders`). The worker builds
+its `Guard` from them for every item and for reconcile's paused moves, and an
+item it refuses for something forcing would go past says `in_use` in its
+report, so the command line can offer `--force` for what appeared after its
+own look.
 
 **The move is done when the original is set aside.**
 `move_engine::move_project_in_parts` runs under the data lock up to

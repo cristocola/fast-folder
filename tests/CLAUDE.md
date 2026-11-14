@@ -57,6 +57,8 @@ What each suite guards — the intent, not the case list:
   `FASTF_SHOT_ARGS="copy shared"` for a subcommand's inline prompt,
   `FASTF_SHOT_STALLED=1` for an archive base that stopped answering,
   `FASTF_SHOT_LEFTOVERS=1` for what `!` lists,
+  `FASTF_SHOT_BUSY=1` for a `sleep` working in every project (the in-use
+  picker),
   `FASTF_SHOT_SIZE=80x24`, `FASTF_SHOT_SVG=<path>` for the README's SVG — sandbox
   only — drawn in `FASTF_SHOT_THEME`, default `doom-one`). **Look at every
   screen this way before writing its snapshot.**

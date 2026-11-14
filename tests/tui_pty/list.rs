@@ -1339,6 +1339,8 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
         );
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
+    // The folders are in place before the job's last word is written.
+    sb.wait_for_jobs(std::time::Duration::from_secs(20));
 }
 
 /// **A base on a mount that stopped answering holds up nothing but itself.**

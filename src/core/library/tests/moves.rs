@@ -499,6 +499,16 @@ fn a_read_only_folder_inside_the_project_cannot_leave_a_husk() {
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
     let (old_base, new_base) = (tmp1.path(), tmp2.path());
+    // The move keeps the folder's mode, so the moved copy is sealed too, and a
+    // temporary folder cannot remove what a sealed folder holds: opened again
+    // before `tmp2` goes, pass or fail, or every run leaves it behind.
+    struct Unseal(std::path::PathBuf);
+    impl Drop for Unseal {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _unseal = Unseal(new_base.join("proj_a/aaa_modcache"));
     write_project(old_base, "proj_a", "ID0001", "gen", "2026-01-01T00:00:00Z");
     let sealed = old_base.join("proj_a/aaa_modcache");
     fs::create_dir_all(&sealed).unwrap();

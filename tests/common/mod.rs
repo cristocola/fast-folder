@@ -135,6 +135,38 @@ impl Sandbox {
         self.programs.path()
     }
 
+    /// Wait until every job this sandbox started has ended. A worker lets go
+    /// of `jobs/<id>/lock` last, after its final state and log line, so a test
+    /// that returns while one still holds it has that state written into a
+    /// sandbox it has already removed, a folder left in the builder's
+    /// temporary folder by every run.
+    #[cfg(unix)]
+    pub fn wait_for_jobs(&self, within: std::time::Duration) {
+        use std::os::fd::AsRawFd;
+        let started = std::time::Instant::now();
+        let jobs = fs::read_dir(self.install.join("jobs"));
+        for job in jobs.into_iter().flatten().flatten() {
+            let Ok(lock) = fs::File::open(job.path().join("lock")) else {
+                continue;
+            };
+            loop {
+                // SAFETY: one non-blocking `flock` on a descriptor this
+                // function owns; closing it lets the lock go again.
+                let free =
+                    unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+                if free {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < within,
+                    "a job of this sandbox did not end: {}",
+                    job.path().display()
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+    }
+
     /// Say the template guide has already been read.
     ///
     /// The guide offers itself once, unasked, the first time templates come up

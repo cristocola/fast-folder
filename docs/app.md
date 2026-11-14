@@ -633,6 +633,8 @@ The terminal is always given back. Ctrl-C inside the app is a key (it cancels
 a running job, closes a dialog, or quits); a second `kill -INT`, a `kill
 -TERM`, a closed window (SIGHUP) or a panic each restore the screen and cooked
 mode before the process ends, and an interrupted create rolls its folder back.
+A second signal exits with the code a shell gives it — 130 for SIGINT, 129 for
+SIGHUP, 143 for SIGTERM ([cli.md](cli.md#ctrl-c-hang-ups-and-exit-codes)).
 `fastf 2>/dev/null` — a refusal with nowhere to go — is repeated on stdout when
 that is still a terminal.
 

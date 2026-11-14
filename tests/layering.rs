@@ -814,3 +814,119 @@ fn no_key_line_is_written_by_hand() {
         offenders.join("\n  ")
     );
 }
+
+/// Every `fn <name>` in `text`: the attributes right above it, and its lines
+/// from the signature to the `}` at the signature's indentation — found the
+/// way `production_lines` finds a module's end.
+fn functions_named<'a>(text: &'a str, name: &str) -> Vec<(Vec<&'a str>, Vec<&'a str>)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let signature = format!("fn {name}(");
+    let mut found = Vec::new();
+    for (at, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || !trimmed.contains(&signature) {
+            continue;
+        }
+        let indent = &line[..line.len() - trimmed.len()];
+        let close = format!("{indent}}}");
+        let end = if trimmed.ends_with('}') {
+            at
+        } else {
+            (at..lines.len())
+                .find(|&i| lines[i] == close)
+                .unwrap_or_else(|| panic!("no end found for `{trimmed}`"))
+        };
+        let attributes = lines[..at]
+            .iter()
+            .rev()
+            .map(|line| line.trim())
+            .take_while(|line| line.starts_with("#[") || line.starts_with("///"))
+            .filter(|line| line.starts_with("#["))
+            .collect();
+        found.push((attributes, lines[at..=end].to_vec()));
+    }
+    found
+}
+
+/// **A second signal leaves through `_exit`, never `std::process::exit`, on
+/// unix.** The handler runs on whatever thread the signal lands on, and
+/// `exit` flushes stdout under a lock that thread may hold inside
+/// `println!` — a panic in the handler — and an exit started inside the
+/// exit `main` makes after the first interrupt waits on itself for ever. No
+/// test can choose where a signal lands, so the path is read: every function
+/// the unix handler reaches, and each restore registered for it, names no
+/// `process::exit`; the unix `exit_now` is `_exit`; and `process::exit`
+/// appears in `util/interrupt.rs` only in the exit for other platforms.
+#[test]
+fn the_second_signal_exits_through_underscore_exit() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let read = |file: &str| fs::read_to_string(root.join(file)).unwrap();
+    // Split so the scanner does not match its own needle.
+    let exit = concat!("process", "::exit");
+    let interrupt = read("util/interrupt.rs");
+
+    let on_the_path: [(&str, &str); 10] = [
+        ("util/interrupt.rs", "install_platform"),
+        ("util/interrupt.rs", "ctrl_c"),
+        ("util/interrupt.rs", "hang_up"),
+        ("util/interrupt.rs", "flag"),
+        ("util/interrupt.rs", "on_second_signal"),
+        ("util/interrupt.rs", "restore_terminal"),
+        ("tui/runtime/mod.rs", "restore_on_signal"),
+        ("tui/inline.rs", "restore_inline"),
+        ("util/tty.rs", "restore_cooked_mode"),
+        ("util/tty.rs", "write_raw"),
+    ];
+    for (file, name) in on_the_path {
+        let text = read(file);
+        let found = functions_named(&text, name);
+        assert!(!found.is_empty(), "no `fn {name}` in src/{file}");
+        for (attributes, body) in found {
+            if attributes.iter().any(|a| a.contains("windows")) {
+                continue;
+            }
+            let named = body.iter().find(|line| {
+                let code = line.trim_start();
+                !code.starts_with("//") && code.contains(exit)
+            });
+            assert!(
+                named.is_none(),
+                "`{name}` in src/{file} is on the signal handler's path and names `{exit}`: {}",
+                named.unwrap().trim()
+            );
+        }
+    }
+
+    let flag = functions_named(&interrupt, "flag");
+    assert!(
+        flag.iter()
+            .all(|(_, body)| body.iter().any(|line| line.contains("exit_now("))),
+        "the second signal leaves through `exit_now`"
+    );
+
+    let exits = functions_named(&interrupt, "exit_now");
+    let unix = exits
+        .iter()
+        .find(|(attributes, _)| attributes.contains(&"#[cfg(unix)]"))
+        .expect("an `exit_now` for unix");
+    assert!(
+        unix.1.iter().any(|line| line.contains("libc::_exit(")),
+        "the unix `exit_now` is `_exit`:\n{}",
+        unix.1.join("\n")
+    );
+    let elsewhere: Vec<&str> = exits
+        .iter()
+        .filter(|(attributes, _)| attributes.contains(&"#[cfg(not(unix))]"))
+        .flat_map(|(_, body)| body.iter().copied())
+        .collect();
+    for (number, line) in production_lines(&interrupt) {
+        if line.contains(exit) {
+            assert!(
+                elsewhere.contains(&line),
+                "src/util/interrupt.rs:{number} names `{exit}` outside the exit for other \
+                 platforms: {}",
+                line.trim()
+            );
+        }
+    }
+}

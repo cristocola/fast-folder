@@ -659,6 +659,65 @@ pub mod pty {
         )
     }
 
+    /// Signals to send the program, each at a moment after launch: what a
+    /// `kill` from another terminal does, which no keystroke can — in raw
+    /// mode Ctrl-C is a key, not a signal.
+    pub type Signal = (Duration, libc::c_int);
+
+    /// What [`run_signalled`] saw.
+    pub struct Signalled {
+        pub transcript: String,
+        /// As a shell reports it: 128 plus the signal for a program a signal
+        /// killed.
+        pub code: i32,
+        /// The terminal's local modes (`c_lflag`) as the first signal was
+        /// sent, or `None` when the program had ended before it was due.
+        pub modes_before: Option<libc::tcflag_t>,
+        /// The terminal's local modes once the program had exited: what the
+        /// shell gets back.
+        pub modes_after: libc::tcflag_t,
+    }
+
+    /// Whether `modes` are a shell's: whole lines, echo, and the keys that
+    /// send signals. Raw mode clears all three.
+    pub fn cooked(modes: libc::tcflag_t) -> bool {
+        let wanted = libc::ICANON | libc::ECHO | libc::ISIG;
+        modes & wanted == wanted
+    }
+
+    /// `run`, also sending `signals` on schedule, and reading the terminal's
+    /// modes before the first and after the program exits.
+    pub fn run_signalled(
+        program: &str,
+        args: &[&str],
+        env: &[(&str, &std::path::Path)],
+        script: &[Keystroke],
+        signals: &[Signal],
+        deadline: Duration,
+    ) -> Signalled {
+        assert!(
+            !signals.is_empty(),
+            "run_signalled sends at least one signal"
+        );
+        let ran = run_pty(&Launch {
+            cols: PTY_COLS,
+            rows: PTY_ROWS,
+            program,
+            args,
+            env,
+            script,
+            signals,
+            deadline,
+            stdout_file: None,
+        });
+        Signalled {
+            transcript: join(&ran.chunks),
+            code: ran.code,
+            modes_before: ran.modes_before,
+            modes_after: ran.modes_after.expect("the slave is held open"),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_sized(
         cols: u16,
@@ -670,6 +729,94 @@ pub mod pty {
         deadline: Duration,
         stdout_file: Option<&std::path::Path>,
     ) -> (Vec<(Duration, Vec<u8>)>, i32) {
+        let ran = run_pty(&Launch {
+            cols,
+            rows,
+            program,
+            args,
+            env,
+            script,
+            signals: &[],
+            deadline,
+            stdout_file,
+        });
+        (ran.chunks, ran.code)
+    }
+
+    /// One run under a pty, everything about it.
+    #[derive(Clone, Copy)]
+    struct Launch<'a> {
+        cols: u16,
+        rows: u16,
+        program: &'a str,
+        args: &'a [&'a str],
+        env: &'a [(&'a str, &'a std::path::Path)],
+        script: &'a [Keystroke],
+        signals: &'a [Signal],
+        deadline: Duration,
+        stdout_file: Option<&'a std::path::Path>,
+    }
+
+    struct Ran {
+        chunks: Vec<(Duration, Vec<u8>)>,
+        code: i32,
+        modes_before: Option<libc::tcflag_t>,
+        modes_after: Option<libc::tcflag_t>,
+    }
+
+    /// `ptsname` answers in a buffer every caller shares, and the suite's
+    /// tests run on threads of one process.
+    static PTSNAME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// The pty's slave end, opened by the harness. **Held for the whole
+    /// run**: a pty's settings go back to the defaults when the last
+    /// descriptor on its slave closes, so modes read after the program
+    /// exited would otherwise be cooked whatever the program left behind.
+    fn open_slave(master: libc::c_int) -> std::fs::File {
+        use std::os::unix::fs::OpenOptionsExt;
+        let path = {
+            let _one_at_a_time = PTSNAME.lock().unwrap_or_else(|e| e.into_inner());
+            // SAFETY: `master` is the pty master forkpty opened; the answer
+            // points into a buffer read before the lock is let go.
+            let name = unsafe { libc::ptsname(master) };
+            assert!(!name.is_null(), "ptsname failed");
+            // SAFETY: a non-null answer from `ptsname` is a NUL-terminated
+            // path, valid until the next call, which the lock holds off.
+            let name = unsafe { std::ffi::CStr::from_ptr(name) };
+            std::path::PathBuf::from(std::ffi::OsStr::from_bytes(name.to_bytes()))
+        };
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open(&path)
+            .unwrap_or_else(|e| panic!("opening the pty's slave {}: {e}", path.display()))
+    }
+
+    /// The local modes of the terminal `fd` is.
+    fn local_modes(fd: &std::fs::File) -> libc::tcflag_t {
+        use std::os::fd::AsRawFd;
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: `tcgetattr` fills the struct it is handed, from a
+        // descriptor the harness holds open.
+        let got = unsafe { libc::tcgetattr(fd.as_raw_fd(), termios.as_mut_ptr()) };
+        assert_eq!(got, 0, "tcgetattr on the pty's slave failed");
+        // SAFETY: `tcgetattr` answered 0, so it filled the struct.
+        unsafe { termios.assume_init() }.c_lflag
+    }
+
+    fn run_pty(launch: &Launch<'_>) -> Ran {
+        let Launch {
+            cols,
+            rows,
+            program,
+            args,
+            env,
+            script,
+            signals,
+            deadline,
+            stdout_file,
+        } = *launch;
         // Everything the child needs is built *before* the fork: after it, only
         // async-signal-safe calls are legal, and `execve` is one — `setenv` is not.
         let prog = CString::new(program).unwrap();
@@ -749,29 +896,45 @@ pub mod pty {
         };
         assert!(pid >= 0, "forkpty failed");
         if pid == 0 {
-            // SAFETY: async-signal-safe only — the arrays above are already built
-            // and the redirect descriptor is already open.
-            unsafe {
-                if redirect >= 0 {
-                    libc::dup2(redirect, 1);
-                    libc::close(redirect);
-                }
-                libc::execve(prog.as_ptr(), argv_ptr.as_ptr(), envp_ptr.as_ptr());
-                libc::_exit(127);
+            // Async-signal-safe calls only from here: the arrays above are
+            // already built and the redirect descriptor is already open.
+            if redirect >= 0 {
+                // SAFETY: both descriptors are this process's own.
+                unsafe { libc::dup2(redirect, 1) };
+                // SAFETY: the file is on 1 now; its first descriptor goes.
+                unsafe { libc::close(redirect) };
             }
+            // SAFETY: NUL-terminated strings in arrays that end in a null
+            // pointer, all built before the fork.
+            unsafe { libc::execve(prog.as_ptr(), argv_ptr.as_ptr(), envp_ptr.as_ptr()) };
+            // SAFETY: the exec failed; leave without running the test
+            // binary's own exit path in the child.
+            unsafe { libc::_exit(127) };
         }
+
+        let slave = (!signals.is_empty()).then(|| open_slave(master));
 
         // Non-blocking, or the read below parks forever whenever the child is
         // thinking and the loop never reaches its own deadline check.
-        // SAFETY: adjusting flags on a descriptor we own.
-        unsafe {
-            let flags = libc::fcntl(master, libc::F_GETFL, 0);
-            libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        }
+        // SAFETY: reading the flags of a descriptor we own.
+        let flags = unsafe { libc::fcntl(master, libc::F_GETFL, 0) };
+        // SAFETY: setting them again on the same descriptor, one added.
+        unsafe { libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) };
 
         let start = Instant::now();
         let mut out: Vec<(Duration, Vec<u8>)> = Vec::new();
+        let read_some = |out: &mut Vec<(Duration, Vec<u8>)>| -> bool {
+            let mut buf = [0u8; 4096];
+            // SAFETY: reading into a buffer we own, from a descriptor we own.
+            let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
+            if n > 0 {
+                out.push((start.elapsed(), buf[..n as usize].to_vec()));
+            }
+            n > 0
+        };
         let mut sent = 0usize;
+        let mut signalled = 0usize;
+        let mut modes_before = None;
         let mut status: libc::c_int = 0;
         let code = loop {
             if sent < script.len() && start.elapsed() >= script[sent].0 {
@@ -780,35 +943,54 @@ pub mod pty {
                 unsafe { libc::write(master, bytes.as_ptr() as *const libc::c_void, bytes.len()) };
                 sent += 1;
             }
-            let mut buf = [0u8; 4096];
-            // SAFETY: reading into a buffer we own, from a descriptor we own.
-            let n = unsafe { libc::read(master, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-            if n > 0 {
-                out.push((start.elapsed(), buf[..n as usize].to_vec()));
+            if signalled < signals.len() && start.elapsed() >= signals[signalled].0 {
+                if signalled == 0 {
+                    modes_before = slave.as_ref().map(local_modes);
+                }
+                // SAFETY: signalling our own child, which is not reaped yet.
+                unsafe { libc::kill(pid, signals[signalled].1) };
+                signalled += 1;
             }
+            read_some(&mut out);
             // SAFETY: reaping our own child, non-blocking.
             let reaped = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
             if reaped == pid {
-                break libc::WEXITSTATUS(status);
+                break if libc::WIFSIGNALED(status) {
+                    128 + libc::WTERMSIG(status)
+                } else {
+                    libc::WEXITSTATUS(status)
+                };
             }
             if start.elapsed() > deadline {
-                // SAFETY: killing our own child, then reaping it.
-                unsafe {
-                    libc::kill(pid, libc::SIGKILL);
-                    libc::waitpid(pid, &mut status, 0);
-                }
+                // SAFETY: killing our own child.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                // SAFETY: reaping it.
+                unsafe { libc::waitpid(pid, &mut status, 0) };
                 break -1;
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        // SAFETY: closing the descriptors we opened.
-        unsafe {
-            libc::close(master);
-            if redirect >= 0 {
-                libc::close(redirect);
+        // What the program wrote between the last read and its exit: the
+        // escapes a signal handler writes on its way out are exactly that.
+        // Bounded, since a descendant still holding the terminal can write on.
+        for _ in 0..64 {
+            if !read_some(&mut out) {
+                break;
             }
-        };
-        (out, code)
+        }
+        let modes_after = slave.as_ref().map(local_modes);
+        // SAFETY: closing the master forkpty handed us.
+        unsafe { libc::close(master) };
+        if redirect >= 0 {
+            // SAFETY: closing the redirect we opened.
+            unsafe { libc::close(redirect) };
+        }
+        Ran {
+            chunks: out,
+            code,
+            modes_before,
+            modes_after,
+        }
     }
 }
 

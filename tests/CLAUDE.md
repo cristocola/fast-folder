@@ -123,8 +123,13 @@ What each suite guards — the intent, not the case list:
 `tests/common/mod.rs` is the process-driving harness: `Sandbox` (its own
 `FASTF_INSTALL_DIR`, `HOME` redirected; `run`/`ok`/`fails`/`spawn`), `with_bases`,
 `plant_project`, `unconfigured`, and `pty::run` (unix, `libc::forkpty`, 120×40),
-because neither the app nor a prompt draws without a TTY. `#![allow(dead_code)]`,
-since each binary uses a subset.
+because neither the app nor a prompt draws without a TTY. `pty::run_signalled`
+sends real signals on a schedule — in raw mode Ctrl-C is a key, not a signal —
+and reads the terminal's modes before the first and after the exit, through a
+slave end the harness holds open: a pty's settings go back to the defaults
+when its last slave descriptor closes, so a read after the exit would
+otherwise always say cooked. `#![allow(dead_code)]`, since each binary uses a
+subset.
 
 ## Ways a test passes over the thing it is for
 

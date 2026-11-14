@@ -11,8 +11,11 @@
 //! deliberate trade — a torn file is exactly what we are avoiding, and
 //! `assets::copy_file` writes through an operation-owned unique temp anyway.
 //!
-//! A second Ctrl-C restores the default behaviour, so a genuinely stuck process
-//! can always still be killed from the keyboard.
+//! A second Ctrl-C ends the process from the handler itself, so a genuinely
+//! stuck process can always still be killed from the keyboard. It exits the
+//! way a shell reports the signal that ended it — 128 plus its number: 130
+//! for SIGINT, 129 for SIGHUP, 143 for SIGTERM — after giving the terminal
+//! back, and through `_exit`, the one exit a signal handler may call.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -128,24 +131,26 @@ impl Drop for HandedOver {
 /// either can be the terminal. Without the guard the escape lands in whatever
 /// a script is reading, which is a worse bug than the one being fixed.
 ///
-/// On unix this is reached from inside the SIGINT handler, so it is written to
-/// be async-signal-safe: `isatty` and `write` are, while writing through
-/// `std::io::stdout()` takes std's stream lock and can panic re-entering a
-/// `RefCell` the interrupted thread already holds. Elsewhere the handler runs
-/// on its own thread — Windows spawns one for a console control event — so the
-/// ordinary path is safe there.
+/// On unix this is reached from inside the signal handler, so it is written
+/// to be async-signal-safe: `tcgetattr` and `write` are on POSIX's list
+/// (`isatty` is not), while writing through `std::io::stdout()` takes std's
+/// stream lock and can panic re-entering a `RefCell` the interrupted thread
+/// already holds. Elsewhere the handler runs on its own thread — Windows
+/// spawns one for a console control event — so the ordinary path is safe
+/// there.
 pub fn restore_terminal() {
     #[cfg(unix)]
     {
         const SHOW_CURSOR: &[u8] = b"\x1b[?25h";
         for fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
-            // SAFETY: both calls are async-signal-safe and touch only a
-            // descriptor the process already owns.
-            unsafe {
-                if libc::isatty(fd) == 1 {
-                    // Nothing to do about a failed write on the way out.
-                    let _ = libc::write(fd, SHOW_CURSOR.as_ptr().cast(), SHOW_CURSOR.len());
-                }
+            let mut settings = std::mem::MaybeUninit::<libc::termios>::uninit();
+            // SAFETY: `tcgetattr` only fills the struct it is handed, and
+            // fails on a descriptor that is no terminal — the question asked.
+            let is_a_terminal = unsafe { libc::tcgetattr(fd, settings.as_mut_ptr()) } == 0;
+            if is_a_terminal {
+                // SAFETY: one `write` of a constant to a descriptor the
+                // process owns. Nothing to do about a failure on the way out.
+                let _ = unsafe { libc::write(fd, SHOW_CURSOR.as_ptr().cast(), SHOW_CURSOR.len()) };
             }
         }
     }
@@ -183,15 +188,14 @@ fn show_console_cursor(handle: std::os::windows::io::RawHandle) -> bool {
         size: 25,
         visible: 1,
     };
-    // SAFETY: both calls take a handle the process owns and a struct of the
-    // size they document; a handle that is no console makes the first fail.
-    unsafe {
-        if GetConsoleCursorInfo(handle, &mut info) == 0 {
-            return false;
-        }
-        info.visible = 1;
-        SetConsoleCursorInfo(handle, &info) != 0
+    // SAFETY: a handle the process owns and a struct of the size the call
+    // documents; a handle that is no console makes it fail.
+    if unsafe { GetConsoleCursorInfo(handle, &mut info) } == 0 {
+        return false;
     }
+    info.visible = 1;
+    // SAFETY: the same handle, and the struct the call above filled.
+    unsafe { SetConsoleCursorInfo(handle, &info) != 0 }
 }
 
 /// Register what the second signal must undo before the process exits. The
@@ -209,9 +213,10 @@ pub fn clear_restore() {
     RESTORE.store(0, Ordering::SeqCst);
 }
 
-/// What runs on the second signal before `exit`: the registered surface
-/// restore, then the cursor. Separate from `flag` so it can be tested — the
-/// exit cannot be.
+/// What runs on the second signal before the process leaves: the registered
+/// surface restore, then the cursor. Separate from `flag` so it can be
+/// tested in process — the exit is tested through a terminal
+/// (`tests/tui_pty`).
 pub(crate) fn on_second_signal() {
     let restore = RESTORE.load(Ordering::SeqCst);
     if restore != 0 {
@@ -223,33 +228,65 @@ pub(crate) fn on_second_signal() {
     restore_terminal();
 }
 
-/// Record the interrupt. Async-signal-safe: a single relaxed atomic store, and
+/// The code a second Ctrl-C exits with: 128 + SIGINT, as a shell reports it.
+const CTRL_C_EXIT: i32 = 130;
+
+/// The code a second closed console exits with on Windows: a hang-up's, as
+/// SIGHUP's would be on unix.
+#[cfg(windows)]
+const HANG_UP_EXIT: i32 = 129;
+
+/// Record the interrupt. Async-signal-safe: a single relaxed atomic swap, and
 /// on the second signal the surface and cursor restore, which are written for
-/// this context.
-fn flag() {
+/// this context, then [`exit_now`] with `exit_code`.
+fn flag(exit_code: i32) {
     // On the second interrupt, stop being polite. If the first one did not get
     // us out promptly the user should not have to reach for Task Manager.
     if INTERRUPTED.swap(true, Ordering::Relaxed) {
         // `main`'s error path never runs from here, so the screen has to be
         // given back before leaving or the shell is left in raw mode, blind.
         on_second_signal();
-        std::process::exit(130); // 128 + SIGINT, the conventional shell code
+        exit_now(exit_code);
     }
+}
+
+/// Leave at once, from a signal handler.
+///
+/// **`_exit`, never `std::process::exit`, on unix**: the latter flushes
+/// stdout under a lock the interrupted thread may hold inside `println!`
+/// (a panic in the handler, an abort), and a second exit started while the
+/// first is running waits on itself for ever — `main` exits after the first
+/// interrupt, and a signal landing there would hang the process.
+/// `tests/layering.rs` keeps `process::exit` off this path. A line still
+/// buffered for stdout is lost, which a forced exit may lose.
+#[cfg(unix)]
+fn exit_now(code: i32) -> ! {
+    // SAFETY: `_exit` is async-signal-safe (signal-safety(7)), touches no
+    // lock and never returns.
+    unsafe { libc::_exit(code) }
+}
+
+/// Windows runs a console control handler on a thread of its own, where the
+/// ordinary exit is safe.
+#[cfg(not(unix))]
+fn exit_now(code: i32) -> ! {
+    std::process::exit(code)
 }
 
 /// Ctrl-C, from either platform's handler: fastf's, unless a program it
 /// started holds the terminal.
 fn ctrl_c() {
     if HANDED_OVER.load(Ordering::SeqCst) == 0 {
-        flag();
+        flag(CTRL_C_EXIT);
     }
 }
 
 /// The terminal going away — a hang-up, a terminate, a closed console —
-/// which stops fastf whoever holds the terminal.
-fn hang_up() {
+/// which stops fastf whoever holds the terminal. `exit_code` is what a
+/// second one exits with.
+fn hang_up(exit_code: i32) {
     HUNG_UP.store(true, Ordering::Relaxed);
-    flag();
+    flag(exit_code);
 }
 
 /// Install the handler. Idempotent, and never fatal: if the OS refuses, fastf
@@ -285,41 +322,59 @@ fn install_platform() {
                 1 // handled — do not run the default terminator
             }
             CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT => {
-                hang_up();
+                hang_up(HANG_UP_EXIT);
                 1
             }
             _ => 0,
         }
     }
 
+    // SAFETY: registers a handler that lives as long as the process and
+    // only touches atomics, and the restore hooks written for a handler.
     unsafe {
         SetConsoleCtrlHandler(Some(handler), 1);
     }
 }
 
+/// The signals fastf unwinds from: Ctrl-C, and the terminal going away —
+/// a closed window or a dropped ssh session (SIGHUP) and a terminate — so a
+/// create's partial folder is rolled back rather than left behind.
+#[cfg(unix)]
+const SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+/// Installed with `sigaction`, whose meaning is the same on every unix:
+/// `SA_RESTART`, so a read the signal lands in carries on rather than
+/// failing with `EINTR`, and all three signals blocked while the handler
+/// runs, so a second one cannot start its restore inside the first's.
 #[cfg(unix)]
 fn install_platform() {
-    extern "C" fn handler(signum: i32) {
+    extern "C" fn handler(signum: libc::c_int) {
         if signum == libc::SIGINT {
             ctrl_c();
         } else {
-            hang_up();
+            hang_up(128 + signum);
         }
     }
     // Go through a plain function pointer before the integer cast. Casting the
     // function *item* straight to an integer is accepted by the compiler but
     // relies on its size matching, which clippy rightly refuses.
-    let handler_ptr = handler as extern "C" fn(i32) as libc::sighandler_t;
-    // SAFETY: `handler` only loads and stores atomics (and `exit`s on the
-    // second signal), all of which are safe from a signal context.
-    //
-    // SIGHUP too: a closed terminal window or a dropped ssh session must
-    // unwind a create the same cooperative way, so the partial folder is
-    // rolled back rather than left behind.
-    unsafe {
-        libc::signal(libc::SIGINT, handler_ptr);
-        libc::signal(libc::SIGTERM, handler_ptr);
-        libc::signal(libc::SIGHUP, handler_ptr);
+    let handler_ptr = handler as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    // SAFETY: `sigaction` is a plain C struct of integers, pointers and a
+    // signal set, for which all zeroes is a valid value.
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    action.sa_sigaction = handler_ptr;
+    action.sa_flags = libc::SA_RESTART;
+    // SAFETY: initialises the set the struct owns.
+    unsafe { libc::sigemptyset(&mut action.sa_mask) };
+    for signum in SIGNALS {
+        // SAFETY: adds a valid signal number to the set initialised above.
+        unsafe { libc::sigaddset(&mut action.sa_mask, signum) };
+    }
+    for signum in SIGNALS {
+        // SAFETY: `handler` only swaps atomics, runs the restore hooks
+        // written for a handler and `_exit`s, all async-signal-safe; the
+        // previous action is not asked for.
+        unsafe { libc::sigaction(signum, &action, std::ptr::null_mut()) };
     }
 }
 
@@ -378,7 +433,7 @@ mod tests {
             let _held = hand_over();
             ctrl_c();
             assert!(!is_set(), "the Ctrl-C was the program's");
-            hang_up();
+            hang_up(128 + 1);
             assert!(is_set() && hung_up(), "a closed window still stops fastf");
         }
         reset();

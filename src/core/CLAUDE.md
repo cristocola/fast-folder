@@ -592,8 +592,10 @@ plain error. `Guard::force` turns advisory uses into notes plus one
 entry points (`library::move_project`, `move_project_configured_with_outcome`,
 `delete_project_configured`, `rename_project_unlocked`) take it, and no
 surface reaches them — production reaches the engine through jobs and
-`operations::rename`, which ask. Reconcile files an `InUse` paused move under
-`waiting` and touches nothing; `attention` lists it as `Waiting`. **Both ask
+`operations::rename`, which ask. Reconcile files a paused move whose folder
+something uses under `ReconcileReport.in_use` — never `waiting`, whose advice
+is to mount a base — and touches nothing; `attention` lists it as `Waiting`,
+named `attention::A_IN_USE` so the surfaces count it apart. **Both ask
 `ask_before_resuming` about `Folder::of`/`Folder::configured`**, the job's
 question in both spellings, so what `!` calls waiting is exactly what a resume
 refuses — on Windows, what holds the folder — and the app never starts a

@@ -878,7 +878,8 @@ fastf reconcile --resolve <path> keep-moved   # settle one item that needs you
 
 `--list` sorts what is unfinished by who finishes it: **fastf** (a reconcile
 does — the app starts one by itself), **waiting** (for a base that is not
-mounted or does not answer), or **needs you**, each with its reason and the
+mounted or does not answer, or a paused move for what uses its folder to
+stop), or **needs you**, each with its reason and the
 exact commands that settle it. Only a few things need you: an old copy holding
 something that differs from the moved copy (`keep-moved` or `take-old`), an
 old copy whose project fastf cannot find (`put-back` or `discard`), a move

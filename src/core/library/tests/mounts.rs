@@ -519,12 +519,12 @@ fn reconcile_keeps_a_paused_moves_copy_while_its_folder_is_in_use() {
     let item = crate::core::attention::attention(&cfg)
         .items
         .into_iter()
-        .find(|item| item.what == "a move");
+        .find(|item| item.what == crate::core::attention::A_IN_USE);
     let _ = sitter.kill();
     let _ = sitter.wait();
     assert_eq!(waiting.resumed, 0, "{waiting:?}");
     assert!(
-        waiting.waiting.iter().any(|said| said.contains("sleep")),
+        waiting.in_use.iter().any(|said| said.contains("sleep")),
         "{waiting:?}"
     );
     assert!(
@@ -611,7 +611,7 @@ fn a_paused_move_waits_for_a_unit_naming_its_folder_through_the_configured_base(
     let waiting = crate::core::provisioning::reconcile_unlocked(&cfg);
     assert_eq!(waiting.resumed, 0, "{waiting:?}");
     assert!(
-        waiting.waiting.iter().any(|said| said.contains(&unit)),
+        waiting.in_use.iter().any(|said| said.contains(&unit)),
         "{waiting:?}"
     );
     assert!(real_base.join("proj_a/data.bin").is_file(), "not moved");
@@ -698,7 +698,9 @@ fn a_paused_move_whose_folder_is_held_on_windows_waits() {
         "{item:?}"
     );
     assert!(item.reason.contains("working in"), "{}", item.reason);
+    assert_eq!(item.what, crate::core::attention::A_IN_USE);
     assert_eq!(waiting.resumed, 0, "{waiting:?}");
+    assert_eq!(waiting.in_use.len(), 1, "{waiting:?}");
     assert!(project.path.join("data.bin").is_file(), "not moved");
 
     let resumed = crate::core::provisioning::reconcile_unlocked(&cfg);

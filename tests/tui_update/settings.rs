@@ -326,6 +326,54 @@ fn bang_lists_the_unfinished_work_and_settles_what_needs_you() {
     ));
 }
 
+/// **A paused move held back by what uses its folder is counted apart** on
+/// the "Finish now" row: it waits for a program to stop, not for a base to
+/// answer, and the row says which.
+#[test]
+fn finish_now_counts_a_folder_in_use_apart_from_a_base() {
+    use fastf::core::attention::{A_IN_USE, Attention, Item, State};
+    use fastf::tui::app::attention::ATTENTION_FINISH;
+    let mut app = fixture(6, 120, 40);
+    let mut summary = sample_summary(6);
+    summary.attention = Attention {
+        items: vec![Item {
+            state: State::Waiting,
+            what: A_IN_USE.to_string(),
+            path: PathBuf::from("/srv/projects/.fastf-transactions/1-1-0"),
+            project: Some("ID0001 proj".to_string()),
+            reason: "sleep (pid 7) is working in the project folder, so ID0001 was not moved; \
+                     stop it, then move it again; fastf goes on with the paused move once \
+                     nothing uses it"
+                .to_string(),
+            actions: Vec::new(),
+        }],
+    };
+    update(&mut app, Msg::Summary(Box::new(summary)));
+    press(&mut app, Key::ch('!'));
+    let Some(Modal::Pick(page)) = app.modals.top() else {
+        panic!("expected the page, got {:?}", app.modals.top());
+    };
+    let finish = page
+        .items
+        .iter()
+        .find(|item| item.value == ATTENTION_FINISH)
+        .expect("something for fastf to finish");
+    assert!(
+        finish
+            .detail
+            .contains("0 waiting for a base to answer, 1 waiting for what uses its folder"),
+        "{}",
+        finish.detail
+    );
+    assert!(
+        page.items
+            .iter()
+            .any(|item| item.label == "waiting · a paused move of ID0001 proj"),
+        "{:?}",
+        page.items
+    );
+}
+
 /// **The app finishes its own leftovers**, quietly: a summary that shows
 /// something fastf can finish, with nothing running, starts a reconcile of
 /// the app's own — once, not again within the minute, and never beside a

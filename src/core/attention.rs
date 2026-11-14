@@ -139,9 +139,19 @@ impl Attention {
         self.count(State::Waiting)
     }
 
-    /// What fastf finishes once a base answers — the work, without the
-    /// silent bases themselves, which the header names already, or an old
-    /// copy waiting out the settle, which only a clock finishes.
+    /// What waits for something using its folder to stop ([`A_IN_USE`]):
+    /// part of [`Self::waiting_work`], said apart, since no base is missing.
+    pub fn in_use(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.state == State::Waiting && item.what == A_IN_USE)
+            .count()
+    }
+
+    /// What fastf finishes once a base answers, or once nothing uses a
+    /// paused move's folder — the work, without the silent bases themselves,
+    /// which the header names already, or an old copy waiting out the
+    /// settle, which only a clock finishes.
     pub fn waiting_work(&self) -> usize {
         self.items
             .iter()
@@ -157,6 +167,10 @@ pub const A_BASE: &str = "a base";
 
 /// What an old copy waiting out the settle is called on the list.
 pub const A_SETTLE: &str = "a settling old copy";
+
+/// What a paused move whose folder something uses is called on the list: it
+/// waits for that to stop, not for a base.
+pub const A_IN_USE: &str = "a paused move";
 
 /// What a reconcile could not settle, kept until one can: the old copy (or
 /// folder, or record) it is about, what kind of decision it waits for, and
@@ -531,7 +545,7 @@ fn move_item<'v>(
     {
         return Item {
             state: State::Waiting,
-            what: "a move".to_string(),
+            what: A_IN_USE.to_string(),
             path,
             project,
             reason: format!("{why}; fastf goes on with the paused move once nothing uses it"),

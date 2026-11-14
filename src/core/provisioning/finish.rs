@@ -133,7 +133,7 @@ pub(super) fn reconcile_paused(
     let in_use = match crate::core::move_engine::ask_before_resuming(&folder, &guard, None) {
         Ok(in_use) => in_use,
         Err(error) => {
-            report.waiting.push(format!(
+            report.in_use.push(format!(
                 "{subject}: {error}; fastf goes on with the paused move once nothing uses it"
             ));
             return;

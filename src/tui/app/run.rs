@@ -141,10 +141,9 @@ impl App {
             CommandId::PickToggle => self.toggle_multi_pick(),
             CommandId::PickNext => self.step_pick(1),
             CommandId::PickPrevious => self.step_pick(-1),
-            CommandId::PickCancel => {
-                self.modals.pop();
-                Vec::new()
-            }
+            // Through `close_top`, which says what a cancelled in-use
+            // question left undone.
+            CommandId::PickCancel => self.close_top(),
             CommandId::PaletteRun => self.run_palette_entry(),
             CommandId::PaletteNext => self.step_palette(1),
             CommandId::PalettePrevious => self.step_palette(-1),
@@ -873,6 +872,14 @@ impl App {
                     self.modals.pop();
                     self.info("Closed — nothing was written.");
                 }
+            }
+            Some(Modal::Pick(PickState {
+                then: Then::InUse(choice),
+                ..
+            })) => {
+                let after = choice.after.clone();
+                self.modals.pop();
+                return self.nothing_went(&after);
             }
             Some(_) => {
                 self.modals.pop();

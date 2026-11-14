@@ -17,6 +17,7 @@ pub mod background;
 pub mod bases;
 pub mod data;
 pub mod desk;
+pub mod in_use;
 pub mod jobs;
 pub mod library;
 pub mod modal;
@@ -316,6 +317,12 @@ pub struct App {
     /// Jobs — moves, copies, deletes, reconciles in processes of their own —
     /// and which one the progress dialog follows.
     pub background: background::Background,
+    /// What a move, a delete or a rename is waiting to hear about the
+    /// folders it takes away (`in_use`), while it waits.
+    pub in_use: Option<in_use::Checking>,
+    /// The number of the last `Effect::CheckInUse`; an answer carrying
+    /// another is an older question's.
+    pub in_use_request: u64,
     /// A batch job over the marked projects, while one is running.
     pub job: Option<jobs::Job>,
     pub status: Status,
@@ -446,6 +453,8 @@ impl App {
             busy: None,
             busy_id: None,
             background: background::Background::default(),
+            in_use: None,
+            in_use_request: 0,
             job: None,
             status: Status::default(),
             log: std::collections::VecDeque::new(),

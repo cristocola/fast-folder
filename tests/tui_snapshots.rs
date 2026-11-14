@@ -2306,6 +2306,54 @@ fn attention_page_80x24_and_40x12() {
     }
 }
 
+/// A move asked about a folder something uses: the wide picker, what uses
+/// it in a sentence, anyway or cancel.
+#[test]
+fn in_use_picker_100x30() {
+    let mut app = fixture(12, 100, 30);
+    app.summary = Some(fastf::tui::testing::sample_summary_moveable(12));
+    let _ = update(&mut app, Msg::Key(Key::ch('m')));
+    let effects = update(&mut app, Msg::Key(Key::plain(KeyCode::Enter)));
+    let (request, folders) = effects
+        .iter()
+        .find_map(|effect| match effect {
+            fastf::tui::effect::Effect::CheckInUse { request, folders } => {
+                Some((*request, folders.clone()))
+            }
+            _ => None,
+        })
+        .expect("what uses the folder is asked");
+    let found = folders
+        .into_iter()
+        .map(|(path, label)| {
+            let holders = fastf::core::holders::Holders {
+                root: path.clone(),
+                label,
+                uses: vec![fastf::core::holders::Use {
+                    by: fastf::core::holders::By::Process {
+                        pid: 4242,
+                        program: "node".to_string(),
+                    },
+                    how: fastf::core::holders::How::WorkingIn {
+                        at: std::path::PathBuf::from("src"),
+                        shell: false,
+                    },
+                }],
+            };
+            (path, holders)
+        })
+        .collect();
+    let _ = update(&mut app, Msg::InUse { request, found });
+    let frame = render_to_string(&app, 100, 30);
+    assert!(frame.contains("is in use"), "{frame}");
+    assert!(frame.contains("Move anyway"), "{frame}");
+    assert!(
+        frame.contains("node (pid 4242) is working in src"),
+        "{frame}"
+    );
+    snap("in_use_picker_100x30", frame);
+}
+
 /// Enter on an item that needs you: what settles it.
 #[test]
 fn attention_actions_80x24() {

@@ -312,12 +312,10 @@ impl App {
         let Some(project) = self.project_at(&path) else {
             return self.gone_from_the_library();
         };
-        self.run_action(
-            "renaming…",
-            Action::Rename {
-                project: Box::new(project),
-                name: text,
-            },
+        self.ask_what_uses(
+            vec![project],
+            false,
+            crate::tui::app::in_use::After::Rename(text),
         )
     }
 
@@ -442,6 +440,7 @@ impl App {
             crate::core::jobs::JobKind::Copy,
             projects,
             Some(destination),
+            false,
         )
     }
 
@@ -498,7 +497,11 @@ impl App {
         if projects.is_empty() {
             return self.gone_from_the_library();
         }
-        self.start_background(crate::core::jobs::JobKind::Delete, projects, None)
+        self.ask_what_uses(
+            projects,
+            targets.batch,
+            crate::tui::app::in_use::After::Delete,
+        )
     }
 
     /// One tag, on the projects its question was about.

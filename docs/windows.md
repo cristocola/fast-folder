@@ -160,7 +160,11 @@ Three things are particular to Windows:
   Word — stops Windows renaming the folder around it. The move then publishes
   the copy, reports that the original is still there, whole, with nothing
   removed, and says a program has a file in it open. Close the program and run
-  `fastf reconcile`: it finishes the move without copying again.
+  `fastf reconcile`: it finishes the move without copying again. Since it is
+  Windows that refuses, `--force` changes nothing here; on Linux, where a
+  rename would go through and leave the program behind, fastf asks first and
+  `--force` goes past it
+  ([projects.md](projects.md#a-project-something-is-using)).
 - **Junctions** travel as junctions, pointing at the same folder, and need
   nothing special. **Symbolic links** travel as symbolic links of the same kind
   (to a file, or to a folder), but Windows lets an account make one only with

@@ -195,11 +195,15 @@ struct Job<'a> {
 
 impl Job<'_> {
     fn run(&self, request: &JobRequest) -> JobStatus {
+        // Whoever started the job, and everything above them, never counts
+        // as using a folder; the worker's own parents are the service
+        // manager, so the starter wrote its chain into the request.
+        let guard = crate::core::holders::Guard::asked_by(request.force, request.asking.clone());
         match request.kind {
-            JobKind::Move => self.moves(&request.items),
+            JobKind::Move => self.moves(&request.items, &guard),
             JobKind::Copy => self.copies(&request.items),
-            JobKind::Delete => self.deletes(&request.items),
-            JobKind::Reconcile => self.reconcile(),
+            JobKind::Delete => self.deletes(&request.items, &guard),
+            JobKind::Reconcile => self.reconcile(&guard.asking),
         }
     }
 
@@ -274,7 +278,7 @@ impl Job<'_> {
         self.cancel.load(Ordering::Relaxed)
     }
 
-    fn moves(&self, items: &[JobItem]) -> JobStatus {
+    fn moves(&self, items: &[JobItem], guard: &crate::core::holders::Guard) -> JobStatus {
         let mut pending: Vec<(
             usize,
             Project,
@@ -295,6 +299,7 @@ impl Job<'_> {
                 crate::core::move_engine::move_project_in_parts(
                     &project,
                     Path::new(&item.target),
+                    guard,
                     self.progress,
                     self.cancel,
                 )
@@ -501,7 +506,7 @@ impl Job<'_> {
         status_of(failed, stopped)
     }
 
-    fn deletes(&self, items: &[JobItem]) -> JobStatus {
+    fn deletes(&self, items: &[JobItem], guard: &crate::core::holders::Guard) -> JobStatus {
         let mut pending = Vec::new();
         let (mut deleted, mut failed, mut stopped) = (0, 0, false);
         for (index, item) in items.iter().enumerate() {
@@ -511,19 +516,20 @@ impl Job<'_> {
             }
             self.begin_item(index, items.len(), &item.name);
             match project_for(item)
-                .and_then(|project| crate::core::library::delete_project_in_parts(&project))
+                .and_then(|project| crate::core::library::delete_project_in_parts(&project, guard))
             {
-                Ok(housekeeping) => {
+                Ok((housekeeping, notes)) => {
                     deleted += 1;
                     self.ticker().close_step();
                     self.own(housekeeping.operation());
                     let report = ItemReport {
                         headline: format!("Deleted {} ({})", item.id, item.path),
                         lines: vec!["removing its folder".to_string()],
+                        notes: notes.clone(),
                         ..ItemReport::default()
                     };
                     self.report(index, report);
-                    pending.push((index, item, housekeeping));
+                    pending.push((index, item, housekeeping, notes));
                 }
                 Err(error) => {
                     failed += 1;
@@ -535,7 +541,7 @@ impl Job<'_> {
                 }
             }
         }
-        for (index, item, housekeeping) in pending {
+        for (index, item, housekeeping, notes) in pending {
             self.begin_item(index, items.len(), &item.name);
             let ticker = self.ticker();
             ticker.subject(format!("delete {} {}", item.id, item.name));
@@ -561,6 +567,7 @@ impl Job<'_> {
                 index,
                 ItemReport {
                     headline: format!("Deleted {} ({})", item.id, item.path),
+                    notes,
                     warning,
                     done: true,
                     ..ItemReport::default()
@@ -577,8 +584,8 @@ impl Job<'_> {
         status_of(failed, stopped)
     }
 
-    fn reconcile(&self) -> JobStatus {
-        let result = crate::core::operations::reconcile_with(self.progress, self.cancel);
+    fn reconcile(&self, asking: &[crate::core::holders::Asking]) -> JobStatus {
+        let result = crate::core::operations::reconcile_with(asking, self.progress, self.cancel);
         match result {
             Ok(report) => {
                 let summary = report.summary();
@@ -654,6 +661,7 @@ fn failed_report(item: &JobItem, verb: &str, error: &anyhow::Error, cancelled: b
             format!("The {verb} of {} {} failed", item.id, item.name)
         },
         error: Some(crate::util::fs_retry::explained(error)),
+        in_use: crate::core::holders::is_in_use(error),
         done: true,
         ..ItemReport::default()
     }

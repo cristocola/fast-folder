@@ -69,6 +69,7 @@ pub(crate) fn reconcile_one_record(
         ticker: Ticker::none(),
         live: crate::core::jobs::live_workers(),
         deferred: None,
+        asking: crate::core::holders::asking_chain(),
     };
     reconcile_record(cfg, target_base, operation_dir, &mut report, &mut pass);
     report

@@ -697,9 +697,29 @@ fastf move ID0047                    # pick the target base interactively
 fastf move ID0047 archive            # target by base label
 fastf move my-crate /mnt/projects/archive
 fastf move ID0047 archive --yes      # skip the confirmation (for scripts)
+fastf move ID0047 archive --yes --force   # even while something uses it
 ```
 
-Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. Changes made to the project while it moves are kept. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+Without `--yes`, `fastf move` confirms first and needs a terminal to do it; with no terminal it refuses rather than moving. Targets must be configured bases so the moved project stays discoverable. Same-filesystem moves are an instant rename. Only the operating system's cross-device error enables the copy fallback; permission, sharing, missing-path, and other rename failures are returned unchanged. A copy move copies every ordinary file—including legitimate `.tmp` and `.part` names—and every link into the new folder, checks relative paths, byte lengths and link targets, writes `PROJECT_INFO.md` last so the folder becomes a project in one step, and only then sets the original aside in one step and removes what is left of it, entry by entry. What changes in the project while it copies is copied too. [projects.md](projects.md#moving-projects-between-bases) has the whole of it.
+
+**A project something is using is not moved until you say so** — a program
+working in it or holding a file open, a container or sandbox mounting part of
+it, another filesystem mounted inside it, a systemd unit that names it.
+`fastf move` asks before its confirmation, on Linux: on a terminal it lists
+what uses the folder and asks `Move anyway?` (no by default) instead of `Move
+this project?`; with `--yes` alone it refuses, exits 1 and starts nothing:
+
+```
+error: node (pid 4242) is working in src, so ID0047 was not moved; stop it, then move it again
+hint: --force moves it anyway, and the result names what used it: `fastf move ID0047 archive --yes --force`
+```
+
+`--force` moves it anyway; what it went past is a `note:` in the result and a
+line in `fastf.log`. A shell whose prompt is in the folder is only a note, and
+the shell or agent that ran the command never counts.
+[A project something is using](projects.md#a-project-something-is-using) has
+what counts and what does not. On Windows, Windows itself refuses to move a
+folder with anything in it open, and `--force` changes nothing there.
 
 **A move always says which kind it was**: `renamed on the same filesystem,
 nothing copied`, or `copied 412 files and 3 links, 199.5 GB, verified`. A same-filesystem
@@ -818,6 +838,7 @@ fastf rename lullaby                 # the current name, offered to edit
 fastf unregister ID0047              # remove PROJECT_INFO.md; the files stay
 fastf delete ID0047                  # names the folder, asks you to type `delete`
 fastf delete ID0047 --yes            # for scripts
+fastf delete ID0047 --yes --force    # even while something uses it
 ```
 
 The three verbs the guided app's action menu has (`r`, `u`, `D`), for the
@@ -828,6 +849,13 @@ the folder and takes the word `delete` and nothing else. `--yes` answers for a
 script; without it and without a terminal to ask on, every one of them refuses
 rather than guessing. Unregister leaves the folder untouched, so `fastf
 register` brings the project straight back; delete is permanent.
+
+Rename and delete ask what uses the folder first, as `move` does: on a
+terminal, the list and `Rename anyway?` or `Delete anyway?` — a delete then
+still asks for the word — and under `--yes` a refusal naming
+`--yes --force`, which goes ahead and says what it went past. `fastf register
+--rename` asks too, leaving out the shell that typed it, and a refusal there is
+the rename's own: the registration stands.
 
 Delete takes the project out of the library in one rename, to a hidden
 `.fastf-deleted-…` folder beside it, and then removes that — so a removal that
@@ -919,10 +947,12 @@ while it restarts is asked again, and a mount that drops is waited for, up to
 two minutes at a time. A move whose mount is still gone after that, before its
 copy is published, is `paused`: what it copied is kept, and it goes on from
 there when you move the project again, or with `fastf reconcile` once the mount
-is back. Only what fastf cannot fix stops a job — no permission, a program
-writing a file in the project, a full or read-only drive, a name the drive will
-not take — and then the first thing it says is what kind of problem it is and
-what to do.
+is back. Only what fastf cannot fix stops a job — no permission, something
+using the project (unless the job was started with `--force`), a full or
+read-only drive, a name the drive will not take — and then the first thing it
+says is what kind of problem it is and what to do. A job asks what uses each
+folder again under the library's lock, leaving out whoever started it: its
+request records that process and every one above it.
 
 While a move copies it holds the library's lock, so a change made elsewhere
 meanwhile — a tag, a note — waits, and says which job it waits for. Removing

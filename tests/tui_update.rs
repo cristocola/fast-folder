@@ -30,6 +30,8 @@ mod flows;
 mod glance;
 #[path = "tui_update/guide.rs"]
 mod guide;
+#[path = "tui_update/in_use.rs"]
+mod in_use;
 #[path = "tui_update/key_lines.rs"]
 mod key_lines;
 #[path = "tui_update/library.rs"]

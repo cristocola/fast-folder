@@ -85,8 +85,9 @@ fn a_delete_never_reaches_a_project_its_question_did_not_name() {
     type_text(&mut app, "delete");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
     assert!(
-        job_started(&effects).is_none(),
-        "nothing the question named is left, so nothing is deleted: {effects:?}"
+        job_started(&effects).is_none() && in_use_asked(&effects).is_none(),
+        "nothing the question named is left, so nothing is deleted, nor asked about: \
+         {effects:?}"
     );
     assert!(app.modals.is_empty() || !matches!(app.modals.top(), Some(Modal::TextPrompt(_))));
 }
@@ -166,9 +167,10 @@ fn no_verb_reaches_a_project_its_question_was_not_about() {
     for (verb, open, answer) in verbs {
         let (app, effects) = answered_once_its_projects_left(open, answer);
         assert!(
-            !effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::Run(..) | Effect::StartJob { .. })),
+            !effects.iter().any(|effect| matches!(
+                effect,
+                Effect::Run(..) | Effect::StartJob { .. } | Effect::CheckInUse { .. }
+            )),
             "{verb}: nothing it asked about is left, so nothing runs: {effects:?}"
         );
         assert!(app.job.is_none(), "{verb}: and no batch is begun");
@@ -208,6 +210,7 @@ fn a_delete_takes_what_is_left_of_what_its_question_named() {
 
     type_text(&mut app, "delete");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = nothing_uses_them(&mut app, &effects);
     let (kind, items) = job_started(&effects).expect("one job");
     assert_eq!(kind, JobKind::Delete);
     let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
@@ -239,6 +242,7 @@ fn delete_over_marks_confirms_once_then_starts_one_job() {
     );
     type_text(&mut app, "DELETE");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = nothing_uses_them(&mut app, &effects);
     let (kind, items) = job_started(&effects).expect("one job");
     assert_eq!(kind, JobKind::Delete);
     let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
@@ -386,6 +390,7 @@ fn move_over_marks_starts_one_move_job() {
     press(&mut app, Key::ch('m'));
     assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = nothing_uses_them(&mut app, &effects);
     let (kind, items) = job_started(&effects).expect("one job");
     assert_eq!(kind, fastf::core::jobs::JobKind::Move);
     assert_eq!(items.len(), 2);

@@ -49,6 +49,10 @@
 //! stopped answering (`paths:stall-base`, debug builds): its projects stay
 //! away and the header names it.
 //!
+//! `FASTF_SHOT_BUSY=1` keeps a `sleep` working in every project of the
+//! showcase while the app runs, so a move, a delete or a rename meets the
+//! in-use picker: `m enter wait:1500`.
+//!
 //! `FASTF_SHOT_REAL=1` runs against **your own** library instead — read-only
 //! keys only, please. It reads your configuration from a private copy of the
 //! data directory, because the app remembers the cursor's row, the sort and
@@ -157,6 +161,26 @@ fn screenshot() {
     if let Some(marker) = &stalled {
         fs::write(marker, "").unwrap();
     }
+    let busy: Vec<std::process::Child> =
+        if !real && std::env::var("FASTF_SHOT_BUSY").is_ok_and(|v| v == "1") {
+            ["projects", "archive"]
+                .iter()
+                .flat_map(|base| fs::read_dir(sb.tmp.path().join(base)).into_iter().flatten())
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.join("PROJECT_INFO.md").is_file())
+                .map(|project| {
+                    std::process::Command::new("sleep")
+                        .arg("120")
+                        .current_dir(project)
+                        .stdin(std::process::Stdio::null())
+                        .spawn()
+                        .expect("starting a sleep in the project")
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
     // A real run keeps the real `HOME`, so a `~` in the configuration still
     // names your folders; only the data directory is the copy.
     let env: Vec<(&str, &std::path::Path)> = if real {
@@ -203,6 +227,10 @@ fn screenshot() {
         pty::run_chunked_sized(cols, rows, common::FASTF, &argv, &env, &script, DEADLINE);
     if let Some(marker) = &stalled {
         let _ = fs::remove_file(marker);
+    }
+    for mut sleeper in busy {
+        let _ = sleeper.kill();
+        let _ = sleeper.wait();
     }
     let screen = screen_at_sized(&chunks, taken, cols, rows);
     if let Some(path) = svg_path {

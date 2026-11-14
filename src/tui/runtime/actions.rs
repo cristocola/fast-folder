@@ -65,7 +65,11 @@ pub(super) fn run_action(action: Action) -> Result<ActionOutcome> {
             place,
         } => add_todos(project, texts, place),
         Action::ReautoTags(project) => rederive_auto_tags(project),
-        Action::Rename { project, name } => rename_project(project, name),
+        Action::Rename {
+            project,
+            name,
+            force,
+        } => rename_project(project, name, force),
         Action::Create(request) => create_project(&request),
         Action::Apply(request) => apply_template(&request),
         Action::Register(request) if request.recursive => register_recursively(request),
@@ -327,16 +331,29 @@ fn rederive_auto_tags(project: Box<Project>) -> Result<ActionOutcome> {
     ))
 }
 
-fn rename_project(project: Box<Project>, name: String) -> Result<ActionOutcome> {
-    let renamed = crate::core::operations::rename(&project, &name)?;
+fn rename_project(project: Box<Project>, name: String, force: bool) -> Result<ActionOutcome> {
+    // Asked as the app, so the shell it was started from is not what keeps
+    // the folder from being renamed.
+    let crate::core::library::Renamed {
+        project: renamed,
+        notes,
+    } = crate::core::operations::rename(
+        &project,
+        &name,
+        &crate::core::holders::Guard::here(force),
+    )?;
     let stale = vec![project.path.clone(), renamed.path.clone()];
+    let said = std::iter::once(format!("Renamed to {}", renamed.name))
+        .chain(notes.iter().map(|note| format!("note: {note}")))
+        .collect::<Vec<_>>()
+        .join("; ");
     Ok(ActionOutcome::new(
         ListChange::Patched {
             project: Box::new(renamed.clone()),
             was: project.path.clone(),
             stale,
         },
-        format!("Renamed to {}", renamed.name),
+        said,
     )
     .session(format!("renamed {} → {}", renamed.id, renamed.name)))
 }

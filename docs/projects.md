@@ -241,6 +241,8 @@ fastf move ID0047 archive
 
 The app's `m` does the same, over every marked project when there are marks. The rules:
 
+- A project something is using is not moved until you say so — see
+  [A project something is using](#a-project-something-is-using).
 - Targets must be configured bases, so a moved project always stays discoverable.
 - On the same filesystem, a move is an instant atomic rename. fastf says so —
   `renamed on the same filesystem, nothing copied` — because an instant finish
@@ -268,37 +270,35 @@ The app's `m` does the same, over every marked project when there are marks. The
   (what `node_modules/.bin` often holds) moves like any other. When a link's
   meaning may change at the new place — a relative link that climbs out of the
   project, an absolute one into the original folder — the move says which.
-- **You can keep working.** A change made to the original while it moves —
-  a dev server writing its log, a temp folder a build makes and removes, a
-  file you save — is copied too: fastf looks at the original again after the
-  copy and brings across what changed, up to three times, and what changes
-  after that is carried into the moved copy when the original is removed. A
-  program still running in the old folder keeps writing where it was started,
-  though: restart it from the new place.
+- **What changes while it copies is copied too.** A move goes ahead only when
+  nothing uses the project, or when you forced it past what did; a change
+  made to the original while it copies all the same — a file you save, a temp
+  folder a build makes and removes, the log of a dev server a forced move went
+  past — is brought across: fastf looks at the original again after the copy
+  and copies what changed, up to three times, and what changes after that is
+  carried into the moved copy when the original is removed. A program still
+  running in the old folder keeps writing where it was started, though:
+  restart it from the new place.
 - **An empty folder at the target name gives way.** A cloud mount can leave
   one behind for a while after a folder is removed, and it holds nothing to
   lose; anything else there refuses the move, and says when it is a folder
   fastf is still removing.
 
 **Only what fastf cannot fix stops a move**, and it says what and what to do:
-no permission where it has to write or remove, **a program writing a file in
-the project** (Linux names it — `python3 (pid 4242) has session.txt open for
-writing` — since after the move its writes would land in the old copy), **on
-Windows, a program holding anything in the project at all** — Windows will
-not move a folder while anything in it is open, a file whatever its sharing or
-a folder a console works in, so the original could never be set aside:
-`powershell (pid 7152) has src\main.txt open`, or `a program is working in
-src` for a console — a full drive, a read-only one, a name the drive will not
-take. Everything else is
+no permission where it has to write or remove, **something using the project**
+(below — `--force` goes past it), **on Windows, a program holding anything in
+the project at all** — Windows will not move a folder while anything in it is
+open, a file whatever its sharing or a folder a console works in, so the
+original could never be set aside: `powershell (pid 7152) has src\main.txt
+open`, or `a program is working in src` for a console — a full drive, a
+read-only one, a name the drive will not take. Everything else is
 waited out: an input/output error or a lock a moment long is asked again with
 a growing pause, a mount that drops is waited for until the same mount is back
 — an unmounted mount point is an empty folder, and nothing under it is taken
 for gone — and a move whose mount stays gone for two minutes before its
 publish **pauses**, keeping what it copied; moving the project again, or `fastf
 reconcile` once the mount is back, takes the copy over and copies only what is
-missing. A program merely running in the folder — a dev server, a shell — does
-not stop the move; the result names it, and says to restart it from the new
-place.
+missing.
 
 **Before a byte is copied**, a cross-filesystem move checks what would
 otherwise stop it at the end, and names every problem it finds at once:
@@ -407,6 +407,92 @@ link that is absolute or climbs with `..` — which is every link in a
 `node_modules/.bin`. fastf cannot copy a link it cannot read, so the move names
 each one and suggests mounting with `-o no_contain_symlinks`. For moving
 projects over sshfs, mount with that option and without `follow_symlinks`.
+
+## A project something is using
+
+A move, a rename and a delete take a folder away from its path, and whatever
+used it there goes on using the old path: a container started with a folder
+of the project mounted makes it again, empty, the next time it starts; a dev
+server writes into a copy that is about to be removed; a service whose unit
+names the folder fails at the next boot. So **fastf asks what uses the folder
+first, and does not go ahead until you say so**:
+
+```
+$ fastf move ID0047 archive --yes
+error: ID0047 is in use, so it was not moved:
+  node (pid 4242) is working in src
+  python3 (pid 5150) has data/session.db open for writing
+  podman (pid 7001) has v2/addon/data mounted at /app/data
+  coda.service (enabled, running) names it: WorkingDirectory=/home/user/Projects/2026-07-26_Shoot_ID0047
+stop them, then move it again
+hint: --force moves it anyway, and the result names what used it: `fastf move ID0047 archive --yes --force`
+```
+
+It is one question, asked the same way of everything, from what the operating
+system says about its processes, mounts and services — never of a tool by
+name, so a container runtime, a database or a server fastf has never heard of
+is seen the same way. It is asked of the same-filesystem rename as much as of
+a copy: a program working in the folder follows a rename, but nothing that
+names the path does.
+
+**What counts**, on Linux:
+
+- a program working in the folder, holding a file in it open (for writing or
+  not), running from it, with a library or another file of it loaded, or
+  started with a path in it among its arguments;
+- a container, a sandbox or a service that mounts a folder from inside the
+  project — read from its own mount table, whoever runs it — and a bind of
+  one somewhere else on this machine;
+- another filesystem mounted inside the project;
+- a systemd unit file — yours or the system's, and the ones generators write,
+  such as Podman's Quadlet containers — that names the folder (by its path or
+  as `%h/…`), or is a link into it, whether the unit runs now or something
+  starts it later.
+
+**What never counts**: fastf itself, and whoever asked — the shell that typed
+the command, the agent that ran it, the app and the terminal it runs in — and
+every process above them. A job records that chain when it starts, so its own
+look leaves it out too.
+
+**What is only a note** in the result:
+
+- a shell whose prompt is in the folder — `bash (pid 1234) has its prompt in
+  the old folder; cd to the new one`; what it started is judged on its own;
+- a unit that is disabled, stopped and started by nothing;
+- a process that did not answer within five seconds — one stuck behind a
+  mount that stopped answering, say: fastf names it rather than wait for it.
+
+**Going ahead anyway.** `--force` on `move`, `rename` and `delete`, or
+*Move anyway* in the app, goes past what uses the folder: the result names each
+thing it went past and what to do about it, and `fastf.log` keeps one line —
+`forced the move of ID0047 past what used it: …` — since a job's own record is
+pruned after thirty days.
+
+On a terminal, the command line lists what uses the folder and asks `Move
+anyway?` (no unless you say yes) in place of its usual question; `fastf delete`
+still asks for the word `delete` after `Delete anyway?`. With `--yes` and no
+`--force` it refuses, lists what uses the folder and names the command that
+goes past it — what a script or an agent reads — and starts nothing. Without a
+terminal and without `--yes`, it says to pass `--yes --force`. The app asks
+before it starts the move, the delete or the rename: `ID0047 is in use`, what
+uses it in a sentence, and *Move anyway*, *Move the 3 others* (when only some of
+the marked projects are in use) or *Cancel*.
+
+The job asks again, under the library's lock, before anything changes, and
+that look is the one that decides: something that started using the folder
+since the question was asked refuses the job the same way. A move that paused
+waiting for a mount is asked before it goes on: while its folder is in use,
+`fastf reconcile` leaves its copy and its record as they are and goes on once
+nothing uses it, and `!` lists it as waiting.
+
+**What it cannot see.** Linux shows a user only their own processes' folders
+and files: another user's — root's, a system service's — are seen by their
+arguments and their mounts alone. A root container working in a folder it
+mounted from above the project — all of `~/Projects`, say — is not seen.
+
+**On Windows** nothing is asked before the rename: Windows itself will not
+rename or remove a folder while anything in it is open, and fastf names what
+holds it, as above. `--force` cannot go past that, and changes nothing there.
 
 ## Copies, and two bases holding one ID
 

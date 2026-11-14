@@ -8,6 +8,9 @@ mod desc;
 #[path = "cli_output/desk.rs"]
 mod desk;
 
+#[cfg(target_os = "linux")]
+#[path = "cli_output/in_use.rs"]
+mod in_use;
 #[path = "cli_output/journal.rs"]
 mod journal;
 #[path = "cli_output/library.rs"]

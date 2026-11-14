@@ -124,11 +124,15 @@ pub fn run(detach: bool) -> Result<()> {
     // A job of its own, like a move: its removals on a cloud mount can take
     // minutes, and closing this terminal must not stop one part of the way.
     Config::load()?;
-    let state =
-        match crate::cli::jobs::start(crate::core::jobs::JobKind::Reconcile, Vec::new(), detach)? {
-            crate::cli::jobs::Followed::Ended(state) => state,
-            _ => return Ok(()),
-        };
+    let state = match crate::cli::jobs::start(
+        crate::core::jobs::JobKind::Reconcile,
+        Vec::new(),
+        false,
+        detach,
+    )? {
+        crate::cli::jobs::Followed::Ended(state) => state,
+        _ => return Ok(()),
+    };
     let Some(report) = state.reconcile.clone() else {
         anyhow::bail!("{}", state.summary);
     };

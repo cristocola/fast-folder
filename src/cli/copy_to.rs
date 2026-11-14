@@ -63,8 +63,13 @@ pub fn run(args: CopyToArgs) -> Result<()> {
     }
 
     let item = crate::core::jobs::JobItem::of(&project, Some(&destination))?;
-    match crate::cli::jobs::start(crate::core::jobs::JobKind::Copy, vec![item], args.detach)? {
-        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state),
+    match crate::cli::jobs::start(
+        crate::core::jobs::JobKind::Copy,
+        vec![item],
+        false,
+        args.detach,
+    )? {
+        crate::cli::jobs::Followed::Ended(state) => crate::cli::jobs::finish(&state, None),
         _ => Ok(()),
     }
 }

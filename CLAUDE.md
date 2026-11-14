@@ -117,8 +117,9 @@ tell you.
   `Judge`), `merge.rs` (an old copy leaving entry by entry: the one `decide`
   table, what may be written into the moved copy, the recordless proof),
   `records.rs` (the data dir's index of every move record, and the settle),
-  `holders.rs` (which programs have something in a folder open: `/proc` on
-  Linux, the Restart Manager on Windows),
+  `holders/` (what is using a folder before a verb takes it away: processes,
+  mounts and unit files on Linux — `linux` reads, `judge` decides, `units` —
+  the Restart Manager on Windows),
   `attention.rs` (what is unfinished, by who finishes it, and the choices that
   settle what needs you),
   `desk.rs` (the desk: a project's next open todo, who it is assigned to, the
@@ -171,7 +172,8 @@ tell you.
   them, or opens the app on its tab; `peek.rs` prints one project's summary;
   `agent.rs` runs the configured agent in a project's folder; `hat.rs` prints
   or sets the hat), plus `render.rs`, the only module that prints a
-  plan, a create or an apply; `target.rs` (resolve a query to one project, asking
+  plan, a create or an apply; `in_use.rs` (what uses a folder, asked before
+  `move`, `rename` and `delete` confirm); `target.rs` (resolve a query to one project, asking
   when it is ambiguous — shared by `open`/`copy`/`path`/`term`/`agent` and the
   folder verbs); `terminal.rs` (the `Config`↔`util::relaunch` seam, since `util` may not
   read `Config`). `move_project.rs`, `path_cmd.rs` and `paths_cmd.rs` are named
@@ -186,7 +188,7 @@ tell you.
   `desk` (its rows and cursor) / `desk_tab` (its reads, cuts and the journal
   page), and for the templates
   tab and its builder `templates_tab` / `builder`; and a module per
-  flow — `library`, `search`, `actions`, `jobs`, `wizard`, `register`, `studio`,
+  flow — `library`, `search`, `actions`, `jobs`, `in_use`, `wizard`, `register`, `studio`,
   `settings`, `palette`, `pane`, `modal`, `data`, `bases`), `view/` (renderers only, `&App`
   in; `modals/` is every dialog, by what it is for), `command/` (**the one registry** every key, palette entry, help line,
   key line and hint comes from: `table` declares, `read` and `help` read),

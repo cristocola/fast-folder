@@ -295,8 +295,13 @@ fn unknown_frontmatter_keys_survive_every_mutation() {
         fastf::core::operations::set_description(&project, "").unwrap();
         expect_intact("after desc --clear");
 
-        let renamed = fastf::core::operations::rename(&project, "renamed_by_test").unwrap();
-        let pinfo = project_info::pinfo_path(&renamed.path);
+        let renamed = fastf::core::operations::rename(
+            &project,
+            "renamed_by_test",
+            &fastf::core::holders::Guard::here(false),
+        )
+        .unwrap();
+        let pinfo = project_info::pinfo_path(&renamed.project.path);
         let content = fs::read_to_string(&pinfo).unwrap();
         for key in ["obsidian_folder: Clients/Acme", "year: 2026", "sync:"] {
             assert!(

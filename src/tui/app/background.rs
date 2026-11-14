@@ -124,12 +124,14 @@ pub fn step_of(job: &JobView) -> String {
 
 impl App {
     /// Start a job over `projects` — a move or a copy to `target`, a delete —
-    /// or, with no projects, a reconcile.
+    /// or, with no projects, a reconcile. `force` goes past what uses a
+    /// folder (`in_use`).
     pub(super) fn start_background(
         &mut self,
         kind: JobKind,
         projects: Vec<Project>,
         target: Option<PathBuf>,
+        force: bool,
     ) -> Vec<Effect> {
         if let Some(starting) = self.background.starting {
             self.warn(format!("still {starting}"));
@@ -152,7 +154,7 @@ impl App {
             JobKind::Reconcile => "reconciling…",
         });
         self.background.hidden = false;
-        vec![Effect::StartJob { kind, items }]
+        vec![Effect::StartJob { kind, items, force }]
     }
 
     pub(super) fn on_job_started(&mut self, started: Result<String, String>) -> Vec<Effect> {

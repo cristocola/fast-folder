@@ -23,9 +23,11 @@ fn rederive_rename_and_move_each_run_their_action() {
     press(&mut app, Key::ctrl('u'));
     type_text(&mut app, "New_Name");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = nothing_uses_them(&mut app, &effects);
     assert!(matches!(
         action_of(&effects),
-        Action::Rename { project, name } if **project == selected && name == "New_Name"
+        Action::Rename { project, name, force: false }
+            if **project == selected && name == "New_Name"
     ));
 }
 
@@ -66,6 +68,12 @@ fn move_picks_a_target_and_starts_a_move_job() {
     press(&mut app, Key::ch('m'));
     assert!(matches!(app.modals.top(), Some(Modal::Pick(_))));
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    assert_eq!(
+        app.shown_title(),
+        "moving…",
+        "the dialog is up while the folder is asked about"
+    );
+    let effects = nothing_uses_them(&mut app, &effects);
     let (kind, items) = job_started(&effects).expect("a job starts");
     assert_eq!(kind, fastf::core::jobs::JobKind::Move);
     assert_eq!(items.len(), 1);
@@ -213,6 +221,7 @@ fn delete_asks_for_the_word_and_a_mismatch_deletes_nothing() {
     );
     type_text(&mut app, "e");
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
+    let effects = nothing_uses_them(&mut app, &effects);
     assert!(
         matches!(
             job_started(&effects),
@@ -560,8 +569,10 @@ fn esc_and_ctrl_c_answer_while_a_job_is_starting() {
     app.summary = Some(sample_summary_moveable(12));
     press(&mut app, Key::ch('m'));
     let effects = press(&mut app, Key::plain(KeyCode::Enter));
-    assert!(job_started(&effects).is_some());
     assert!(app.job_dialog_up(), "the dialog is up at once");
+    let effects = nothing_uses_them(&mut app, &effects);
+    assert!(job_started(&effects).is_some());
+    assert!(app.job_dialog_up(), "and stays up while the job starts");
 
     assert_eq!(press(&mut app, Key::ctrl('c')), vec![]);
     assert!(

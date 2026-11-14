@@ -68,6 +68,9 @@ pub enum Then {
     /// The picked value is what to do about the item at this path
     /// (`core::attention::Action::word`).
     AttentionAction(std::path::PathBuf),
+    /// Something uses these folders: the picked value goes anyway, goes
+    /// with the others, or cancels (`in_use`).
+    InUse(Box<crate::tui::app::in_use::InUseChoice>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -553,8 +556,13 @@ impl App {
                 if projects.is_empty() {
                     return self.gone_from_the_library();
                 }
-                self.start_background(crate::core::jobs::JobKind::Move, projects, Some(target))
+                self.ask_what_uses(
+                    projects,
+                    targets.batch,
+                    crate::tui::app::in_use::After::Move(target),
+                )
             }
+            Then::InUse(choice) => self.on_in_use_choice(*choice, &item.value),
             Then::Attention => self.on_attention_pick(item.value.clone()),
             Then::AttentionAction(path) => {
                 self.on_attention_action(path.clone(), item.value.clone())

@@ -612,15 +612,17 @@ projects are not today's work, and their unfinished todos would sit on the
 desk for good. You mark a base inactive in the app's bases panel (`b`, then
 Space, or Enter and *Mark inactive*; see [Which bases the list
 shows](app.md#which-bases-the-list-shows)), and the list says what that left
-out, after its last line:
+out after its last line, counted under the same flags, so it is what
+`--every-base` would add:
 
 ```
   2 projects in 2 inactive bases left out (archive, cold); --every-base shows them
 ```
 
 `--every-base` lists them too, and `--base` naming an inactive base lists that
-base. With `--json`, stdout holds the rows alone and the same sentence goes
-to stderr as a `note:`. The other commands still see every base:
+base. With `--json`, stdout holds the rows alone (`[]` when there are none)
+and the same sentence goes to stderr as a `note:`. The default base, where
+new projects land, is never left out. The other commands still see every base:
 `fastf recent` and `fastf search` find a project wherever it is, and
 `fastf journal` lists what happened in every base, an archived project's
 notes and lessons included.

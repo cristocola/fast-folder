@@ -804,10 +804,11 @@ holders and `⚠` for a todo assigned to an owner in a project quiet for
 
 **`L`'s journal page** (`ActivityPage::Journal`, `App::journal_rows`) is built
 from the same records, in `update`, with no read of its own: every dated note
-and every todo's `done:` and `added:` event across `library.snapshot` but
-what the bases' view leaves out (`out_of_view`, as the desk's rows do — the
-cache holds an inactive base's record only where somebody opened it), newest
-first, with a rule at `desk_seen_at` — opening `L` asks `desk_read_effects`
+and every todo's `done:` and `added:` event across the library's rows in
+view — the desk's rows, so the bases' view, the query and the filters apply,
+since the cache holds a record of anything else only where somebody opened
+it; `reading…` while one of them has none — newest first, with a rule at
+`desk_seen_at` — opening `L` asks `desk_read_effects`
 for what the cache lacks, and `after_records_changed` refreshes the page as
 records land.
 

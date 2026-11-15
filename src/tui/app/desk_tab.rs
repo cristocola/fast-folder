@@ -294,12 +294,13 @@ impl App {
     }
 
     /// The journal page: every dated note and every todo's `done:` and
-    /// `added:` event across the records read, newest first, each row the
-    /// day and time, the project's id, what it is and its first line — with
-    /// a rule where a previous run last had the desk on screen, so what
-    /// happened since you last looked reads above it. A base the bases' view
-    /// leaves out is left out here too, as on the desk: the records of its
-    /// projects are only the ones somebody happened to open.
+    /// `added:` event across the projects the list shows — the desk's rows,
+    /// whose records are the ones read — newest first, each row the day and
+    /// time, the project's id, what it is and its first line, with a rule
+    /// where a previous run last had the desk on screen, so what happened
+    /// since you last looked reads above it. Over the whole library it would
+    /// show an inactive base's or a filtered-out project's events only where
+    /// somebody happened to open one.
     pub fn journal_rows(&self) -> Vec<String> {
         struct Event {
             stamp: String,
@@ -308,11 +309,10 @@ impl App {
             text: String,
         }
         let mut events: Vec<Event> = Vec::new();
-        for project in &self.library.snapshot {
-            if self.library.out_of_view(project) {
-                continue;
-            }
+        let mut unread = false;
+        for project in (0..self.library.len()).filter_map(|row| self.library.row(row)) {
             let Some(detail) = self.details.get(&project.path) else {
+                unread = true;
                 continue;
             };
             for note in &detail.notes {
@@ -351,7 +351,7 @@ impl App {
             }
         }
         if events.is_empty() {
-            return vec![if self.details.is_empty() && !self.library.is_empty() {
+            return vec![if unread {
                 "reading…".to_string()
             } else {
                 "Nothing dated yet: a note or a todo ticked by fastf is an entry here.".to_string()

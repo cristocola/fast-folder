@@ -183,6 +183,9 @@ pub fn run(args: DeskArgs) -> Result<()> {
 
     let projects = library::discover(&cfg);
     if projects.is_empty() {
+        if args.json {
+            return crate::cli::json::print(&Vec::<CardJson>::new());
+        }
         println!(
             "{}",
             "No projects yet. Create one with `fastf new`.".dimmed()
@@ -197,17 +200,10 @@ pub fn run(args: DeskArgs) -> Result<()> {
         &args.base,
         usize::MAX,
     );
-    // A base somebody named is what was asked for, inactive or not.
-    let (scoped, left_out) = if args.every_base || args.base.is_some() {
-        (scoped, LeftOut::default())
-    } else {
-        leave_out_inactive(scoped, &inactive_bases(&cfg))
-    };
     let now = crate::util::time::now_iso8601();
     let cards = read_cards(&scoped);
-    let mut groups = desk::group(cards, hat.as_deref(), order);
 
-    // The group flags.
+    // The group flags and --quiet, asked of each card.
     let wanted = |assignee: &Assignee| -> bool {
         if args.mine {
             return assignee.owner() == hat.as_deref();
@@ -223,15 +219,24 @@ pub fn run(args: DeskArgs) -> Result<()> {
         }
         true
     };
-    groups.retain(|group| wanted(&group.assignee));
-    if let Some(days) = args.quiet {
-        for group in &mut groups {
-            group
-                .cards
-                .retain(|card| desk::quiet_for_days(card.quiet_since.as_deref(), &now, days));
-        }
-        groups.retain(|group| !group.cards.is_empty());
-    }
+    let cards: Vec<Card> = cards
+        .into_iter()
+        .filter(|card| {
+            wanted(&card.assignee())
+                && args.quiet.is_none_or(|days| {
+                    desk::quiet_for_days(card.quiet_since.as_deref(), &now, days)
+                })
+        })
+        .collect();
+    // What the inactive bases hold is set aside after every other flag, so
+    // the count says what `--every-base` would add. A base somebody named is
+    // what was asked for, inactive or not.
+    let (cards, left_out) = if args.every_base || args.base.is_some() {
+        (cards, LeftOut::default())
+    } else {
+        leave_out_inactive(cards, &inactive_bases(&cfg))
+    };
+    let mut groups = desk::group(cards, hat.as_deref(), order);
     if args.random {
         groups = pick_one(groups);
     }
@@ -322,24 +327,21 @@ impl Inactive {
     }
 }
 
-/// The projects the desk shows, and what the inactive bases left out.
-fn leave_out_inactive<'a>(
-    projects: Vec<&'a Project>,
-    inactive: &[Inactive],
-) -> (Vec<&'a Project>, LeftOut) {
+/// The cards the desk shows, and what the inactive bases left out.
+fn leave_out_inactive(cards: Vec<Card>, inactive: &[Inactive]) -> (Vec<Card>, LeftOut) {
     if inactive.is_empty() {
-        return (projects, LeftOut::default());
+        return (cards, LeftOut::default());
     }
     let mut labels: Vec<Option<String>> = vec![None; inactive.len()];
     let mut left_out = LeftOut::default();
-    let mut kept = Vec::with_capacity(projects.len());
-    for project in projects {
-        match inactive.iter().position(|base| base.holds(project)) {
+    let mut kept = Vec::with_capacity(cards.len());
+    for card in cards {
+        match inactive.iter().position(|base| base.holds(&card.project)) {
             Some(at) => {
                 left_out.projects += 1;
-                labels[at].get_or_insert_with(|| library::base_label(&project.base));
+                labels[at].get_or_insert_with(|| library::base_label(&card.project.base));
             }
-            None => kept.push(project),
+            None => kept.push(card),
         }
     }
     left_out.bases = labels.into_iter().flatten().collect();
@@ -347,12 +349,14 @@ fn leave_out_inactive<'a>(
 }
 
 /// The bases marked inactive in the app (`state.toml`), in the
-/// configuration's order. A mark is the configured spelling, so each is
-/// asked for its real path — all at once, under the probe deadline, since a
-/// base may be a mount that stopped answering; one that does not answer
-/// keeps its spelling alone, and discovery read nothing from it either. As
-/// in the app, a mark the configuration no longer names counts for nothing,
-/// and neither does one on the default base: new projects land there, and a
+/// configuration's order, as the app reads them: a base is marked by its
+/// configured spelling or by its real path (`App::inactive_to_remember`
+/// keeps both), so every configured base is asked for its real path — all
+/// at once, under the probe deadline, since a base may be a mount that
+/// stopped answering; one that does not answer is matched by its spelling
+/// alone, and discovery read nothing from it either. A mark the
+/// configuration no longer names counts for nothing, and neither does one
+/// on the default base, under any spelling: new projects land there, and a
 /// mark made before it became the default would hide every one of them.
 fn inactive_bases(cfg: &Config) -> Vec<Inactive> {
     let marked: Vec<PathBuf> = crate::tui::session::Session::load()
@@ -363,24 +367,25 @@ fn inactive_bases(cfg: &Config) -> Vec<Inactive> {
     if marked.is_empty() {
         return Vec::new();
     }
-    // The default base is the first candidate, as the app's summary has it.
-    let configured: Vec<PathBuf> = cfg
-        .base_candidates()
-        .into_iter()
-        .skip(1)
-        .filter(|base| marked.contains(base))
-        .collect();
-    let real =
-        crate::util::paths::answer_within(&configured, crate::util::paths::PROBE_TIMEOUT, |base| {
+    let candidates = cfg.base_candidates();
+    let real: Vec<Option<PathBuf>> =
+        crate::util::paths::answer_within(&candidates, crate::util::paths::PROBE_TIMEOUT, |base| {
             crate::util::paths::canonical(base).ok()
-        });
-    configured
+        })
+        .into_iter()
+        .map(Option::flatten)
+        .collect();
+    // The default base is the first candidate, as the app's summary has it.
+    let default = real.first().cloned().flatten();
+    candidates
         .into_iter()
         .zip(real)
-        .map(|(configured, real)| Inactive {
-            configured,
-            real: real.flatten(),
+        .skip(1)
+        .filter(|(_, real)| !(real.is_some() && *real == default))
+        .filter(|(configured, real)| {
+            marked.contains(configured) || real.as_ref().is_some_and(|real| marked.contains(real))
         })
+        .map(|(configured, real)| Inactive { configured, real })
         .collect()
 }
 

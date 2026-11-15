@@ -147,6 +147,7 @@ fn the_desk_narrows_to_one_group_and_picks_one() {
 }
 
 /// One project in `base`, its `## Todo` holding `list`.
+#[cfg(unix)]
 fn plant_with_todos(sb: &Sandbox, base: &std::path::Path, name: &str, id: &str, list: &str) {
     let dir = sb.plant_project(base, name, id);
     let path = dir.join("PROJECT_INFO.md");

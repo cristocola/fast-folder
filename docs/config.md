@@ -31,8 +31,9 @@ The data folder holds:
   the detail pane was open, the row the cursor was on, whether the template
   guide has been offered, whether the builder's panel is shown, and which
   bases the list shows — the ones marked inactive, and whether only the
-  active ones are shown ([app.md](app.md#which-bases-the-list-shows)). Delete
-  it to start fresh.
+  active ones are shown ([app.md](app.md#which-bases-the-list-shows)). The
+  marks are the one thing a command reads here: `fastf desk` leaves the
+  inactive bases out. Delete it to start fresh.
 - `messages.log` — every message fastf showed you, in the app and on the
   command line, one per line; `fastf messages` and `L` in the app read it.
 - `logs/fastf.log` — the log: every step of every move, copy and reconcile

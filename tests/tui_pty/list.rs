@@ -1298,8 +1298,10 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
     let sb = Sandbox::new();
     let alt = sb.with_bases(&["alt"])[0].clone();
     plant_dated_project(&sb, "Slow", "ID0001", "2026-01-01T00:00:00Z", 64);
-    // One file, three seconds to copy: long enough to quit in the middle.
-    let fault = std::path::Path::new("pool:serial,move:force-staged,move:each-file:delay-3000");
+    // One file, six seconds to copy: long enough to quit in the middle and
+    // for a second app to start and read the jobs on a loaded machine, where
+    // its first frames alone can take more than a second.
+    let fault = std::path::Path::new("pool:serial,move:force-staged,move:each-file:delay-6000");
     let env = [
         ("FASTF_INSTALL_DIR", sb.install.as_path()),
         ("HOME", sb.tmp.path()),
@@ -1322,7 +1324,7 @@ fn quitting_mid_move_leaves_the_move_to_finish_and_a_second_app_sees_it() {
     );
 
     // A second app, while the job is still copying: its header says so.
-    let second = pty::Script::new().pause(1200).key(KEY_QUIT).build();
+    let second = pty::Script::new().pause(3000).key(KEY_QUIT).build();
     let (out, code) = pty::run(common::FASTF, &[], &env, &second, DEADLINE);
     assert_eq!(code, 0);
     assert!(

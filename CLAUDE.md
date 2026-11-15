@@ -179,7 +179,8 @@ tell you.
   follows jobs for `move`/`copy-to`/`delete`/`reconcile` and is `fastf jobs`;
   `progress.rs` prints a job's steps. One module per subcommand (`folder_verbs.rs` is `rename`,
   `unregister` and `delete`; `desk.rs` reads the cards on the pool and prints
-  them, or opens the app on its tab; `peek.rs` prints one project's summary;
+  them, leaving out the bases marked inactive in the app, or opens the app on
+  its tab; `peek.rs` prints one project's summary;
   `agent.rs` runs the configured agent in a project's folder; `hat.rs` prints
   or sets the hat), plus `render.rs`, the only module that prints a
   plan, a create or an apply; `in_use.rs` (what uses a folder, asked before

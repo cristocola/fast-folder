@@ -670,3 +670,63 @@ fn the_panel_key_line_keeps_esc_at_forty_columns() {
         "the arrows where there is room:\n{wide}"
     );
 }
+
+/// **The journal page covers the projects the list shows**, as the desk
+/// does: a record of an inactive base's project — read because somebody
+/// once opened it — puts nothing on the page while only the active bases
+/// are shown; the page says it is reading while a project in view has no
+/// record yet, rather than that nothing is dated; showing the inactive
+/// base alone shows its entries alone; and every base shows them all.
+#[test]
+fn the_journal_page_follows_the_view_as_the_desk_does() {
+    let mut app = archive_unticked();
+    let home = rows_in(HOME, 3, 1);
+    let archive = rows_in(ARCHIVE, 2, 10);
+    // `desk_records` reads every project but the last.
+    let records = |projects: &[Project]| {
+        let mut all = projects.to_vec();
+        all.push(rows_in(HOME, 1, 99).remove(0));
+        desk_records(&all)
+    };
+    // `2026-01-12 17:30  ID0001  done   …`: the id is the third word.
+    let ids = |app: &App| -> Vec<String> {
+        app.journal_rows()
+            .iter()
+            .filter_map(|row| row.split_whitespace().nth(2).map(str::to_string))
+            .collect()
+    };
+
+    let _ = update(&mut app, Msg::Details(records(&archive)));
+    assert_eq!(
+        app.journal_rows(),
+        ["reading…"],
+        "the projects in view are still to be read"
+    );
+
+    let _ = update(&mut app, Msg::Details(records(&home)));
+    let active = ids(&app);
+    assert!(active.iter().any(|id| id == "ID0001"), "{active:?}");
+    assert!(
+        !active.iter().any(|id| id == "ID0010" || id == "ID0011"),
+        "an inactive base's records stay off the page: {active:?}"
+    );
+
+    press(&mut app, Key::ch('b'));
+    press(&mut app, Key::plain(KeyCode::Down));
+    press(&mut app, Key::ch('f'));
+    let alone = ids(&app);
+    assert!(
+        alone.iter().any(|id| id == "ID0010")
+            && alone.iter().all(|id| id == "ID0010" || id == "ID0011"),
+        "the base shown alone, alone: {alone:?}"
+    );
+
+    press(&mut app, Key::ch('F'));
+    press(&mut app, Key::ch('B'));
+    assert_eq!(app.library.view, BasesView::Every);
+    let every = ids(&app);
+    assert!(
+        every.iter().any(|id| id == "ID0001") && every.iter().any(|id| id == "ID0010"),
+        "every base shows them all: {every:?}"
+    );
+}

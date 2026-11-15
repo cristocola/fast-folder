@@ -804,8 +804,11 @@ holders and `⚠` for a todo assigned to an owner in a project quiet for
 
 **`L`'s journal page** (`ActivityPage::Journal`, `App::journal_rows`) is built
 from the same records, in `update`, with no read of its own: every dated note
-and every todo's `done:` and `added:` event across `library.snapshot`, newest
-first, with a rule at `desk_seen_at` — opening `L` asks `desk_read_effects`
+and every todo's `done:` and `added:` event across the library's rows in
+view — the desk's rows, so the bases' view, the query and the filters apply,
+since the cache holds a record of anything else only where somebody opened
+it; `reading…` while one of them has none — newest first, with a rule at
+`desk_seen_at` — opening `L` asks `desk_read_effects`
 for what the cache lacks, and `after_records_changed` refreshes the page as
 records land.
 
@@ -1208,10 +1211,13 @@ asked.
 ## Which bases the list shows
 
 **A view, not a setting.** Each base is active or not, and the list shows every
-base or only the active ones (`library::BasesView`). Both live in `state.toml`
-and nothing outside `src/tui` reads them: discovery still reads every base, so
-switching never waits on a rescan, and the counter, moves, reconcile and the
-command line cannot be changed by a view. **The default base is always
+base or only the active ones (`library::BasesView`). Both live in `state.toml`,
+and outside `src/tui` one command reads the marks and none the view:
+`fastf desk`'s printed list leaves the inactive bases out, since an archive's
+unfinished todos are not today's work (`cli::desk::inactive_bases`,
+`--every-base`). Discovery still reads every base, so switching never waits on
+a rescan, and the counter, moves, reconcile and every other command cannot be
+changed by a mark or a view. **The default base is always
 active** — new projects land there — and a base the configuration no longer
 names is forgotten; both are settled when the summary's `Bases` part lands.
 

@@ -65,12 +65,26 @@ what it cannot say is whether a real terminal, desktop or drive agrees.
 Last reviewed: 2026-11-14.
 
 ## Backlog
-- **4.0.0: Linux only.** 3.20.0 is the last release with a native Windows
-  build, and it keeps working. Remove the Windows code paths, the two Windows
-  test suites, the Windows CI and release legs, the MSI and its WiX source,
-  `install.ps1`, `docs/windows.md`, `build.rs` and the crt-static config, and
-  write a short guide to running fastf on Windows inside WSL. Names Windows
-  cannot hold stay refused: the bases are often NTFS drives Windows reads too.
+- **Linux only: shelved.** Dropping the native Windows build for a 4.0.0 was
+  planned and then shelved on 2026-11-15; releases keep the Windows build.
+  If it comes back: remove the Windows code paths, the Windows-only tests
+  (the name tests in `windows_semantics.rs` run everywhere and stay), the
+  Windows CI and release legs, the MSI and its WiX source,
+  `docs/windows.md`, `build.rs` and the crt-static config, and write a short
+  guide to running fastf on Windows inside WSL. Names Windows cannot hold stay
+  refused either way: the bases are often NTFS drives Windows reads too.
+- **Shared NTFS drives, found while planning that:**
+  - A move record a Windows fastf wrote on a base Linux also mounts names its
+    source base `D:\…` or `\\server\…`. `transactions::journal::read_journal`
+    refuses it at `source_base.is_absolute()` before the check for another
+    machine's record, so on Linux it reads as malformed, and the attention
+    list offers to discard it. It should read as another machine's record.
+  - Template file and folder names are not held to the Windows rules: a
+    template file named `aux.md`, `a:b.txt` or `notes.` lands on an NTFS base
+    that Windows then cannot open.
+  - Create, rename and `register --rename` allow a folder whose name differs
+    from another in the same base only in case (`Album` beside `album`),
+    which Windows shows as one folder.
 
 Unscheduled; nothing here is promised.
 

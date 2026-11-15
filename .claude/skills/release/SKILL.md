@@ -35,7 +35,14 @@ with the maintainer's AUR SSH key**, because it needs `updpkgsums`/`makepkg`.
 4. `packaging/aur/update.sh <version>`, with `FASTF_AUR_DIR` pointing at the
    two AUR clones.
 5. `makepkg -f` in **both** package dirs to validate. The source package's
-   `check()` runs the whole release suite.
+   `check()` runs the whole release suite. **The moment each build ends,
+   remove its build output**:
+   `chmod -R u+rwX pkg src && rm -rf pkg src` in both dirs. makepkg leaves
+   `pkg/` at mode 111, which no one can read, and anything that walks the
+   folders around the repository (a sandbox's start-up check, a backup, an
+   indexer) stops on it. `src/` holds a whole release build, which is too
+   large to leave inside a backed-up folder. Never leave either behind,
+   whether the build passed or failed.
 6. Copy `PKGBUILD` and `.SRCINFO` into each clone, commit and push
    (`PUBLISHING.md` has the commands). `git ls-remote origin master` in each
    clone is the authoritative check; the AUR RPC (`/rpc/v5/info`) lags the push

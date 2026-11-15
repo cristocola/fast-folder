@@ -297,7 +297,9 @@ impl App {
     /// `added:` event across the records read, newest first, each row the
     /// day and time, the project's id, what it is and its first line — with
     /// a rule where a previous run last had the desk on screen, so what
-    /// happened since you last looked reads above it.
+    /// happened since you last looked reads above it. A base the bases' view
+    /// leaves out is left out here too, as on the desk: the records of its
+    /// projects are only the ones somebody happened to open.
     pub fn journal_rows(&self) -> Vec<String> {
         struct Event {
             stamp: String,
@@ -307,6 +309,9 @@ impl App {
         }
         let mut events: Vec<Event> = Vec::new();
         for project in &self.library.snapshot {
+            if self.library.out_of_view(project) {
+                continue;
+            }
             let Some(detail) = self.details.get(&project.path) else {
                 continue;
             };

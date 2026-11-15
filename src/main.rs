@@ -754,7 +754,11 @@ enum Commands {
         of each project is listed, never every todo.\n\n\
         On a terminal it opens the guided app on its desk tab, carrying the group,\n\
         the order, the hat and --random; --plain and --json keep the list in the\n\
-        terminal, as do --quiet, --template, --tag and --base, and so does a pipe.\n\n\
+        terminal, as do --quiet, --template, --tag, --base and --every-base, and so\n\
+        does a pipe.\n\n\
+        The list leaves out the bases marked inactive in the app (b), and says how\n\
+        many projects that left out; --every-base shows them, and --base naming one\n\
+        shows that one.\n\n\
         Examples:\n  \
             fastf desk                              # the app on its desk tab\n  \
             fastf desk --mine                       # only the projects whose next todo is yours\n  \
@@ -762,6 +766,7 @@ enum Commands {
             fastf desk --no-owner                   # only the projects whose next todo has no owner\n  \
             fastf desk --quiet 7                    # nothing written for a week\n  \
             fastf desk --random                     # one project, picked at random\n  \
+            fastf desk --every-base                 # the inactive bases' projects too\n  \
             fastf desk --as sales --json"
     )]
     Desk {
@@ -795,6 +800,9 @@ enum Commands {
         /// Only projects in this base, by its label or its full path
         #[arg(long)]
         base: Option<String>,
+        /// Every base, the ones marked inactive in the app too
+        #[arg(long = "every-base")]
+        every_base: bool,
         /// The order within a group: quiet (longest since anything was written first, the default), recent, name or id
         #[arg(long, value_name = "ORDER")]
         order: Option<String>,
@@ -1540,6 +1548,7 @@ fn run() -> Result<()> {
             template,
             tag,
             base,
+            every_base,
             order,
             plain,
             json,
@@ -1554,6 +1563,7 @@ fn run() -> Result<()> {
             template,
             tag,
             base,
+            every_base,
             order,
             plain,
             json,

@@ -15,13 +15,21 @@
 //! fastf desk --no-owner             # only the projects whose next todo has no owner
 //! fastf desk --quiet 7              # only the projects nothing has written in for a week
 //! fastf desk --random               # one project, picked at random
+//! fastf desk --every-base           # the bases marked inactive too
 //! fastf desk --json
 //! ```
 //!
 //! On a terminal, `fastf desk` opens the app on its desk tab, carrying the
 //! group, the order, the hat and the random pick. `--plain` and `--json`
 //! print the list instead, as do the flags the tab has no key for
-//! (`--quiet`, `--template`, `--tag`, `--base`) and a pipe.
+//! (`--quiet`, `--template`, `--tag`, `--base`, `--every-base`) and a pipe.
+//!
+//! **The list leaves out the bases marked inactive in the app** — an
+//! archive's old projects are not today's work — and says how many projects
+//! that took off, after the list on stdout or, beside `--json`, on stderr.
+//! `--every-base` shows them, and `--base` naming one shows that one, as the
+//! app's `B` and its "show this base alone" do. The app's desk follows its
+//! own view of the bases, which the marks are half of.
 //!
 //! What it reads: every project's `PROJECT_INFO.md` (the todos), the file's
 //! and the folder's times (`touched`), and on Linux `/proc` for which
@@ -58,6 +66,8 @@ pub struct DeskArgs {
     pub template: Option<String>,
     pub tag: Option<String>,
     pub base: Option<String>,
+    /// The bases marked inactive in the app too.
+    pub every_base: bool,
     /// `quiet` (the default), `recent`, `name` or `id`.
     pub order: Option<String>,
     pub plain: bool,
@@ -146,7 +156,8 @@ pub fn run(args: DeskArgs) -> Result<()> {
         || args.quiet.is_some()
         || args.template.is_some()
         || args.tag.is_some()
-        || args.base.is_some();
+        || args.base.is_some()
+        || args.every_base;
     let interactive = !printing
         && std::io::IsTerminal::is_terminal(&std::io::stdout())
         && crate::util::tty::prompt_available();
@@ -186,6 +197,12 @@ pub fn run(args: DeskArgs) -> Result<()> {
         &args.base,
         usize::MAX,
     );
+    // A base somebody named is what was asked for, inactive or not.
+    let (scoped, left_out) = if args.every_base || args.base.is_some() {
+        (scoped, LeftOut::default())
+    } else {
+        leave_out_inactive(scoped, &inactive_bases(&cfg))
+    };
     let now = crate::util::time::now_iso8601();
     let cards = read_cards(&scoped);
     let mut groups = desk::group(cards, hat.as_deref(), order);
@@ -230,7 +247,12 @@ pub fn run(args: DeskArgs) -> Result<()> {
                     .map(move |card| card_json(card, group, now))
             })
             .collect();
-        return crate::cli::json::print(&rows);
+        crate::cli::json::print(&rows)?;
+        // Stdout is the JSON alone; what it is missing goes beside it.
+        if let Some(line) = left_out.line() {
+            eprintln!("note: {line}");
+        }
+        return Ok(());
     }
 
     if groups.is_empty() {
@@ -243,15 +265,123 @@ pub fn run(args: DeskArgs) -> Result<()> {
                 || args.base.is_some()
             {
                 "No project matches those flags."
+            } else if left_out.projects > 0 {
+                "Every project is in a base marked inactive."
             } else {
                 "No project has a todo yet."
             }
             .dimmed()
         );
-        return Ok(());
+    } else {
+        print_plain(&groups, hat.as_deref(), &now);
     }
-    print_plain(&groups, hat.as_deref(), &now);
+    if let Some(line) = left_out.line() {
+        println!("\n  {}", line.dimmed());
+    }
     Ok(())
+}
+
+/// What the bases marked inactive took off the desk: how many of the
+/// projects the other flags kept, and the labels of the bases they are in,
+/// in the configuration's order.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LeftOut {
+    projects: usize,
+    bases: Vec<String>,
+}
+
+impl LeftOut {
+    /// The sentence that says so, or nothing when nothing was left out —
+    /// nothing is out of the list in silence, and nothing is said about a
+    /// mark that hid nothing.
+    fn line(&self) -> Option<String> {
+        use crate::tui::view::plural;
+        (self.projects > 0).then(|| {
+            format!(
+                "{} in {} left out ({}); --every-base shows {}",
+                plural(self.projects, "project", "projects"),
+                plural(self.bases.len(), "inactive base", "inactive bases"),
+                self.bases.join(", "),
+                if self.projects == 1 { "it" } else { "them" },
+            )
+        })
+    }
+}
+
+/// A base marked inactive: the configured spelling it was marked by, and
+/// its real path when it answered — discovery hands every project its base
+/// canonicalized, so either may be what a project carries.
+struct Inactive {
+    configured: PathBuf,
+    real: Option<PathBuf>,
+}
+
+impl Inactive {
+    fn holds(&self, project: &Project) -> bool {
+        self.configured == project.base || self.real.as_ref() == Some(&project.base)
+    }
+}
+
+/// The projects the desk shows, and what the inactive bases left out.
+fn leave_out_inactive<'a>(
+    projects: Vec<&'a Project>,
+    inactive: &[Inactive],
+) -> (Vec<&'a Project>, LeftOut) {
+    if inactive.is_empty() {
+        return (projects, LeftOut::default());
+    }
+    let mut labels: Vec<Option<String>> = vec![None; inactive.len()];
+    let mut left_out = LeftOut::default();
+    let mut kept = Vec::with_capacity(projects.len());
+    for project in projects {
+        match inactive.iter().position(|base| base.holds(project)) {
+            Some(at) => {
+                left_out.projects += 1;
+                labels[at].get_or_insert_with(|| library::base_label(&project.base));
+            }
+            None => kept.push(project),
+        }
+    }
+    left_out.bases = labels.into_iter().flatten().collect();
+    (kept, left_out)
+}
+
+/// The bases marked inactive in the app (`state.toml`), in the
+/// configuration's order. A mark is the configured spelling, so each is
+/// asked for its real path — all at once, under the probe deadline, since a
+/// base may be a mount that stopped answering; one that does not answer
+/// keeps its spelling alone, and discovery read nothing from it either. As
+/// in the app, a mark the configuration no longer names counts for nothing,
+/// and neither does one on the default base: new projects land there, and a
+/// mark made before it became the default would hide every one of them.
+fn inactive_bases(cfg: &Config) -> Vec<Inactive> {
+    let marked: Vec<PathBuf> = crate::tui::session::Session::load()
+        .inactive_bases
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+    if marked.is_empty() {
+        return Vec::new();
+    }
+    // The default base is the first candidate, as the app's summary has it.
+    let configured: Vec<PathBuf> = cfg
+        .base_candidates()
+        .into_iter()
+        .skip(1)
+        .filter(|base| marked.contains(base))
+        .collect();
+    let real =
+        crate::util::paths::answer_within(&configured, crate::util::paths::PROBE_TIMEOUT, |base| {
+            crate::util::paths::canonical(base).ok()
+        });
+    configured
+        .into_iter()
+        .zip(real)
+        .map(|(configured, real)| Inactive {
+            configured,
+            real: real.flatten(),
+        })
+        .collect()
 }
 
 /// Every project's card. The todos are read on the pool, several files at

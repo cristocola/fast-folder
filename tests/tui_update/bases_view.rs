@@ -670,3 +670,37 @@ fn the_panel_key_line_keeps_esc_at_forty_columns() {
         "the arrows where there is room:\n{wide}"
     );
 }
+
+/// **The journal page leaves out what the view leaves out**, as the desk
+/// does: a record of an inactive base's project — read because somebody
+/// once opened it — puts nothing on the page while only the active bases
+/// are shown, and its entries are back once every base is.
+#[test]
+fn the_journal_page_follows_the_view_as_the_desk_does() {
+    let mut app = archive_unticked();
+    let mut every = rows_in(HOME, 3, 1);
+    every.extend(rows_in(ARCHIVE, 2, 10));
+    // `desk_records` reads every project but the last.
+    every.push(rows_in(HOME, 1, 99).remove(0));
+    let _ = update(&mut app, Msg::Details(desk_records(&every)));
+    // `2026-01-12 17:30  ID0001  done   …`: the id is the third word.
+    let ids = |app: &App| -> Vec<String> {
+        app.journal_rows()
+            .iter()
+            .filter_map(|row| row.split_whitespace().nth(2).map(str::to_string))
+            .collect()
+    };
+    let active = ids(&app);
+    assert!(active.iter().any(|id| id == "ID0001"), "{active:?}");
+    assert!(
+        !active.iter().any(|id| id == "ID0010" || id == "ID0011"),
+        "an inactive base's records stay off the page: {active:?}"
+    );
+    press(&mut app, Key::ch('B'));
+    assert_eq!(app.library.view, BasesView::Every);
+    let every = ids(&app);
+    assert!(
+        every.iter().any(|id| id == "ID0010") && every.iter().any(|id| id == "ID0011"),
+        "every base shows them again: {every:?}"
+    );
+}

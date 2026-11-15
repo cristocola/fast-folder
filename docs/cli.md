@@ -560,6 +560,7 @@ fastf desk --quiet 7              # only the projects nothing has written in for
 fastf desk --random               # one project, picked at random
 fastf desk --order name           # quiet (the default), recent, name or id
 fastf desk --template music-video --tag client/Acme --base projects
+fastf desk --every-base           # the bases marked inactive in the app too
 fastf desk --json
 ```
 
@@ -606,13 +607,33 @@ what the other flags leave. `--template`, `--tag` and `--base` choose the
 projects as `recent`'s do. A project in a base you removed from `bases` is not
 listed; there is no hidden state to set on a project.
 
+**The bases marked inactive in the app are left out**: an archive's old
+projects are not today's work, and their unfinished todos would sit on the
+desk for good. You mark a base inactive in the app's bases panel (`b`, then
+Space, or Enter and *Mark inactive*; see [Which bases the list
+shows](app.md#which-bases-the-list-shows)), and the list says what that left
+out, after its last line:
+
+```
+  2 projects in 2 inactive bases left out (archive, cold); --every-base shows them
+```
+
+`--every-base` lists them too, and `--base` naming an inactive base lists that
+base. With `--json`, stdout holds the rows alone and the same sentence goes
+to stderr as a `note:`. The other commands still see every base:
+`fastf recent` and `fastf search` find a project wherever it is, and
+`fastf journal` lists what happened in every base, an archived project's
+notes and lessons included.
+
 **On a terminal, `fastf desk` opens the [guided app](app.md#the-desk) on its
 desk tab.** The tab shows the same lines, with the pane beside them, every
 project verb on them, and the files re-read as todos are ticked. The flags
 carry over: the group shown alone, the order, the hat from `--as`, and
 `--random` as the key `z`. The list is printed instead when stdout is a pipe,
 with `--plain` or `--json`, and with a flag the tab has no key for:
-`--quiet`, `--template`, `--tag` and `--base`. From a desktop launcher it
+`--quiet`, `--template`, `--tag`, `--base` and `--every-base`. The tab shows
+the bases the app's list shows, so the inactive ones are left out while it
+shows only the active bases, and `B` shows every base. From a desktop launcher it
 opens a terminal window for itself, as the app does.
 
 What it reads: every project's `PROJECT_INFO.md`, several at once on a

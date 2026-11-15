@@ -244,7 +244,7 @@ type (a yes/no, a verb, the Save row) F2 is not bound, and Enter is the key.
 | `,` | the settings — `/` there narrows the list to what you are looking for, and the title says what it is narrowed to |
 | `H`, `I` | on the templates tab: the guide to templates; make a template out of a folder that already has the shape you want |
 | `!` | what is unfinished: what needs you first, each with its reason — Enter on one offers what settles it (discarding asks for the word) — then what fastf is finishing by itself, and a row that finishes it now |
-| `L` | messages, the journal, jobs and the log: every message fastf showed you, from every session; every dated note and every todo added or ticked across every project, with a rule where the desk was last open, so what happened since you last looked reads above it; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
+| `L` | messages, the journal, jobs and the log: every message fastf showed you, from every session; every dated note and every todo added or ticked across every project in the bases the list shows, with a rule where the desk was last open, so what happened since you last looked reads above it; every move, copy, delete and reconcile, running or done — Enter opens a job's own log; and every step of every one. Tab turns the page, all newest first, and all keep up while open. A warning that flashed under a dialog is counted on the status line until you read them |
 | F5, Ctrl-R | reload: read every base again |
 | `R` | reindex: rescan every base from its folders and rebuild the caches |
 | Ctrl-Z | suspend to the shell, as in any program; `fg` brings the app back with its screen retaken (unix) |
@@ -317,9 +317,12 @@ that it is not mounted) and where it is.
   active ones.
 
 Which bases are active, and which of the two the list shows, is **a view, not
-a setting**: it is remembered in `state.toml` and read by nothing but the app.
-Every base is still read, so switching is instant; the ID counter, moves,
-`fastf recent` and every other command see every base as before. Esc and `F`
+a setting**: it is remembered in `state.toml`, beside the configuration.
+Every base is still read, so switching is instant. The desk and the journal
+page show what the list shows. On the command line, `fastf desk` leaves the
+inactive bases out unless `--every-base` asks for them
+([cli.md](cli.md#the-desk)); the ID counter, moves, `fastf recent`,
+`fastf journal` and every other command see every base as before. Esc and `F`
 never change the view — they take off filters, and the view is a choice the
 next run starts on.
 

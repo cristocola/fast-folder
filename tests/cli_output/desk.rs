@@ -146,6 +146,163 @@ fn the_desk_narrows_to_one_group_and_picks_one() {
     assert_eq!(delta["next_todo"]["phase"], "Launch");
 }
 
+/// One project in `base`, its `## Todo` holding `list`.
+fn plant_with_todos(sb: &Sandbox, base: &std::path::Path, name: &str, id: &str, list: &str) {
+    let dir = sb.plant_project(base, name, id);
+    let path = dir.join("PROJECT_INFO.md");
+    let mut file = fs::read_to_string(&path).unwrap();
+    file.push_str("\n## Todo\n\n");
+    file.push_str(list);
+    fs::write(&path, file).unwrap();
+}
+
+/// **The bases marked inactive in the app stay off the desk**, and the list
+/// says what it left out: `--every-base` shows them, `--base` naming one
+/// shows that one, and `--json` keeps stdout to the rows and says it on
+/// stderr. A base the configuration names through a link is marked by
+/// that spelling and still matched, though discovery hands its projects
+/// the real path. A mark on the default base, as in the app, a mark the
+/// configuration no longer names, and a state file that will not parse
+/// hide nothing.
+#[cfg(unix)]
+#[test]
+fn the_desk_leaves_out_the_bases_marked_inactive() {
+    let sb = Sandbox::new();
+    let archive = sb.tmp.path().join("archive");
+    let cold = sb.tmp.path().join("cold-disk");
+    let cold_link = sb.tmp.path().join("cold");
+    fs::create_dir_all(&archive).unwrap();
+    fs::create_dir_all(&cold).unwrap();
+    std::os::unix::fs::symlink(&cold, &cold_link).unwrap();
+    sb.ok(&[
+        "config",
+        "set",
+        "bases",
+        &format!("{},{}", archive.display(), cold_link.display()),
+    ]);
+    plant_with_todos(&sb, &sb.base, "Today", "ID0001", "- [ ] cut the trailer\n");
+    plant_with_todos(
+        &sb,
+        &archive,
+        "Old",
+        "ID0002",
+        "- [ ] uninstall the old backup tool @editor\n",
+    );
+    plant_with_todos(&sb, &cold, "Older", "ID0003", "- [x] everything\n");
+    let state = sb.install.join("state.toml");
+    fs::write(
+        &state,
+        format!(
+            "bases_view = \"active\"\ninactive_bases = [{:?}, {:?}, \"/nowhere/gone\"]\n",
+            archive.display().to_string(),
+            cold_link.display().to_string(),
+        ),
+    )
+    .unwrap();
+
+    let out = sb.ok(&["desk", "--plain"]);
+    assert!(out.contains("ID0001"), "{out}");
+    assert!(
+        !out.contains("ID0002") && !out.contains("ID0003"),
+        "the inactive bases are off the desk, the linked one too: {out}"
+    );
+    assert!(
+        out.contains(
+            "2 projects in 2 inactive bases left out (archive, cold-disk); --every-base shows them"
+        ),
+        "{out}"
+    );
+
+    let every = sb.ok(&["desk", "--plain", "--every-base"]);
+    assert!(
+        ["ID0001", "ID0002", "ID0003"]
+            .iter()
+            .all(|id| every.contains(id)),
+        "{every}"
+    );
+    assert!(!every.contains("left out"), "{every}");
+
+    let named = sb.ok(&["desk", "--plain", "--base", "archive"]);
+    assert!(
+        named.contains("ID0002") && !named.contains("ID0001"),
+        "{named}"
+    );
+    assert!(
+        !named.contains("left out"),
+        "a base named is what was asked for: {named}"
+    );
+
+    let theirs = sb.ok(&["desk", "--plain", "--owner", "editor"]);
+    assert!(
+        theirs.contains("No project matches those flags."),
+        "{theirs}"
+    );
+    assert!(
+        theirs.contains("left out"),
+        "and what may hold one: {theirs}"
+    );
+
+    let out = sb.run(&["desk", "--json"]);
+    assert!(out.status.success(), "{out:?}");
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "{rows}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("note: 2 projects in 2 inactive bases left out"),
+        "{stderr}"
+    );
+    let out = sb.run(&["desk", "--json", "--every-base"]);
+    let rows: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 3, "{rows}");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("left out"));
+
+    // The default base is never inactive, as in the app: new projects
+    // land there.
+    fs::write(
+        &state,
+        format!(
+            "inactive_bases = [{:?}, {:?}, {:?}]\n",
+            sb.base.display().to_string(),
+            archive.display().to_string(),
+            cold_link.display().to_string(),
+        ),
+    )
+    .unwrap();
+    let out = sb.ok(&["desk", "--plain"]);
+    assert!(out.contains("ID0001"), "the default base stays: {out}");
+    assert!(
+        out.contains("2 projects in 2 inactive bases left out"),
+        "{out}"
+    );
+
+    // Every project inactive: the list says so rather than "no todo yet".
+    fs::remove_dir_all(sb.base.join("Today")).unwrap();
+    let none = sb.ok(&["desk", "--plain"]);
+    assert!(
+        none.contains("Every project is in a base marked inactive."),
+        "{none}"
+    );
+    assert!(
+        none.contains("2 projects in 2 inactive bases left out"),
+        "{none}"
+    );
+
+    // A state file that will not parse hides nothing, and says why.
+    fs::write(&state, "inactive_bases = [unterminated\n").unwrap();
+    let out = sb.run(&["desk", "--plain"]);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ID0002") && stdout.contains("ID0003"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("left out"), "{stdout}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("state.toml could not be read"),
+        "{out:?}"
+    );
+}
+
 /// Piped, `desk --plain` fits a hundred columns: the todo column is capped
 /// at what the id, the name and the age leave, a todo longer than that
 /// keeps its age two spaces after it, and a name in wide characters is
